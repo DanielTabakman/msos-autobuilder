@@ -96,11 +96,9 @@ function Find-Python311 {
     if ($env:LOCALAPPDATA) {
         $PackageRoot = Join-Path $env:LOCALAPPDATA "Packages"
         if (Test-Path $PackageRoot) {
-            $StorePackages = Get-ChildItem -Path $PackageRoot -Directory \
-                -Filter "PythonSoftwareFoundation.Python.3.*" -ErrorAction SilentlyContinue
+            $StorePackages = Get-ChildItem -Path $PackageRoot -Directory -Filter "PythonSoftwareFoundation.Python.3.*" -ErrorAction SilentlyContinue
             foreach ($Package in $StorePackages) {
-                $Executables = Get-ChildItem -Path $Package.FullName -Filter "python.exe" \
-                    -File -Recurse -ErrorAction SilentlyContinue
+                $Executables = Get-ChildItem -Path $Package.FullName -Filter "python.exe" -File -Recurse -ErrorAction SilentlyContinue
                 foreach ($Executable in $Executables) {
                     $KnownPaths.Add($Executable.FullName)
                 }
@@ -151,11 +149,9 @@ function Install-Python311 {
             "--accept-package-agreements",
             "--accept-source-agreements"
         )
-        $Process = Start-Process -FilePath $Winget.Source -ArgumentList $WingetArguments \
-            -Wait -PassThru -NoNewWindow
+        $Process = Start-Process -FilePath $Winget.Source -ArgumentList $WingetArguments -Wait -PassThru -NoNewWindow
         if ($Process.ExitCode -ne 0) {
-            Write-Host "winget returned exit code $($Process.ExitCode); verifying installation anyway." \
-                -ForegroundColor Yellow
+            Write-Host "winget returned exit code $($Process.ExitCode); verifying installation anyway." -ForegroundColor Yellow
         }
 
         $Candidate = Find-Python311
@@ -181,8 +177,7 @@ if (-not (Test-Path $VenvPython)) {
         $PythonCandidate = Install-Python311
     }
 
-    Write-Host "Creating Autobuilder virtual environment with $($PythonCandidate.FilePath)..." \
-        -ForegroundColor Cyan
+    Write-Host "Creating Autobuilder virtual environment with $($PythonCandidate.FilePath)..." -ForegroundColor Cyan
     $VenvArguments = @($PythonCandidate.PrefixArguments) + @("-m", "venv", $VenvRoot)
     & $PythonCandidate.FilePath @VenvArguments
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $VenvPython)) {

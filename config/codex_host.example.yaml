@@ -1,0 +1,16 @@
+version: 1
+publication_enabled: false
+
+# Use a dedicated clean MSOS source mirror, not your active development checkout.
+source_repo: C:/Users/YOU/.msos-autobuilder/source/msos
+workspace_root: C:/Users/YOU/.msos-autobuilder/workspaces
+runtime_root: C:/Users/YOU/.msos-autobuilder/runtime
+owner_id: windows-codex-shadow
+reset_workspaces: true
+
+codex:
+  # Leave blank to use deterministic executable discovery.
+  executable: null
+  sandbox_mode: workspace-write
+  max_concurrency: 2
+  timeout_seconds: 7200

@@ -16,6 +16,7 @@ class ExecutionEvidence:
     status: str
     summary: str
     changed_paths: tuple[str, ...] = ()
+    metadata: tuple[tuple[str, str], ...] = ()
 
 
 class WorkerBackend(Protocol):
@@ -24,7 +25,7 @@ class WorkerBackend(Protocol):
 
     def claim(self, task: BuildTask) -> bool: ...
 
-    def prepare_workspace(self, task: BuildTask) -> Path: ...
+    def prepare_workspace(self, task: BuildTask, workspace: Path) -> Path: ...
 
     def execute(self, task: BuildTask, workspace: Path) -> ExecutionEvidence: ...
 

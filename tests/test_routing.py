@@ -29,8 +29,8 @@ class StubBackend:
     def claim(self, task: BuildTask) -> bool:
         return task.lane.required_capabilities <= self.capabilities.capabilities
 
-    def prepare_workspace(self, task: BuildTask) -> Path:
-        return Path("/tmp") / task.lane.lane_id
+    def prepare_workspace(self, task: BuildTask, workspace: Path) -> Path:
+        return workspace
 
     def execute(self, task: BuildTask, workspace: Path) -> ExecutionEvidence:
         raise AssertionError("not used")

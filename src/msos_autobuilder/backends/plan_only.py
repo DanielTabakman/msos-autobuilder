@@ -11,7 +11,7 @@ from .base import ExecutionEvidence
 class PlanOnlyBackend:
     """A safe bootstrap backend with no command execution or publication authority."""
 
-    def __init__(self, workspace_root: Path) -> None:
+    def __init__(self, workspace_root: Path | None = None) -> None:
         self.workspace_root = workspace_root
 
     @property
@@ -27,7 +27,15 @@ class PlanOnlyBackend:
     def claim(self, task: BuildTask) -> bool:
         return task.lane.required_capabilities <= self.capabilities.capabilities
 
-    def prepare_workspace(self, task: BuildTask) -> Path:
+    def prepare_workspace(
+        self,
+        task: BuildTask,
+        workspace: Path | None = None,
+    ) -> Path:
+        if workspace is not None:
+            return workspace
+        if self.workspace_root is None:
+            raise ValueError("workspace must be supplied by the scheduler")
         return self.workspace_root / task.lane.lane_id
 
     def execute(self, task: BuildTask, workspace: Path) -> ExecutionEvidence:

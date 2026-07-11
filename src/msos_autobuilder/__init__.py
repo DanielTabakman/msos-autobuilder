@@ -1,10 +1,25 @@
 """MSOS Autobuilder public package surface."""
 
 from .backends import (
+    CodexCliBackend,
+    CodexHostError,
+    CodexSandboxMode,
     GitWorkspaceError,
     LocalGitCloneBackend,
     LocalProcessBackend,
     ProcessExecutionError,
+)
+from .codex_shadow import (
+    CodexConfigError,
+    CodexHostConfig,
+    CodexPreflightReport,
+    CodexShadowError,
+    CodexShadowReport,
+    ShadowTaskSpec,
+    codex_host_preflight,
+    load_codex_host_config,
+    load_codex_shadow_manifest,
+    run_codex_shadow,
 )
 from .contracts import ProductContract, load_product_contract
 from .lanes import (
@@ -26,6 +41,14 @@ __all__ = [
     "BackendRoutingError",
     "BuildLane",
     "BuildTask",
+    "CodexCliBackend",
+    "CodexConfigError",
+    "CodexHostConfig",
+    "CodexHostError",
+    "CodexPreflightReport",
+    "CodexSandboxMode",
+    "CodexShadowError",
+    "CodexShadowReport",
     "CostClass",
     "FileLeaseStore",
     "GitWorkspaceError",
@@ -41,13 +64,18 @@ __all__ = [
     "ProcessWitnessReport",
     "ProductContract",
     "SchedulerError",
+    "ShadowTaskSpec",
     "WorkerCapabilities",
     "WorkspaceIsolationError",
     "WorkspacePolicy",
     "WorkspaceWitnessReport",
     "assert_changed_paths_allowed",
     "assert_lanes_compatible",
+    "codex_host_preflight",
+    "load_codex_host_config",
+    "load_codex_shadow_manifest",
     "load_product_contract",
+    "run_codex_shadow",
     "run_process_witness",
     "run_workspace_witness",
 ]

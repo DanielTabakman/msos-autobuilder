@@ -1,0 +1,43 @@
+version: 1
+publication_enabled: false
+
+lanes:
+  - task_id: msos-web-shadow-review
+    lane_id: msos-web-shadow
+    chapter_id: SHADOW-MSOS-WEB-REVIEW
+    branch: shadow/msos-web-review
+    layer: msos-shell
+    preferred_cost_class: standard
+    allowed_paths:
+      - apps/msos-web/**
+    forbidden_paths:
+      - artifacts/**
+      - docs/SOP/**
+    allow_changes: false
+    instruction: |
+      Inspect the current MSOS web shell as a product engineer.
+      Focus on the Minimum Credible Demo, user clarity, and the MSOS/PPE boundary.
+      Identify the single highest-leverage bounded improvement and explain why.
+      Do not modify files. Do not commit, push, publish, or open a pull request.
+      Return concise findings only.
+
+  - task_id: ppe-core-shadow-review
+    lane_id: ppe-core-shadow
+    chapter_id: SHADOW-PPE-CORE-REVIEW
+    branch: shadow/ppe-core-review
+    layer: ppe-core
+    preferred_cost_class: standard
+    allowed_paths:
+      - src/engine/**
+      - src/data/**
+      - src/models/**
+    forbidden_paths:
+      - artifacts/**
+      - apps/msos-web/**
+    allow_changes: false
+    instruction: |
+      Inspect the PPE core engine, data, and model boundaries as a senior Python engineer.
+      Identify the single highest-leverage bounded improvement for stable MSOS integration.
+      Pay attention to contract stability, frozen snapshots, and duplicated product logic.
+      Do not modify files. Do not commit, push, publish, or open a pull request.
+      Return concise findings only.

@@ -1,0 +1,80 @@
+name: MSOS Parallel Process Witness
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/msos-parallel-process-witness.yml
+      - src/msos_autobuilder/backends/process.py
+      - src/msos_autobuilder/process_witness.py
+      - src/msos_autobuilder/witness_worker.py
+      - src/msos_autobuilder/lanes.py
+      - src/msos_autobuilder/cli.py
+      - tests/test_process_backend.py
+      - tests/test_process_witness.py
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/msos-parallel-process-witness.yml
+      - src/msos_autobuilder/backends/process.py
+      - src/msos_autobuilder/process_witness.py
+      - src/msos_autobuilder/witness_worker.py
+      - src/msos_autobuilder/lanes.py
+      - src/msos_autobuilder/cli.py
+      - tests/test_process_backend.py
+      - tests/test_process_witness.py
+
+permissions:
+  contents: read
+
+jobs:
+  two-real-process-lanes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Autobuilder
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout MSOS main read-only
+        uses: actions/checkout@v4
+        with:
+          repository: DanielTabakman/Probability-prediction-engine
+          ref: main
+          fetch-depth: 0
+          path: product-source
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Autobuilder
+        run: python -m pip install -e ".[dev]"
+
+      - name: Verify process safety and synthetic concurrency
+        run: python -m pytest -q tests/test_process_backend.py tests/test_process_witness.py
+
+      - name: Run two path-scoped workers against isolated MSOS clones
+        run: |
+          mkdir -p artifacts
+          python -m msos_autobuilder process-witness \
+            --source product-source \
+            --workspace-root "$RUNNER_TEMP/msos-process-workspaces" \
+            --runtime-root "$RUNNER_TEMP/msos-process-runtime" \
+            --json-out artifacts/msos-parallel-process-witness.json
+          {
+            echo '```json'
+            cat artifacts/msos-parallel-process-witness.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prove source checkout remains clean
+        run: test -z "$(git -C product-source status --porcelain)"
+
+      - name: Upload process evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: msos-parallel-process-witness
+          path: artifacts/msos-parallel-process-witness.json
+          if-no-files-found: error

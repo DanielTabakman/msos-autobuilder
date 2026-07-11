@@ -1,0 +1,198 @@
+version: 1
+
+candidate_patterns:
+  - .github/workflows/**
+  - ppe_autobuilder_*.cmd
+  - ppe_chapter_publish.cmd
+  - run_phase.cmd
+  - DESKTOP_*.cmd
+  - VM_*.cmd
+  - "*operator*.cmd"
+  - "*vm_loop*.cmd"
+  - "*worker*.cmd"
+  - collect_*.cmd
+  - scripts/ppe_autobuilder_*.py
+  - scripts/ppe_chapter_*.py
+  - scripts/ppe_context_closeout_ship.py
+  - scripts/ppe_vm_phase_mirror.py
+  - scripts/*relay*.py
+  - scripts/relay/**
+  - scripts/*orchestrator*.py
+  - scripts/*worker_lease*.py
+  - scripts/*coordination*.py
+  - scripts/*operator*.py
+  - scripts/*preflight*.py
+  - scripts/*closeout*.py
+  - scripts/*handoff*.py
+  - scripts/*queue*.py
+  - scripts/run_pushable_gate.py
+  - scripts/verify_msos_web_build.py
+  - scripts/run_implied_lab_ui_smoke.py
+  - scripts/run_display_cache_refresh.py
+  - scripts/collect_*.py
+  - scripts/ppe_collect_*.py
+  - scripts/msos_*witness*.py
+  - tests/test_ppe_autobuilder_*.py
+  - tests/test_ppe_chapter_*.py
+  - tests/test_ppe_context_closeout_ship.py
+  - tests/test_ppe_vm_mirror_publish.py
+  - tests/test_ppe_vm_phase_mirror.py
+  - tests/*relay*.py
+  - tests/*orchestrator*.py
+  - tests/*worker_lease*.py
+  - tests/*coordination*.py
+  - tests/*operator*.py
+  - tests/*preflight*.py
+  - tests/*closeout*.py
+  - tests/*handoff*.py
+  - tests/*queue*.py
+  - tests/test_msos_*witness*.py
+  - tests/*implied_lab*.py
+  - tests/test_collect_*.py
+  - tests/test_ppe_collect_*.py
+  - tests/test_ppe_verify_msos_web_ship.py
+  - tests/test_msos_web_product_usage.py
+  - docs/SOP/AUTOBUILDER_EXTRACTION_CHAPTER_V1.md
+  - docs/SOP/AUTOBUILDER_GIT_PUBLICATION_V2.md
+  - docs/SOP/BUILD_FACTORY_BOUNDARY_V1.md
+  - docs/SOP/CONTROL_PLANE_OPERATOR_V1.md
+  - docs/SOP/DESKTOP_OPERATOR_AUTOMATION_PLAN_V1.md
+  - docs/SOP/DESKTOP_OPERATOR_SETUP_STARTER.md
+  - docs/SOP/FOUNDER_OPERATOR_SURFACE_V1.md
+  - docs/SOP/OPERATOR_BUTTON_MAP.md
+  - docs/SOP/PPE_CANONICAL_OPERATOR_SCRIPTS_V1.md
+  - docs/SOP/PPE_CONTINUOUS_OPERATOR.md
+  - docs/SOP/PPE_IDE_NATIVE_OPERATOR*.md
+  - docs/SOP/PPE_VM_DESKTOP_OPERATOR_HANDOFF.md
+  - docs/SOP/RELAY_*.md
+  - docs/SOP/WORKFLOW_EFFICIENCY_OPERATOR_V1.md
+  - docs/SOP/VM_OPERATOR_PHASE.json
+
+product_import_markers:
+  - "from src."
+  - "import src."
+  - "from apps."
+  - "import apps."
+
+rules:
+  - id: deleted-runtime-mirror
+    decision: DELETE_AS_LEGACY
+    reason: Tracked runtime-state mirrors are forbidden by the current architecture.
+    patterns:
+      - docs/SOP/VM_OPERATOR_PHASE.json
+
+  - id: product-repository-workflows
+    decision: KEEP_IN_PRODUCT
+    reason: Repository CI, deployment, and merge policy remain owned by the product repository.
+    patterns:
+      - .github/workflows/**
+
+  - id: product-boundary-contracts
+    decision: KEEP_IN_PRODUCT
+    reason: Product-owned extraction and factory-boundary contracts remain with MSOS/PPE.
+    patterns:
+      - docs/SOP/AUTOBUILDER_EXTRACTION_CHAPTER_V1.md
+      - docs/SOP/BUILD_FACTORY_BOUNDARY_V1.md
+
+  - id: product-validation-gates
+    decision: KEEP_IN_PRODUCT
+    reason: Product-owned validation and deployment witness remains with MSOS/PPE.
+    patterns:
+      - scripts/run_pushable_gate.py
+      - scripts/verify_msos_web_build.py
+      - scripts/run_implied_lab_ui_smoke.py
+      - scripts/run_display_cache_refresh.py
+      - scripts/msos_*witness*.py
+      - tests/test_msos_*witness*.py
+      - tests/test_msos_*operator*.py
+      - tests/test_ppe_verify_msos_web_ship.py
+      - tests/test_msos_web_product_usage.py
+
+  - id: product-domain-collectors
+    decision: KEEP_IN_PRODUCT
+    reason: Product data, analytics, and UI behavior remain in the product repository.
+    patterns:
+      - collect_*.cmd
+      - scripts/collect_*.py
+      - scripts/ppe_collect_*.py
+      - tests/test_collect_*.py
+      - tests/test_ppe_collect_*.py
+      - scripts/*implied_lab*.py
+      - tests/*implied_lab*.py
+      - scripts/*display_cache*.py
+      - tests/*display_cache*.py
+
+  - id: runtime-mirror-compatibility
+    decision: TEMPORARY_COMPATIBILITY
+    reason: Legacy runtime-mirror compatibility stays until single-writer cutover is complete.
+    patterns:
+      - scripts/ppe_vm_phase_mirror.py
+      - tests/test_ppe_vm_mirror_publish.py
+      - tests/test_ppe_vm_phase_mirror.py
+
+  - id: factory-publication
+    decision: MOVE
+    reason: Factory publication, cleanup, closeout, and churn verification belong in Autobuilder.
+    patterns:
+      - scripts/ppe_chapter_publisher.py
+      - scripts/ppe_context_closeout_ship.py
+      - scripts/ppe_autobuilder_*.py
+      - tests/test_ppe_chapter_publisher.py
+      - tests/test_ppe_context_closeout_ship.py
+      - tests/test_ppe_autobuilder_*.py
+      - ppe_chapter_publish.cmd
+      - ppe_autobuilder_*.cmd
+
+  - id: factory-command-wrappers
+    decision: MOVE
+    reason: Desktop, VM, operator, and phase wrappers are factory launch surfaces.
+    patterns:
+      - DESKTOP_*.cmd
+      - VM_*.cmd
+      - "*operator*.cmd"
+      - "*vm_loop*.cmd"
+      - "*worker*.cmd"
+      - run_phase.cmd
+
+  - id: factory-orchestration
+    decision: MOVE
+    reason: Relay, orchestration, worker leases, routing, and operator control are factory concerns.
+    patterns:
+      - scripts/ppe_chapter_mode.py
+      - tests/test_ppe_chapter_mode.py
+      - scripts/*relay*.py
+      - scripts/relay/**
+      - scripts/*orchestrator*.py
+      - scripts/*worker_lease*.py
+      - scripts/*coordination*.py
+      - scripts/*operator*.py
+      - scripts/*preflight*.py
+      - scripts/*closeout*.py
+      - scripts/*handoff*.py
+      - scripts/*queue*.py
+      - tests/*relay*.py
+      - tests/*orchestrator*.py
+      - tests/*worker_lease*.py
+      - tests/*coordination*.py
+      - tests/*operator*.py
+      - tests/*preflight*.py
+      - tests/*closeout*.py
+      - tests/*handoff*.py
+      - tests/*queue*.py
+
+  - id: factory-policy-docs
+    decision: MOVE
+    reason: Autobuilder operating policy and runbooks belong beside the factory implementation.
+    patterns:
+      - docs/SOP/AUTOBUILDER_GIT_PUBLICATION_V2.md
+      - docs/SOP/CONTROL_PLANE_OPERATOR_V1.md
+      - docs/SOP/DESKTOP_OPERATOR_AUTOMATION_PLAN_V1.md
+      - docs/SOP/DESKTOP_OPERATOR_SETUP_STARTER.md
+      - docs/SOP/FOUNDER_OPERATOR_SURFACE_V1.md
+      - docs/SOP/OPERATOR_BUTTON_MAP.md
+      - docs/SOP/PPE_CANONICAL_OPERATOR_SCRIPTS_V1.md
+      - docs/SOP/PPE_CONTINUOUS_OPERATOR.md
+      - docs/SOP/PPE_IDE_NATIVE_OPERATOR*.md
+      - docs/SOP/PPE_VM_DESKTOP_OPERATOR_HANDOFF.md
+      - docs/SOP/RELAY_*.md
+      - docs/SOP/WORKFLOW_EFFICIENCY_OPERATOR_V1.md

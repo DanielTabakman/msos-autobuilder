@@ -1,0 +1,86 @@
+name: Shadow MSOS Inventory
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/shadow-msos-inventory.yml
+      - config/inventory_rules.v1.yaml
+      - src/msos_autobuilder/cli.py
+      - src/msos_autobuilder/inventory.py
+      - src/msos_autobuilder/__main__.py
+      - tests/test_inventory.py
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/shadow-msos-inventory.yml
+      - config/inventory_rules.v1.yaml
+      - src/msos_autobuilder/cli.py
+      - src/msos_autobuilder/inventory.py
+      - src/msos_autobuilder/__main__.py
+      - tests/test_inventory.py
+
+permissions:
+  contents: read
+
+jobs:
+  shadow-inventory:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Autobuilder
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout MSOS product repository read-only
+        uses: actions/checkout@v4
+        with:
+          repository: DanielTabakman/Probability-prediction-engine
+          ref: main
+          path: product
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Autobuilder
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run focused tests
+        run: python -m pytest -q tests/test_inventory.py
+
+      - name: Build read-only MSOS inventory
+        id: inventory
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set +e
+          python -m msos_autobuilder inventory \
+            --repo product \
+            --contract product/config/autobuilder_project_contract.v1.yaml \
+            --rules config/inventory_rules.v1.yaml \
+            --json-out artifacts/msos-autobuilder-inventory.json \
+            --markdown-out artifacts/msos-autobuilder-inventory.md \
+            2>&1 | tee artifacts/inventory.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          if [ -f artifacts/msos-autobuilder-inventory.md ]; then
+            cat artifacts/msos-autobuilder-inventory.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit 0
+
+      - name: Upload inventory evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: msos-autobuilder-inventory
+          path: artifacts/
+          if-no-files-found: error
+
+      - name: Fail when shadow inventory failed
+        if: steps.inventory.outputs.exit_code != '0'
+        run: exit 1

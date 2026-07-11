@@ -9,6 +9,9 @@ build/
 *.egg-info/
 .env
 .env.*
+*.local.yaml
+host.local.yaml
+shadow.local.yaml
 artifacts/
 runtime/
 workspaces/

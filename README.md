@@ -30,16 +30,24 @@ It must not yet:
 4. Product behavior is described through a versioned project contract, not imports from MSOS/PPE business modules.
 5. Public fixtures and examples contain synthetic values only.
 
-## Planned shape
+## Bootstrap
+
+```bash
+python -m pip install -e ".[dev]"
+python -m pytest
+python -m ruff check .
+```
+
+## Repository shape
 
 ```text
 src/msos_autobuilder/
-  backends/        worker-provider interfaces
+  backends/        worker-provider interfaces and read-only reference backend
   contracts.py     product contract loading and validation
   lanes.py         lane ownership and concurrency checks
   models.py        task, lane, lease, and capability models
 fixtures/          synthetic product repositories
- tests/            factory-only tests
+tests/             factory-only tests
 ```
 
 The first milestone is tracked in issue #1. The parent extraction chapter is tracked in `DanielTabakman/Probability-prediction-engine#5348`.

@@ -1,0 +1,35 @@
+version: 1
+project:
+  id: synthetic-msos
+  repository: example/synthetic-msos
+  default_branch: main
+
+commands:
+  fast_gate: python -m pytest -q
+  full_gate: python -m pytest
+
+layers:
+  msos-shell:
+    allowed_paths:
+      - apps/msos-web/**
+    forbidden_paths:
+      - src/engine/**
+      - src/data/**
+      - src/models/**
+  ppe-core:
+    allowed_paths:
+      - src/engine/**
+      - src/data/**
+      - src/models/**
+    forbidden_paths:
+      - apps/msos-web/**
+
+runtime_only_paths:
+  - artifacts/**
+  - runtime/**
+  - workspaces/**
+
+publication:
+  enabled: false
+  branch_pattern: chapter/{chapter_id}
+  maximum_open_prs_per_chapter: 1

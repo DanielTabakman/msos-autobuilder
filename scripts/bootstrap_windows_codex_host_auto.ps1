@@ -18,8 +18,19 @@ function Test-Python311 {
         [string[]]$PrefixArguments = @()
     )
 
-    & $FilePath @PrefixArguments "-c" "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" 2>$null
-    return $LASTEXITCODE -eq 0
+    # Windows PowerShell 5 converts native stderr into error records. Missing
+    # launcher versions are expected probes, so temporarily suppress them.
+    $PreviousPreference = $ErrorActionPreference
+    $ExitCode = 1
+    try {
+        $ErrorActionPreference = "SilentlyContinue"
+        & $FilePath @PrefixArguments "-c" "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" *> $null
+        $ExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $PreviousPreference
+    }
+    return $ExitCode -eq 0
 }
 
 if (-not (Test-Path $VenvPython)) {

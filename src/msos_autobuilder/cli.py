@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from .inventory import build_inventory, render_json, render_markdown
+from .process_witness import render_process_witness_json, run_process_witness
 from .workspace_witness import render_workspace_witness_json, run_workspace_witness
 
 
@@ -42,6 +43,27 @@ def _workspace_witness_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _process_witness_command(args: argparse.Namespace) -> int:
+    report = run_process_witness(
+        source_repo=args.source,
+        workspace_root=args.workspace_root,
+        runtime_root=args.runtime_root,
+    )
+    output = render_process_witness_json(report)
+    if args.json_out:
+        Path(args.json_out).write_text(output, encoding="utf-8")
+    else:
+        print(output, end="")
+    return 0
+
+
+def _workspace_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--source", required=True)
+    parser.add_argument("--workspace-root", required=True)
+    parser.add_argument("--runtime-root", required=True)
+    parser.add_argument("--json-out")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="msos-autobuilder")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -57,15 +79,19 @@ def build_parser() -> argparse.ArgumentParser:
     inventory.add_argument("--markdown-out")
     inventory.set_defaults(func=_inventory_command)
 
-    witness = subparsers.add_parser(
+    workspace_witness = subparsers.add_parser(
         "workspace-witness",
         help="materialize two read-only isolated product workspaces",
     )
-    witness.add_argument("--source", required=True)
-    witness.add_argument("--workspace-root", required=True)
-    witness.add_argument("--runtime-root", required=True)
-    witness.add_argument("--json-out")
-    witness.set_defaults(func=_workspace_witness_command)
+    _workspace_arguments(workspace_witness)
+    workspace_witness.set_defaults(func=_workspace_witness_command)
+
+    process_witness = subparsers.add_parser(
+        "process-witness",
+        help="run two path-scoped worker processes in isolated product clones",
+    )
+    _workspace_arguments(process_witness)
+    process_witness.set_defaults(func=_process_witness_command)
     return parser
 
 

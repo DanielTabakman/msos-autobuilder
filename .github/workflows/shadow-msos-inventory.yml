@@ -53,19 +53,34 @@ jobs:
         run: python -m pytest -q tests/test_inventory.py
 
       - name: Build read-only MSOS inventory
+        id: inventory
+        shell: bash
         run: |
           mkdir -p artifacts
+          set +e
           python -m msos_autobuilder inventory \
             --repo product \
             --contract product/config/autobuilder_project_contract.v1.yaml \
             --rules config/inventory_rules.v1.yaml \
             --json-out artifacts/msos-autobuilder-inventory.json \
-            --markdown-out artifacts/msos-autobuilder-inventory.md
-          cat artifacts/msos-autobuilder-inventory.md >> "$GITHUB_STEP_SUMMARY"
+            --markdown-out artifacts/msos-autobuilder-inventory.md \
+            2>&1 | tee artifacts/inventory.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          if [ -f artifacts/msos-autobuilder-inventory.md ]; then
+            cat artifacts/msos-autobuilder-inventory.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit 0
 
       - name: Upload inventory evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: msos-autobuilder-inventory
           path: artifacts/
           if-no-files-found: error
+
+      - name: Fail when shadow inventory failed
+        if: steps.inventory.outputs.exit_code != '0'
+        run: exit 1

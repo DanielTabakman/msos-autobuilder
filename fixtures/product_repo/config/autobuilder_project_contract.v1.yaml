@@ -1,0 +1,57 @@
+version: 1
+status: draft
+
+project:
+  id: synthetic-msos
+  repository: example/synthetic-msos
+  default_branch: main
+
+workspace:
+  isolation: worktree_or_clone
+  shared_mutable_checkout: false
+
+layers:
+  msos-shell:
+    allowed_paths:
+      - apps/msos-web/**
+    forbidden_paths:
+      - src/engine/**
+      - src/data/**
+      - src/models/**
+  ppe-core:
+    allowed_paths:
+      - src/engine/**
+      - src/data/**
+      - src/models/**
+    forbidden_paths:
+      - apps/msos-web/**
+
+validation:
+  commands:
+    fast:
+      command: python -m pytest -q
+    full:
+      command: python -m pytest
+
+publication:
+  enabled: false
+  branch_pattern: chapter/{chapter_id}
+  max_open_prs_per_chapter: 1
+  direct_main_writes: false
+
+runtime_only_paths:
+  - artifacts/**
+  - runtime/**
+  - workspaces/**
+
+lanes:
+  require_unique_lane_id: true
+  require_unique_workspace: true
+  require_lease: true
+  require_declared_ownership: true
+  overlap_policy: explicit_integration_lane
+  max_publishers: 1
+
+safety:
+  shadow_mode_must_be_read_only: true
+  product_business_module_imports_allowed: false

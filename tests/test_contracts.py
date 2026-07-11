@@ -2,7 +2,6 @@ from pathlib import Path
 
 from msos_autobuilder.contracts import load_product_contract
 
-
 FIXTURE = Path("fixtures/product_repo/config/autobuilder_project_contract.v1.yaml")
 
 

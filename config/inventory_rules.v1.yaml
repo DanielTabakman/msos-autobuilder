@@ -158,6 +158,8 @@ rules:
     decision: MOVE
     reason: Relay, orchestration, worker leases, routing, and operator control are factory concerns.
     patterns:
+      - scripts/ppe_chapter_mode.py
+      - tests/test_ppe_chapter_mode.py
       - scripts/*relay*.py
       - scripts/relay/**
       - scripts/*orchestrator*.py

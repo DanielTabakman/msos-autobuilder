@@ -88,7 +88,7 @@ def test_inventory_classifies_boundary_and_excludes_product_code(tmp_path: Path)
 
 def test_inventory_is_deterministic_and_reports_unclassified(tmp_path: Path) -> None:
     contract = _write_contract(tmp_path)
-    _write_candidate(tmp_path, "scripts/unknown_helper.py", "VALUE = 1\n")
+    _write_candidate(tmp_path, "scripts/ppe_chapter_unknown.py", "VALUE = 1\n")
 
     rules = Path("config/inventory_rules.v1.yaml")
     first = build_inventory(tmp_path, contract, rules)

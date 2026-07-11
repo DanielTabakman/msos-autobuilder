@@ -1,0 +1,47 @@
+name: Parallel Lane Witness
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/parallel-lane-witness.yml
+      - src/msos_autobuilder/leases.py
+      - src/msos_autobuilder/routing.py
+      - src/msos_autobuilder/scheduler.py
+      - src/msos_autobuilder/workspaces.py
+      - tests/test_leases.py
+      - tests/test_routing.py
+      - tests/test_scheduler.py
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/parallel-lane-witness.yml
+      - src/msos_autobuilder/leases.py
+      - src/msos_autobuilder/routing.py
+      - src/msos_autobuilder/scheduler.py
+      - src/msos_autobuilder/workspaces.py
+      - tests/test_leases.py
+      - tests/test_routing.py
+      - tests/test_scheduler.py
+
+permissions:
+  contents: read
+
+jobs:
+  two-lane-witness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install Autobuilder
+        run: python -m pip install -e ".[dev]"
+      - name: Verify leases and routing
+        run: python -m pytest -q tests/test_leases.py tests/test_routing.py
+      - name: Prove two disjoint lanes execute concurrently
+        run: python -m pytest -q tests/test_scheduler.py::test_two_disjoint_lanes_execute_concurrently
+      - name: Prove overlap fails before execution
+        run: python -m pytest -q tests/test_scheduler.py::test_overlapping_lanes_fail_before_execution

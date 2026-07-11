@@ -4,7 +4,7 @@ publication_enabled: false
 lanes:
   - task_id: msos-web-shadow-review
     lane_id: msos-web-shadow
-    chapter_id: SHADOW-MS​OS-WEB-REVIEW
+    chapter_id: SHADOW-MSOS-WEB-REVIEW
     branch: shadow/msos-web-review
     layer: msos-shell
     preferred_cost_class: standard

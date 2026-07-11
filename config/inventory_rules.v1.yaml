@@ -1,0 +1,93 @@
+version: 1
+
+candidate_patterns:
+  - scripts/**
+  - tests/**
+  - docs/SOP/**
+  - .github/workflows/**
+  - "*.cmd"
+
+product_import_markers:
+  - "from src."
+  - "import src."
+  - "from apps."
+  - "import apps."
+
+rules:
+  - id: deleted-runtime-mirror
+    decision: DELETE_AS_LEGACY
+    reason: Tracked runtime-state mirrors are forbidden by the current architecture.
+    patterns:
+      - docs/SOP/VM_OPERATOR_PHASE.json
+
+  - id: product-validation-gates
+    decision: KEEP_IN_PRODUCT
+    reason: Product-owned validation and deployment witness remains with MSOS/PPE.
+    patterns:
+      - scripts/run_pushable_gate.py
+      - scripts/verify_msos_web_build.py
+      - scripts/run_implied_lab_ui_smoke.py
+      - scripts/run_display_cache_refresh.py
+      - scripts/msos_*witness*.py
+      - tests/test_msos_*witness*.py
+      - tests/test_ppe_verify_msos_web_ship.py
+      - tests/test_msos_web_product_usage.py
+
+  - id: product-domain-collectors
+    decision: KEEP_IN_PRODUCT
+    reason: Product data, analytics, and UI behavior remain in the product repository.
+    patterns:
+      - scripts/collect_*.py
+      - scripts/ppe_collect_*.py
+      - tests/test_collect_*.py
+      - tests/test_ppe_collect_*.py
+      - scripts/*implied_lab*.py
+      - tests/*implied_lab*.py
+      - scripts/*display_cache*.py
+      - tests/*display_cache*.py
+
+  - id: runtime-mirror-compatibility
+    decision: TEMPORARY_COMPATIBILITY
+    reason: Legacy runtime-mirror compatibility stays until single-writer cutover is complete.
+    patterns:
+      - scripts/ppe_vm_phase_mirror.py
+      - tests/test_ppe_vm_mirror_publish.py
+      - tests/test_ppe_vm_phase_mirror.py
+
+  - id: factory-publication
+    decision: MOVE
+    reason: Factory publication, cleanup, closeout, and churn verification belong in Autobuilder.
+    patterns:
+      - scripts/ppe_chapter_publisher.py
+      - scripts/ppe_context_closeout_ship.py
+      - scripts/ppe_autobuilder_*.py
+      - tests/test_ppe_chapter_publisher.py
+      - tests/test_ppe_context_closeout_ship.py
+      - tests/test_ppe_autobuilder_*.py
+      - ppe_chapter_publish.cmd
+      - ppe_autobuilder_*.cmd
+
+  - id: factory-orchestration
+    decision: MOVE
+    reason: Relay, orchestration, worker leases, routing, and operator control are factory concerns.
+    patterns:
+      - scripts/*relay*.py
+      - scripts/*orchestrator*.py
+      - scripts/*worker_lease*.py
+      - scripts/*coordination*.py
+      - scripts/*operator*.py
+      - tests/*relay*.py
+      - tests/*orchestrator*.py
+      - tests/*worker_lease*.py
+      - tests/*coordination*.py
+      - tests/*operator*.py
+      - run_phase.cmd
+
+  - id: factory-policy-docs
+    decision: MOVE
+    reason: Autobuilder operating policy and runbooks belong beside the factory implementation.
+    patterns:
+      - docs/SOP/AUTOBUILDER_*.md
+      - docs/SOP/*RELAY*.md
+      - docs/SOP/*OPERATOR*.md
+      - docs/SOP/*BUILD_FACTORY*.md

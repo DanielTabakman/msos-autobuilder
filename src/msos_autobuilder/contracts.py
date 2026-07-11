@@ -87,8 +87,11 @@ def load_product_contract(path: str | Path) -> ProductContract:
     project_id = project.get("id")
     repository = project.get("repository")
     default_branch = project.get("default_branch")
-    if not all(isinstance(value, str) and value for value in (project_id, repository, default_branch)):
-        raise ContractError("project.id, project.repository, and project.default_branch are required")
+    project_fields = (project_id, repository, default_branch)
+    if not all(isinstance(value, str) and value for value in project_fields):
+        raise ContractError(
+            "project.id, project.repository, and project.default_branch are required"
+        )
 
     workspace = _mapping(root.get("workspace", {}), "workspace")
     workspace_isolation = workspace.get("isolation", "worktree_or_clone")

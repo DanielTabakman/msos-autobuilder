@@ -18,6 +18,8 @@ It may:
 - run as a persistent Windows logon task;
 - import immutable approved jobs from a read-only Git manifest feed;
 - archive reports and disposable workspace patches;
+- relay complete review artifacts to a dedicated results branch;
+- apply relayed patches in a disposable candidate clone and run deterministic checks;
 - collect bounded evidence while preserving a clean MSOS source mirror.
 
 It must not yet:
@@ -39,6 +41,7 @@ It must not yet:
 7. Worker commits are forbidden before the single-publisher phase.
 8. Persistent jobs require `approved: true` and `publication_enabled: false`.
 9. Job IDs are immutable; content replacement fails closed.
+10. Candidate gates remove product remotes before checks and publish evidence only to the results branch.
 
 ## Bootstrap
 
@@ -61,6 +64,24 @@ The installer prepares the existing Codex host, writes the persistent service co
 
 See [`docs/PERSISTENT_WINDOWS_HOST_V1.md`](docs/PERSISTENT_WINDOWS_HOST_V1.md) for the queue, approved Git feed, evidence layout, and uninstall process.
 
+### Review-only result relay
+
+```powershell
+.\scripts\install_windows_results_relay.ps1
+```
+
+The relay reconstructs complete patches, including newly created files, and sends immutable review evidence to the dedicated `results` branch.
+
+### Disposable candidate integration gate
+
+```powershell
+.\scripts\install_windows_candidate_gate.ps1
+```
+
+The gate applies relayed patches to a fresh clone pinned to the recorded source commit, runs fixed validation commands, removes the clone, and writes a structured gate report to the `results` branch. Product publication remains disabled.
+
+See [`docs/CANDIDATE_INTEGRATION_GATE_V1.md`](docs/CANDIDATE_INTEGRATION_GATE_V1.md) for the gate contract and first witness.
+
 ### One-shot Windows Codex shadow host
 
 The earlier foreground witness remains available:
@@ -76,8 +97,10 @@ See [`docs/WINDOWS_CODEX_HOST_V1.md`](docs/WINDOWS_CODEX_HOST_V1.md) for the one
 ```text
 src/msos_autobuilder/
   backends/           worker-provider interfaces and local/Codex backends
+  candidate_gate.py   disposable patch integration and validation
   codex_shadow.py     host config, preflight, manifest loading, and shadow execution
   persistent_host.py approval queue, Git feed, heartbeat, recovery, and archives
+  results_relay.py    complete review-artifact reconstruction and relay
   contracts.py        product contract loading and validation
   lanes.py            lane ownership and concurrency checks
   leases.py           runtime leases outside product Git

@@ -1,0 +1,73 @@
+diff --git a/apps/msos-web/src/app/globals.css b/apps/msos-web/src/app/globals.css
+index fd4884aa..3c951c3f 100644
+--- a/apps/msos-web/src/app/globals.css
++++ b/apps/msos-web/src/app/globals.css
+@@ -1412,6 +1412,18 @@ button.btn:focus-visible {
+   color: #c5d8e8;
+ }
+ 
++.lab-explainer-strip {
++  align-items: center;
++  background: rgba(67, 231, 211, 0.045);
++  border: 1px solid rgba(67, 231, 211, 0.16);
++  color: #d7e7f2;
++}
++
++.lab-explainer-strip p {
++  margin: 0;
++  color: #c5d8e8;
++}
++
+ .lab-data-banner.thin-chain,
+ .lab-data-banner.degraded {
+   background: rgba(251, 191, 36, 0.08);
+diff --git a/apps/msos-web/src/components/StrategyLabClientShell.tsx b/apps/msos-web/src/components/StrategyLabClientShell.tsx
+index 875044f5..96d19c42 100644
+--- a/apps/msos-web/src/components/StrategyLabClientShell.tsx
++++ b/apps/msos-web/src/components/StrategyLabClientShell.tsx
+@@ -264,6 +264,14 @@ export function StrategyLabClientShell({ initialPayload }: StrategyLabClientShel
+         </div>
+       </header>
+ 
++      <section className="lab-data-banner lab-explainer-strip" aria-label="What's happening here">
++        <span className="tag teal">What's happening here</span>
++        <p>
++          MSOS turns your thesis into a paper-trade workflow. PPE supplies the read-only
++          options-implied distribution. No live orders.
++        </p>
++      </section>
++
+       {mode === "demo" ? (
+         <div className="lab-data-banner demo" role="alert">
+           <span className="tag amber">Sample</span>
+diff --git a/apps/msos-web/tests/test_strategy_lab_explainer_strip.py b/apps/msos-web/tests/test_strategy_lab_explainer_strip.py
+new file mode 100644
+index 00000000..f53af885
+--- /dev/null
++++ b/apps/msos-web/tests/test_strategy_lab_explainer_strip.py
+@@ -0,0 +1,25 @@
++"""Focused witness for the Strategy Lab demo explainer strip."""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++MSOS_WEB = Path(__file__).resolve().parents[1]
++
++
++def test_strategy_lab_header_explainer_strip_copy_and_styles() -> None:
++    shell = (MSOS_WEB / "src" / "components" / "StrategyLabClientShell.tsx").read_text(
++        encoding="utf-8"
++    )
++    css = (MSOS_WEB / "src" / "app" / "globals.css").read_text(encoding="utf-8")
++
++    assert "lab-explainer-strip" in shell
++    assert 'aria-label="What\'s happening here"' in shell
++    assert "MSOS turns your thesis into a paper-trade workflow." in shell
++    assert "PPE supplies the read-only" in shell
++    assert "options-implied distribution. No live orders." in shell
++    assert shell.index('className="title">Strategy Lab</h1>') < shell.index("lab-explainer-strip")
++    assert shell.index("lab-explainer-strip") < shell.index('mode === "demo"')
++
++    assert ".lab-explainer-strip" in css
++    assert ".lab-explainer-strip p" in css

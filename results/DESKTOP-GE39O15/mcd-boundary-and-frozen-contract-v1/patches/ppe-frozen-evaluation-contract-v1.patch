@@ -1,0 +1,586 @@
+diff --git a/src/viz/frozen_evaluation_contract.py b/src/viz/frozen_evaluation_contract.py
+new file mode 100644
+index 00000000..1cd8a91d
+--- /dev/null
++++ b/src/viz/frozen_evaluation_contract.py
+@@ -0,0 +1,173 @@
++"""Versioned Python-owned contracts for frozen evaluation snapshots."""
++
++from __future__ import annotations
++
++import json
++from typing import Any
++
++FROZEN_EVALUATION_SCHEMA_VERSION = "frozen_evaluation_v1"
++LEGACY_FROZEN_EVALUATION_SCHEMA_VERSION = "ppe_frozen_eval_v1"
++SUPPORTED_FROZEN_EVALUATION_SCHEMA_VERSIONS: tuple[str, ...] = (
++    FROZEN_EVALUATION_SCHEMA_VERSION,
++    LEGACY_FROZEN_EVALUATION_SCHEMA_VERSION,
++)
++
++SNAPSHOT_REVIEW_SCHEMA_VERSION = "snapshot_review_v1"
++SUPPORTED_SNAPSHOT_REVIEW_SCHEMA_VERSIONS: tuple[str, ...] = (SNAPSHOT_REVIEW_SCHEMA_VERSION,)
++
++FROZEN_EVALUATION_HEADER_FIELDS: tuple[str, ...] = (
++    "snapshot_id",
++    "created_at_utc",
++    "payload_schema_version",
++    "expiry",
++    "owner_email",
++    "classifier_version",
++    "benchmark_witness",
++    "data_quality",
++    "primary_output_state",
++    "classification_label",
++    "materiality_rule_version",
++    "market_width_1sigma_move_pct",
++    "benchmark_width_1sigma_move_pct",
++    "materiality_m_ratio",
++)
++
++FROZEN_EVALUATION_REQUIRED_FIELDS: tuple[str, ...] = (
++    "snapshot_id",
++    "created_at_utc",
++    "payload_schema_version",
++    "expiry",
++    "classifier_version",
++    "benchmark_witness",
++    "verification",
++)
++
++SNAPSHOT_REVIEW_REQUIRED_FIELDS: tuple[str, ...] = (
++    "payload_schema_version",
++    "snapshot_id",
++    "created_at",
++    "expiry",
++    "summary_line",
++    "record_header",
++    "review",
++)
++
++SNAPSHOT_REVIEW_ROW_FIELDS: tuple[str, ...] = (
++    "id",
++    "review_status",
++    "outcome_notes",
++    "reviewed_at_utc",
++    "review_horizon_ref",
++    "paper_tag",
++)
++
++
++class FrozenEvaluationContractError(ValueError):
++    """Raised when a frozen evaluation boundary payload violates the Python contract."""
++
++
++def _require_mapping(value: Any, *, label: str) -> dict[str, Any]:
++    if not isinstance(value, dict):
++        raise FrozenEvaluationContractError(f"{label} must be a JSON object")
++    return value
++
++
++def _require_fields(payload: dict[str, Any], required: tuple[str, ...], *, label: str) -> None:
++    missing = [field for field in required if field not in payload]
++    if missing:
++        raise FrozenEvaluationContractError(f"{label} missing required field(s): {', '.join(missing)}")
++
++
++def validate_frozen_evaluation_record(record: dict[str, Any]) -> dict[str, Any]:
++    """Validate the persisted frozen evaluation record shape at Python-owned boundaries."""
++    rec = _require_mapping(record, label="frozen evaluation record")
++    _require_fields(rec, FROZEN_EVALUATION_REQUIRED_FIELDS, label="frozen evaluation record")
++
++    version = str(rec.get("payload_schema_version") or "").strip()
++    if version not in SUPPORTED_FROZEN_EVALUATION_SCHEMA_VERSIONS:
++        raise FrozenEvaluationContractError(
++            "unsupported frozen evaluation payload_schema_version "
++            f"{version!r}; supported: {SUPPORTED_FROZEN_EVALUATION_SCHEMA_VERSIONS}"
++        )
++    _require_mapping(rec.get("benchmark_witness"), label="frozen evaluation benchmark_witness")
++    _require_mapping(rec.get("verification"), label="frozen evaluation verification")
++
++    for field in ("snapshot_id", "created_at_utc", "expiry", "classifier_version"):
++        if str(rec.get(field) or "").strip() == "":
++            raise FrozenEvaluationContractError(f"frozen evaluation record field {field!r} is required")
++    return rec
++
++
++def frozen_evaluation_header(record: dict[str, Any]) -> dict[str, Any]:
++    """Extract the deterministic review-facing header from a validated frozen record."""
++    rec = validate_frozen_evaluation_record(record)
++    return {field: rec.get(field) for field in FROZEN_EVALUATION_HEADER_FIELDS}
++
++
++def serialize_frozen_evaluation_record(record: dict[str, Any]) -> str:
++    """Validate and serialize a frozen record in stable compact JSON form."""
++    return json.dumps(
++        validate_frozen_evaluation_record(record),
++        separators=(",", ":"),
++        ensure_ascii=False,
++        sort_keys=True,
++    )
++
++
++def deserialize_frozen_evaluation_record(raw_json: str) -> dict[str, Any]:
++    """Deserialize and validate a persisted frozen record."""
++    try:
++        payload = json.loads(raw_json)
++    except json.JSONDecodeError as exc:
++        raise FrozenEvaluationContractError(f"invalid frozen evaluation JSON: {exc}") from exc
++    return validate_frozen_evaluation_record(payload)
++
++
++def build_snapshot_review_payload(
++    *,
++    snapshot_id: str,
++    created_at: str | None,
++    expiry: str | None,
++    summary_line: str | None,
++    record: dict[str, Any],
++    review: dict[str, Any] | None,
++) -> dict[str, Any]:
++    """Build the explicit review-facing payload for a frozen snapshot plus review row."""
++    review_doc = dict(review or {})
++    payload = {
++        "payload_schema_version": SNAPSHOT_REVIEW_SCHEMA_VERSION,
++        "snapshot_id": str(snapshot_id),
++        "created_at": created_at,
++        "expiry": expiry,
++        "summary_line": summary_line,
++        "record_header": frozen_evaluation_header(record),
++        "review": {
++            "id": review_doc.get("id"),
++            "review_status": review_doc.get("review_status"),
++            "outcome_notes": review_doc.get("outcome_notes"),
++            "reviewed_at_utc": review_doc.get("reviewed_at_utc"),
++            "review_horizon_ref": review_doc.get("review_horizon_ref"),
++            "paper_tag": review_doc.get("paper_tag"),
++        },
++    }
++    return validate_snapshot_review_payload(payload)
++
++
++def validate_snapshot_review_payload(payload: dict[str, Any]) -> dict[str, Any]:
++    """Validate the Python-owned snapshot review payload contract."""
++    doc = _require_mapping(payload, label="snapshot review payload")
++    _require_fields(doc, SNAPSHOT_REVIEW_REQUIRED_FIELDS, label="snapshot review payload")
++
++    version = str(doc.get("payload_schema_version") or "").strip()
++    if version not in SUPPORTED_SNAPSHOT_REVIEW_SCHEMA_VERSIONS:
++        raise FrozenEvaluationContractError(
++            "unsupported snapshot review payload_schema_version "
++            f"{version!r}; supported: {SUPPORTED_SNAPSHOT_REVIEW_SCHEMA_VERSIONS}"
++        )
++    header = _require_mapping(doc.get("record_header"), label="snapshot review record_header")
++    _require_fields(header, FROZEN_EVALUATION_HEADER_FIELDS, label="snapshot review record_header")
++    review = _require_mapping(doc.get("review"), label="snapshot review review")
++    _require_fields(review, SNAPSHOT_REVIEW_ROW_FIELDS, label="snapshot review review")
++    if str(doc.get("snapshot_id") or "").strip() == "":
++        raise FrozenEvaluationContractError("snapshot review payload field 'snapshot_id' is required")
++    return doc
+diff --git a/src/viz/frozen_evaluation_record.py b/src/viz/frozen_evaluation_record.py
+index 407358eb..97cb2740 100644
+--- a/src/viz/frozen_evaluation_record.py
++++ b/src/viz/frozen_evaluation_record.py
+@@ -6,7 +6,12 @@ import uuid
+ from datetime import datetime, timezone
+ from typing import Any
+ 
+-PAYLOAD_SCHEMA_VERSION = "ppe_frozen_eval_v1"
++from src.viz.frozen_evaluation_contract import (
++    FROZEN_EVALUATION_SCHEMA_VERSION,
++    validate_frozen_evaluation_record,
++)
++
++PAYLOAD_SCHEMA_VERSION = FROZEN_EVALUATION_SCHEMA_VERSION
+ 
+ 
+ def _utc_now_iso() -> str:
+@@ -45,7 +50,7 @@ def build_frozen_evaluation_record(
+     vs = v.get("verification_summary") if isinstance(v.get("verification_summary"), dict) else {}
+     mvp1 = v.get("mvp1_decision") if isinstance(v.get("mvp1_decision"), dict) else {}
+     mat = mvp1.get("materiality") if isinstance(mvp1.get("materiality"), dict) else {}
+-    return {
++    record = {
+         "snapshot_id": str(uuid.uuid4()),
+         "created_at_utc": _utc_now_iso(),
+         "payload_schema_version": PAYLOAD_SCHEMA_VERSION,
+@@ -63,6 +68,7 @@ def build_frozen_evaluation_record(
+         "materiality_m_ratio": mat.get("m_ratio"),
+         "verification": v,
+     }
++    return validate_frozen_evaluation_record(record)
+ 
+ 
+ def summary_line_for_record(rec: dict[str, Any]) -> str:
+diff --git a/src/viz/frozen_evaluation_store.py b/src/viz/frozen_evaluation_store.py
+index 5b0c9910..21fceed8 100644
+--- a/src/viz/frozen_evaluation_store.py
++++ b/src/viz/frozen_evaluation_store.py
+@@ -2,7 +2,6 @@
+ 
+ from __future__ import annotations
+ 
+-import json
+ import os
+ import sqlite3
+ import uuid
+@@ -10,6 +9,11 @@ from datetime import datetime, timezone
+ from pathlib import Path
+ from typing import Any
+ 
++from src.viz.frozen_evaluation_contract import (
++    build_snapshot_review_payload,
++    deserialize_frozen_evaluation_record,
++    serialize_frozen_evaluation_record,
++)
+ from src.viz.frozen_evaluation_record import summary_line_for_record
+ 
+ REVIEW_STATUSES: tuple[str, ...] = (
+@@ -371,21 +375,31 @@ def list_completed_review_snapshots(
+     for row in cur.fetchall():
+         r = dict(row)
+         rec_json = r.pop("record_json")
++        record = deserialize_frozen_evaluation_record(rec_json)
++        review = {
++            "id": r["review_row_id"],
++            "review_status": r["review_status"],
++            "outcome_notes": r["outcome_notes"],
++            "reviewed_at_utc": r["reviewed_at_utc"],
++            "review_horizon_ref": r["review_horizon_ref"],
++            "paper_tag": r.get("paper_tag"),
++        }
+         out.append(
+             {
+                 "snapshot_id": r["snapshot_id"],
+                 "created_at": r.get("created_at"),
+                 "expiry": r.get("expiry"),
+                 "summary_line": r.get("summary_line"),
+-                "record": json.loads(rec_json),
+-                "review": {
+-                    "id": r["review_row_id"],
+-                    "review_status": r["review_status"],
+-                    "outcome_notes": r["outcome_notes"],
+-                    "reviewed_at_utc": r["reviewed_at_utc"],
+-                    "review_horizon_ref": r["review_horizon_ref"],
+-                    "paper_tag": r.get("paper_tag"),
+-                },
++                "record": record,
++                "review": review,
++                "review_payload": build_snapshot_review_payload(
++                    snapshot_id=str(r["snapshot_id"]),
++                    created_at=r.get("created_at"),
++                    expiry=r.get("expiry"),
++                    summary_line=r.get("summary_line"),
++                    record=record,
++                    review=review,
++                ),
+             }
+         )
+     return out
+@@ -393,6 +407,7 @@ def list_completed_review_snapshots(
+ 
+ def insert_record(conn: sqlite3.Connection, record: dict[str, Any]) -> str:
+     init_schema(conn)
++    record_json = serialize_frozen_evaluation_record(record)
+     rid = str(record["snapshot_id"])
+     created = str(record["created_at_utc"])
+     exp = str(record.get("expiry") or "")
+@@ -409,7 +424,7 @@ def insert_record(conn: sqlite3.Connection, record: dict[str, Any]) -> str:
+             created,
+             exp,
+             summary,
+-            json.dumps(record, separators=(",", ":"), ensure_ascii=False),
++            record_json,
+             owner_email,
+         ),
+     )
+@@ -458,7 +473,7 @@ def get_by_id(conn: sqlite3.Connection, snapshot_id: str) -> dict[str, Any] | No
+     row = cur.fetchone()
+     if not row:
+         return None
+-    return json.loads(row["record_json"])
++    return deserialize_frozen_evaluation_record(row["record_json"])
+ 
+ 
+ def open_store(path: Path | None = None) -> sqlite3.Connection:
+diff --git a/tests/fixtures/frozen_evaluation/frozen_evaluation_v1_record.json b/tests/fixtures/frozen_evaluation/frozen_evaluation_v1_record.json
+new file mode 100644
+index 00000000..ddd9144b
+--- /dev/null
++++ b/tests/fixtures/frozen_evaluation/frozen_evaluation_v1_record.json
+@@ -0,0 +1,58 @@
++{
++  "benchmark_witness": {
++    "T_years": 0.25,
++    "atm_iv_annual": 0.55,
++    "forward_usd": 90000.0,
++    "grid_points": 100,
++    "grid_price_max_usd": 150000.0,
++    "grid_price_min_usd": 50000.0,
++    "identity": "lognormal_risk_neutral_reference",
++    "method": "Black-Scholes lognormal"
++  },
++  "benchmark_width_1sigma_move_pct": 11.5,
++  "classification_label": "aligned",
++  "classifier_version": "bd-schema-x",
++  "created_at_utc": "2026-01-02T00:00:00Z",
++  "data_quality": "usable",
++  "expiry": "1JAN26",
++  "market_width_1sigma_move_pct": 12.0,
++  "materiality_m_ratio": 1.1,
++  "materiality_rule_version": "mvp1_v0_provisional",
++  "operator_note": "golden",
++  "owner_email": "alice@example.com",
++  "payload_schema_version": "frozen_evaluation_v1",
++  "primary_output_state": "watch_only",
++  "snapshot_id": "00000000-0000-4000-8000-000000000001",
++  "verification": {
++    "belief_disagreement": {
++      "contract_schema_version": "bd-schema-x"
++    },
++    "density": {
++      "reference_risk_neutral": {
++        "T_years": 0.25,
++        "atm_iv_annual": 0.55,
++        "forward_usd": 90000.0,
++        "grid_points": 100,
++        "grid_price_max_usd": 150000.0,
++        "grid_price_min_usd": 50000.0,
++        "method": "Black-Scholes lognormal"
++      }
++    },
++    "mvp1_decision": {
++      "classification_label": "aligned",
++      "data_quality": "usable",
++      "materiality": {
++        "benchmark_width_1sigma_move_pct": 11.5,
++        "m_ratio": 1.1,
++        "market_width_1sigma_move_pct": 12.0,
++        "materiality_rule_version": "mvp1_v0_provisional"
++      },
++      "primary_output_state": "watch_only"
++    },
++    "verification_summary": {
++      "as_of_utc": "2026-01-02T00:00:00Z",
++      "disagreement_category_id": "aligned",
++      "primary_output_state": "watch_only"
++    }
++  }
++}
+diff --git a/tests/fixtures/frozen_evaluation/snapshot_review_v1_payload.json b/tests/fixtures/frozen_evaluation/snapshot_review_v1_payload.json
+new file mode 100644
+index 00000000..2ae7071e
+--- /dev/null
++++ b/tests/fixtures/frozen_evaluation/snapshot_review_v1_payload.json
+@@ -0,0 +1,40 @@
++{
++  "created_at": "2026-01-02T00:00:00Z",
++  "expiry": "1JAN26",
++  "payload_schema_version": "snapshot_review_v1",
++  "record_header": {
++    "benchmark_witness": {
++      "T_years": 0.25,
++      "atm_iv_annual": 0.55,
++      "forward_usd": 90000.0,
++      "grid_points": 100,
++      "grid_price_max_usd": 150000.0,
++      "grid_price_min_usd": 50000.0,
++      "identity": "lognormal_risk_neutral_reference",
++      "method": "Black-Scholes lognormal"
++    },
++    "benchmark_width_1sigma_move_pct": 11.5,
++    "classification_label": "aligned",
++    "classifier_version": "bd-schema-x",
++    "created_at_utc": "2026-01-02T00:00:00Z",
++    "data_quality": "usable",
++    "expiry": "1JAN26",
++    "market_width_1sigma_move_pct": 12.0,
++    "materiality_m_ratio": 1.1,
++    "materiality_rule_version": "mvp1_v0_provisional",
++    "owner_email": "alice@example.com",
++    "payload_schema_version": "frozen_evaluation_v1",
++    "primary_output_state": "watch_only",
++    "snapshot_id": "00000000-0000-4000-8000-000000000001"
++  },
++  "review": {
++    "id": "review-1",
++    "outcome_notes": "matches paper",
++    "paper_tag": "thesis-A",
++    "review_horizon_ref": "1JAN26 - 2026-01-02T00:00:00Z - aligned",
++    "review_status": "supportive",
++    "reviewed_at_utc": "2026-01-03T00:00:00Z"
++  },
++  "snapshot_id": "00000000-0000-4000-8000-000000000001",
++  "summary_line": "2026-01-02T00:00:00Z - 1JAN26 - aligned"
++}
+diff --git a/tests/test_frozen_evaluation_contract.py b/tests/test_frozen_evaluation_contract.py
+new file mode 100644
+index 00000000..a828e1cc
+--- /dev/null
++++ b/tests/test_frozen_evaluation_contract.py
+@@ -0,0 +1,152 @@
++"""Versioned frozen evaluation and snapshot review contracts."""
++
++from __future__ import annotations
++
++import json
++import tempfile
++from pathlib import Path
++
++import pytest
++
++from src.viz.frozen_evaluation_contract import (
++    FROZEN_EVALUATION_SCHEMA_VERSION,
++    LEGACY_FROZEN_EVALUATION_SCHEMA_VERSION,
++    SNAPSHOT_REVIEW_SCHEMA_VERSION,
++    FrozenEvaluationContractError,
++    build_snapshot_review_payload,
++    deserialize_frozen_evaluation_record,
++    frozen_evaluation_header,
++    serialize_frozen_evaluation_record,
++    validate_frozen_evaluation_record,
++    validate_snapshot_review_payload,
++)
++from src.viz.frozen_evaluation_store import get_by_id, insert_record, open_store
++
++
++FIXTURE_DIR = Path(__file__).parent / "fixtures" / "frozen_evaluation"
++
++
++def _load_fixture(name: str) -> dict:
++    return json.loads((FIXTURE_DIR / name).read_text(encoding="utf-8"))
++
++
++def test_frozen_evaluation_v1_record_matches_golden_header() -> None:
++    record = _load_fixture("frozen_evaluation_v1_record.json")
++    review_payload = _load_fixture("snapshot_review_v1_payload.json")
++
++    assert validate_frozen_evaluation_record(record) == record
++    assert record["payload_schema_version"] == FROZEN_EVALUATION_SCHEMA_VERSION
++    assert frozen_evaluation_header(record) == review_payload["record_header"]
++    assert "verification" not in review_payload["record_header"]
++
++
++def test_snapshot_review_v1_payload_matches_golden() -> None:
++    record = _load_fixture("frozen_evaluation_v1_record.json")
++    expected = _load_fixture("snapshot_review_v1_payload.json")
++
++    payload = build_snapshot_review_payload(
++        snapshot_id=record["snapshot_id"],
++        created_at=record["created_at_utc"],
++        expiry=record["expiry"],
++        summary_line=expected["summary_line"],
++        record=record,
++        review=expected["review"],
++    )
++
++    assert payload["payload_schema_version"] == SNAPSHOT_REVIEW_SCHEMA_VERSION
++    assert payload == expected
++    assert validate_snapshot_review_payload(payload) == expected
++
++
++def test_frozen_evaluation_required_fields_and_unsupported_versions() -> None:
++    record = _load_fixture("frozen_evaluation_v1_record.json")
++
++    missing_version = dict(record)
++    missing_version.pop("payload_schema_version")
++    with pytest.raises(FrozenEvaluationContractError, match="missing required field.*payload_schema_version"):
++        validate_frozen_evaluation_record(missing_version)
++
++    unsupported = dict(record, payload_schema_version="frozen_evaluation_v2")
++    with pytest.raises(FrozenEvaluationContractError, match="unsupported frozen evaluation payload_schema_version"):
++        validate_frozen_evaluation_record(unsupported)
++
++
++def test_snapshot_review_required_fields_and_unsupported_versions() -> None:
++    payload = _load_fixture("snapshot_review_v1_payload.json")
++
++    missing_review = dict(payload)
++    missing_review.pop("review")
++    with pytest.raises(FrozenEvaluationContractError, match="missing required field.*review"):
++        validate_snapshot_review_payload(missing_review)
++
++    unsupported = dict(payload, payload_schema_version="snapshot_review_v2")
++    with pytest.raises(FrozenEvaluationContractError, match="unsupported snapshot review payload_schema_version"):
++        validate_snapshot_review_payload(unsupported)
++
++
++def test_frozen_evaluation_serialization_round_trip_is_stable() -> None:
++    record = _load_fixture("frozen_evaluation_v1_record.json")
++
++    raw = serialize_frozen_evaluation_record(record)
++    round_tripped = deserialize_frozen_evaluation_record(raw)
++
++    assert round_tripped == record
++    assert serialize_frozen_evaluation_record(round_tripped) == raw
++
++
++def test_legacy_frozen_eval_schema_version_is_read_compatible() -> None:
++    record = _load_fixture("frozen_evaluation_v1_record.json")
++    legacy = dict(record, payload_schema_version=LEGACY_FROZEN_EVALUATION_SCHEMA_VERSION)
++
++    assert deserialize_frozen_evaluation_record(json.dumps(legacy))["payload_schema_version"] == (
++        LEGACY_FROZEN_EVALUATION_SCHEMA_VERSION
++    )
++
++
++def test_store_boundary_rejects_unsupported_frozen_versions() -> None:
++    record = _load_fixture("frozen_evaluation_v1_record.json")
++
++    with tempfile.TemporaryDirectory() as td:
++        conn = open_store(Path(td) / "contract.sqlite")
++        try:
++            bad = dict(record, snapshot_id="bad-version", payload_schema_version="frozen_evaluation_v2")
++            with pytest.raises(FrozenEvaluationContractError):
++                insert_record(conn, bad)
++
++            conn.execute(
++                """
++                INSERT INTO frozen_evaluations
++                (id, created_at, expiry, summary_line, record_json, owner_email)
++                VALUES (?, ?, ?, ?, ?, ?)
++                """,
++                (
++                    "bad-persisted",
++                    record["created_at_utc"],
++                    record["expiry"],
++                    "bad persisted",
++                    json.dumps(bad),
++                    None,
++                ),
++            )
++            conn.commit()
++            with pytest.raises(FrozenEvaluationContractError):
++                get_by_id(conn, "bad-persisted")
++        finally:
++            conn.close()
++
++
++def test_store_round_trip_keeps_contract_payload_stable() -> None:
++    record = _load_fixture("frozen_evaluation_v1_record.json")
++
++    with tempfile.TemporaryDirectory() as td:
++        conn = open_store(Path(td) / "stable.sqlite")
++        try:
++            rid = insert_record(conn, record)
++            assert rid == record["snapshot_id"]
++            assert get_by_id(conn, rid) == record
++            stored = conn.execute(
++                "SELECT record_json FROM frozen_evaluations WHERE id = ?", (rid,)
++            ).fetchone()["record_json"]
++            assert stored == serialize_frozen_evaluation_record(record)
++        finally:
++            conn.close()
+diff --git a/tests/test_frozen_evaluation_record.py b/tests/test_frozen_evaluation_record.py
+index 8e69b3a8..20eb1f4a 100644
+--- a/tests/test_frozen_evaluation_record.py
++++ b/tests/test_frozen_evaluation_record.py
+@@ -41,7 +41,7 @@ class TestFrozenEvaluationRecord(unittest.TestCase):
+         }
+         r = build_frozen_evaluation_record(verification=v, expiry_str="1JAN26", operator_note="  hi  ")
+         self.assertTrue(r["snapshot_id"])
+-        self.assertEqual(r["payload_schema_version"], "ppe_frozen_eval_v1")
++        self.assertEqual(r["payload_schema_version"], "frozen_evaluation_v1")
+         self.assertEqual(r["classifier_version"], "bd-schema-x")
+         self.assertEqual(r["benchmark_witness"]["forward_usd"], 90_000.0)
+         self.assertEqual(r["operator_note"], "hi")

@@ -1,0 +1,72 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "apps/msos-web/src/app/globals.css",
+          "apps/msos-web/src/components/StrategyLabClientShell.tsx",
+          "apps/msos-web/tests/test_strategy_lab_explainer_strip.py"
+        ],
+        "metadata": {
+          "output_tail": " / \"components\" / \"StrategyLabClientShell.tsx\").read_text(\n+        encoding=\"utf-8\"\n+    )\n+    css = (MSOS_WEB / \"src\" / \"app\" / \"globals.css\").read_text(encoding=\"utf-8\")\n+\n+    assert \"lab-explainer-strip\" in shell\n+    assert 'aria-label=\"What\\'s happening here\"' in shell\n+    assert \"MSOS turns your thesis into a paper-trade workflow.\" in shell\n+    assert \"PPE supplies the read-only\" in shell\n+    assert \"options-implied distribution. No live orders.\" in shell\n+    assert shell.index('className=\"title\">Strategy Lab</h1>') < shell.index(\"lab-explainer-strip\")\n+    assert shell.index(\"lab-explainer-strip\") < shell.index('mode === \"demo\"')\n+\n+    assert \".lab-explainer-strip\" in css\n+    assert \".lab-explainer-strip p\" in css\n\ntokens used\n66,623\nImplemented the bounded Strategy Lab demo improvement without committing.\n\nChanged:\n- Added the always-visible \u201cWhat\u2019s happening here\u201d strip near the Strategy Lab header in [StrategyLabClientShell.tsx](C:/Users/USER/.msos-autobuilder/workspaces/msos-web-boundary-clarity/apps/msos-web/src/components/StrategyLabClientShell.tsx:267).\n- Reused existing `lab-data-banner`/`tag` visual language with a small focused style in [globals.css](C:/Users/USER/.msos-autobuilder/workspaces/msos-web-boundary-clarity/apps/msos-web/src/app/globals.css:1415).\n- Added an app-local focused witness at [test_strategy_lab_explainer_strip.py](C:/Users/USER/.msos-autobuilder/workspaces/msos-web-boundary-clarity/apps/msos-web/tests/test_strategy_lab_explainer_strip.py:10).\n\nVerification:\n- Passed a scoped PowerShell assertion for the new strip copy, placement, and CSS.\n- `python -m pytest apps/msos-web/tests/test_strategy_lab_explainer_strip.py` could not run because `python.exe` was inaccessible in this shell.\n- `py -m pytest ...` also could not run because `py.exe` was inaccessible.\n- `npm.cmd run lint` started, but failed because local `next` is not installed/available in `apps/msos-web/node_modules`.\n\nNo commit, push, publish, or PR was created.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder\\workspaces\\msos-web-boundary-clarity"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 3 changed path(s)",
+        "task_id": "msos-strategy-lab-boundary-strip-v1"
+      },
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "src/viz/frozen_evaluation_contract.py",
+          "src/viz/frozen_evaluation_record.py",
+          "src/viz/frozen_evaluation_store.py",
+          "tests/fixtures/frozen_evaluation/frozen_evaluation_v1_record.json",
+          "tests/fixtures/frozen_evaluation/snapshot_review_v1_payload.json",
+          "tests/test_frozen_evaluation_contract.py",
+          "tests/test_frozen_evaluation_record.py"
+        ],
+        "metadata": {
+          "output_tail": "(verification=v, expiry_str=\"1JAN26\", operator_note=\"  hi  \")\n         self.assertTrue(r[\"snapshot_id\"])\n-        self.assertEqual(r[\"payload_schema_version\"], \"ppe_frozen_eval_v1\")\n+        self.assertEqual(r[\"payload_schema_version\"], \"frozen_evaluation_v1\")\n         self.assertEqual(r[\"classifier_version\"], \"bd-schema-x\")\n         self.assertEqual(r[\"benchmark_witness\"][\"forward_usd\"], 90_000.0)\n         self.assertEqual(r[\"operator_note\"], \"hi\")\n\ntokens used\n68,052\nImplemented the Python-owned contract slice and left it uncommitted/unpushed.\n\nChanges:\n- Added [frozen_evaluation_contract.py](C:/Users/USER/.msos-autobuilder/workspaces/ppe-ui-frozen-contract/src/viz/frozen_evaluation_contract.py:8) with:\n  - `frozen_evaluation_v1`\n  - legacy read support for `ppe_frozen_eval_v1`\n  - `snapshot_review_v1`\n  - validators, stable serializer/deserializer, and review payload builder\n- Wired validation into the existing builder at [frozen_evaluation_record.py](C:/Users/USER/.msos-autobuilder/workspaces/ppe-ui-frozen-contract/src/viz/frozen_evaluation_record.py:14).\n- Wired store boundaries into insert/read/completed-review paths at [frozen_evaluation_store.py](C:/Users/USER/.msos-autobuilder/workspaces/ppe-ui-frozen-contract/src/viz/frozen_evaluation_store.py:378).\n- Added golden fixtures under `tests/fixtures/frozen_evaluation/`.\n- Added focused contract tests in [test_frozen_evaluation_contract.py](C:/Users/USER/.msos-autobuilder/workspaces/ppe-ui-frozen-contract/tests/test_frozen_evaluation_contract.py:33).\n- Updated the existing record test to expect `frozen_evaluation_v1`.\n\nVerification:\n- `git diff --check` passed.\n- Targeted pytest could not run because this shell has no usable Python/pytest:\n  - `pytest ...` failed: command not recognized.\n  - `python -m pytest ...` failed: `python.exe` cannot be accessed by the system.\n  - `py -m pytest ...` failed with the same access error.\n  - `where.exe python`, `where.exe pytest`, and `where.exe uv` found no usable binaries.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder\\workspaces\\ppe-ui-frozen-contract"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 7 changed path(s)",
+        "task_id": "ppe-frozen-evaluation-contract-v1"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "1d7097be96cfdb1af9211ac3e83e22385e385b78",
+    "status": "completed"
+  },
+  "completed_at": "2026-07-12T01:11:30.495599+00:00",
+  "job_id": "mcd-boundary-and-frozen-contract-v1",
+  "job_sha256": "9e0c7b4863f8c40827b70502a78b2005b71701c3760cc891a0d8e3e028951c09",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "lane_id": "msos-web-boundary-clarity",
+      "patch_file": "patches/msos-strategy-lab-boundary-strip-v1.patch",
+      "patch_sha256": "ff65ab4b008ffb187d7a8bc291f50acaa2a80d0120ac7539f8cd575642f03cbf",
+      "task_id": "msos-strategy-lab-boundary-strip-v1"
+    },
+    {
+      "allow_changes": true,
+      "lane_id": "ppe-ui-frozen-contract",
+      "patch_file": "patches/ppe-frozen-evaluation-contract-v1.patch",
+      "patch_sha256": "8d1b743ef95c863e3e27ce5418fbeefd559b2d7467b5b3c456b3732c9a1f6782",
+      "task_id": "ppe-frozen-evaluation-contract-v1"
+    }
+  ],
+  "publication_enabled": false,
+  "requested_by": "ChatGPT on Daniel Tabakman's instruction",
+  "source": "C:\\Users\\USER\\.msos-autobuilder\\queue\\pending\\mcd-boundary-and-frozen-contract-v1.yaml",
+  "version": 1
+}

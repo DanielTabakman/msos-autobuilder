@@ -1,0 +1,64 @@
+version: 1
+job_id: ppe-frozen-evaluation-contract-v1-revision-1
+approved: true
+publication_enabled: false
+requested_by: ChatGPT on Daniel Tabakman's instruction
+submitted_at: 2026-07-12T23:45:00Z
+approved_at: 2026-07-12T23:45:00Z
+expected_source_head: 1d7097be96cfdb1af9211ac3e83e22385e385b78
+manifest:
+  version: 1
+  publication_enabled: false
+  lanes:
+    - task_id: ppe-frozen-evaluation-contract-v1-revision-1
+      lane_id: ppe-ui-frozen-contract-revision-1
+      chapter_id: MCD-FROZEN-EVALUATION-CONTRACT-V1-REVISION-1
+      branch: shadow/mcd-frozen-evaluation-contract-v1-revision-1
+      layer: ppe-ui
+      preferred_cost_class: standard
+      allowed_paths:
+        - src/viz/**
+        - tests/test_frozen_evaluation*.py
+        - tests/fixtures/frozen_evaluation/**
+      forbidden_paths:
+        - apps/msos-web/**
+        - artifacts/**
+        - .github/**
+        - scripts/**
+        - src/engine/**
+        - src/data/**
+        - src/models/**
+      allow_changes: true
+      instruction: |
+        Produce a corrected, self-contained replacement for the failed
+        ppe-frozen-evaluation-contract-v1 candidate on this clean source checkout.
+
+        The disposable integration gate established two concrete failures:
+
+        1. Snapshot identity mismatch was accepted. The outer snapshot_review_v1
+           snapshot_id must equal record_header.snapshot_id, and validation must reject
+           any mismatch deterministically.
+        2. The proposed candidate changed newly written frozen-evaluation records from
+           the existing ppe_frozen_eval_v1 schema identifier to frozen_evaluation_v1.
+           Do not make that migration in this chapter. Preserve ppe_frozen_eval_v1 as
+           the canonical emitted and persisted write version so existing consumers remain
+           compatible. Unsupported versions must still fail clearly at the Python-owned
+           boundary.
+
+        Implement the smallest coherent Python-owned contract slice for the existing
+        frozen evaluation record/header and snapshot_review_v1 payload. Work from the
+        current repository state rather than assuming the previous patch is present.
+
+        Required behavior:
+        - retain ppe_frozen_eval_v1 as the canonical write version;
+        - keep reads deterministic and explicitly reject unsupported versions;
+        - make snapshot_review_v1 validation enforce outer/header snapshot identity;
+        - use deterministic serialization and focused golden fixtures only where useful;
+        - keep the review-facing payload minimal and do not add owner_email to it;
+        - integrate minimally with the existing record/store path;
+        - add focused tests for valid output, round-trip stability, unsupported versions,
+          legacy/current compatibility, and snapshot-ID mismatch rejection.
+
+        Do not touch MSOS TypeScript, engine/data/model code, unrelated schemas, or
+        product behavior. Run the targeted frozen-evaluation pytest suite when practical
+        and report exact results. Do not commit, push, publish, or open a pull request.

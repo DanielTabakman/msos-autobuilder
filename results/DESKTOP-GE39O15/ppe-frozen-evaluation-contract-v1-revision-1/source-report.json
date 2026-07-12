@@ -1,0 +1,45 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "src/viz/frozen_evaluation_record.py",
+          "src/viz/frozen_evaluation_store.py",
+          "tests/test_frozen_evaluation_record.py",
+          "tests/test_frozen_evaluation_store.py"
+        ],
+        "metadata": {
+          "output_tail": "raryDirectory() as td:\n\ntokens used\n55,490\nImplemented the corrected Python-owned frozen-evaluation contract slice without committing.\n\nChanged:\n- [src/viz/frozen_evaluation_record.py](C:/Users/USER/.msos-autobuilder/workspaces/ppe-ui-frozen-contract-revision-1/src/viz/frozen_evaluation_record.py:9)\n  - Preserves `ppe_frozen_eval_v1` as the canonical frozen record version.\n  - Adds minimal `record_header` generation/normalization.\n  - Adds `snapshot_review_v1` build/validation helpers.\n  - Enforces `snapshot_review_v1.snapshot_id == record_header.snapshot_id`.\n  - Rejects unsupported frozen/review schema versions, including `frozen_evaluation_v1`.\n\n- [src/viz/frozen_evaluation_store.py](C:/Users/USER/.msos-autobuilder/workspaces/ppe-ui-frozen-contract-revision-1/src/viz/frozen_evaluation_store.py:399)\n  - Validates frozen records on insert and read.\n  - Writes deterministic JSON with `sort_keys=True`.\n  - Normalizes older current-version records missing `record_header`.\n  - Adds minimal `get_snapshot_review_payload`.\n  - Validates records returned through completed-review reads.\n\n- Tests added in:\n  - [tests/test_frozen_evaluation_record.py](C:/Users/USER/.msos-autobuilder/workspaces/ppe-ui-frozen-contract-revision-1/tests/test_frozen_evaluation_record.py:57)\n  - [tests/test_frozen_evaluation_store.py](C:/Users/USER/.msos-autobuilder/workspaces/ppe-ui-frozen-contract-revision-1/tests/test_frozen_evaluation_store.py:53)\n\nVerification:\n- `git diff --check` passed; only Git LF-to-CRLF warnings were printed.\n- Targeted pytest command attempted:\n\n```powershell\npython -m pytest -q tests/test_frozen_evaluation_record.py tests/test_frozen_evaluation_store.py tests/test_frozen_review_store.py\n```\n\nExact result: exit code `1`; `python.exe` could not run because this shell only has the Windows Store alias at `C:\\Users\\USER\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe`, which returned `The file cannot be accessed by the system`.\n\nNo commit, push, publish, or PR was performed.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder\\workspaces\\ppe-ui-frozen-contract-revision-1"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 4 changed path(s)",
+        "task_id": "ppe-frozen-evaluation-contract-v1-revision-1"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "1d7097be96cfdb1af9211ac3e83e22385e385b78",
+    "status": "completed"
+  },
+  "completed_at": "2026-07-12T23:44:59.203758+00:00",
+  "job_id": "ppe-frozen-evaluation-contract-v1-revision-1",
+  "job_sha256": "af78b411d608e081e5fc57d7f11763c614846d7f8319ac1c897172fc277d1a33",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "lane_id": "ppe-ui-frozen-contract-revision-1",
+      "patch_file": "patches/ppe-frozen-evaluation-contract-v1-revision-1.patch",
+      "patch_sha256": "b741b9048f7adde6a41a9eea1b2ab7b9e7e79c082e262d6a45652941026b6c71",
+      "task_id": "ppe-frozen-evaluation-contract-v1-revision-1"
+    }
+  ],
+  "publication_enabled": false,
+  "requested_by": "ChatGPT on Daniel Tabakman's instruction",
+  "source": "C:\\Users\\USER\\.msos-autobuilder\\queue\\pending\\ppe-frozen-evaluation-contract-v1-revision-1.yaml",
+  "version": 1
+}

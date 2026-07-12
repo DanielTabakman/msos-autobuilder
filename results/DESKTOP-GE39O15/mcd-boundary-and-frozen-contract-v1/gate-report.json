@@ -23,13 +23,13 @@
         "tests/test_frozen_evaluation_record.py"
       ],
       "cwd": ".",
-      "finished_at": "2026-07-12T12:36:54.607992+00:00",
+      "finished_at": "2026-07-12T16:16:47.829740+00:00",
       "name": "focused-product-tests",
       "passed": true,
       "returncode": 0,
-      "started_at": "2026-07-12T12:36:52.887577+00:00",
+      "started_at": "2026-07-12T16:16:46.388846+00:00",
       "stderr": "",
-      "stdout": "..........                                                               [100%]\n10 passed in 0.92s\n",
+      "stdout": "..........                                                               [100%]\n10 passed in 0.76s\n",
       "timed_out": false
     },
     {
@@ -39,18 +39,18 @@
         "."
       ],
       "cwd": ".",
-      "finished_at": "2026-07-12T12:36:54.730810+00:00",
+      "finished_at": "2026-07-12T16:16:47.945261+00:00",
       "name": "frozen-evaluation-snapshot-identity",
       "passed": false,
       "returncode": 1,
-      "started_at": "2026-07-12T12:36:54.609000+00:00",
+      "started_at": "2026-07-12T16:16:47.830741+00:00",
       "stderr": "snapshot identity mismatch was accepted; outer snapshot_id must match record_header\n",
       "stdout": "",
       "timed_out": false
     }
   ],
   "errors": [],
-  "finished_at": "2026-07-12T12:36:55.376303+00:00",
+  "finished_at": "2026-07-12T16:16:48.472967+00:00",
   "job_id": "mcd-boundary-and-frozen-contract-v1",
   "patches": [
     {
@@ -85,7 +85,7 @@
   "publication_enabled": false,
   "source_head": "1d7097be96cfdb1af9211ac3e83e22385e385b78",
   "source_report_sha256": "d9f5398352625a397ea9199669a5945882e8add7640201bb708f039c402726b0",
-  "started_at": "2026-07-12T12:36:50.530466+00:00",
+  "started_at": "2026-07-12T16:16:43.353722+00:00",
   "status": "failed",
   "version": 1,
   "workspace_removed": true

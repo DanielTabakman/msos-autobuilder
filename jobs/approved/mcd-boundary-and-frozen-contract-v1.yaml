@@ -1,0 +1,91 @@
+version: 1
+job_id: mcd-boundary-and-frozen-contract-v1
+approved: true
+publication_enabled: false
+requested_by: ChatGPT on Daniel Tabakman's instruction
+submitted_at: 2026-07-12T01:06:00Z
+approved_at: 2026-07-12T01:06:00Z
+expected_source_head: 1d7097be96cfdb1af9211ac3e83e22385e385b78
+manifest:
+  version: 1
+  publication_enabled: false
+  lanes:
+    - task_id: msos-strategy-lab-boundary-strip-v1
+      lane_id: msos-web-boundary-clarity
+      chapter_id: MCD-MSOS-PPE-BOUNDARY-CLARITY-V1
+      branch: shadow/mcd-boundary-clarity-v1-msos-web
+      layer: msos-shell
+      preferred_cost_class: standard
+      allowed_paths:
+        - apps/msos-web/**
+      forbidden_paths:
+        - artifacts/**
+        - .github/**
+        - scripts/**
+        - src/**
+      allow_changes: true
+      instruction: |
+        Implement one bounded Minimum Credible Demo improvement in the MSOS web shell.
+
+        First inspect the existing Strategy Lab header, surrounding explanatory copy,
+        design primitives, and focused tests. Then add a compact, always-visible
+        "What's happening here" strip near the Strategy Lab header using the existing
+        visual language. Preserve this exact product meaning, with only minor wording
+        adjustments if required for fit:
+
+        "MSOS turns your thesis into a paper-trade workflow. PPE supplies the read-only
+        options-implied distribution. No live orders."
+
+        Requirements:
+        - Keep the change small and legible within the first ten seconds of the demo.
+        - Use existing components/styles rather than introducing a new design system.
+        - Add or update focused tests under apps/msos-web only.
+        - Do not alter PPE math, payload schemas, API routing, data fetching, order
+          behavior, or unrelated product copy.
+        - Run the most relevant existing tests/lint command that is practical in this
+          workspace and report the result.
+        - Do not commit, push, publish, or open a pull request.
+
+    - task_id: ppe-frozen-evaluation-contract-v1
+      lane_id: ppe-ui-frozen-contract
+      chapter_id: MCD-FROZEN-EVALUATION-CONTRACT-V1
+      branch: shadow/mcd-frozen-evaluation-contract-v1
+      layer: ppe-ui
+      preferred_cost_class: standard
+      allowed_paths:
+        - src/viz/**
+        - tests/test_frozen_evaluation*.py
+        - tests/fixtures/frozen_evaluation/**
+      forbidden_paths:
+        - apps/msos-web/**
+        - artifacts/**
+        - .github/**
+        - scripts/**
+        - src/engine/**
+        - src/data/**
+        - src/models/**
+      allow_changes: true
+      instruction: |
+        Implement the smallest safe Python-owned contract slice for
+        frozen_evaluation_v1 and snapshot_review_v1.
+
+        First inspect the existing frozen evaluation record/store/boundary code and
+        relevant tests. Preserve backward compatibility and do not touch engine math.
+        Create a clear versioned contract on the Python side that makes the persisted
+        record header and review-facing payload shape explicit and testable.
+
+        Bounded deliverables:
+        - an explicit contract/serializer/validator in src/viz for the frozen evaluation
+          header and review-facing payload shape;
+        - required payload schema-version handling with a clear failure for unsupported
+          versions at the Python-owned boundary;
+        - deterministic golden fixture(s) under tests/fixtures/frozen_evaluation when
+          useful;
+        - focused tests covering valid output, required fields, round-trip stability,
+          and unsupported-version rejection;
+        - minimal integration into the existing record/store path without broad
+          refactoring.
+
+        Do not modify MSOS TypeScript, engine/data/model code, unrelated schemas, or
+        product behavior. Run targeted pytest for the touched contract tests and report
+        the result. Do not commit, push, publish, or open a pull request.

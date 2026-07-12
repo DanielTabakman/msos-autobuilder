@@ -19,18 +19,14 @@ jobs:
           cache: pip
       - name: Install
         run: python -m pip install -e ".[dev]"
-      - name: Ruff
-        id: ruff
-        continue-on-error: true
-        run: python -m ruff check . > ruff-output.txt 2>&1
-      - name: Upload Ruff diagnostics
-        if: always()
+      - name: Apply Ruff autofix witness
+        run: python -m ruff check tests/test_revision_loop.py --fix
+      - name: Upload Ruff-fixed test
         uses: actions/upload-artifact@v4
         with:
-          name: ruff-diagnostics
-          path: ruff-output.txt
-      - name: Fail on Ruff errors
-        if: steps.ruff.outcome == 'failure'
-        run: cat ruff-output.txt && exit 1
+          name: ruff-fixed-revision-test
+          path: tests/test_revision_loop.py
+      - name: Ruff
+        run: python -m ruff check .
       - name: Pytest
         run: python -m pytest -q

@@ -3,7 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 
-INSTALLER = Path(__file__).resolve().parents[1] / "scripts" / "install_windows_candidate_gate.ps1"
+INSTALLER = (
+    Path(__file__).resolve().parents[1]
+    / "scripts"
+    / "install_windows_candidate_gate.ps1"
+)
 
 
 def test_windows_candidate_gate_forces_canonical_patch_line_endings() -> None:

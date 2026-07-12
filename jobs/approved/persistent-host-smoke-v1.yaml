@@ -1,0 +1,28 @@
+version: 1
+job_id: persistent-host-smoke-v1
+approved: true
+publication_enabled: false
+requested_by: ChatGPT on Daniel Tabakman's instruction
+submitted_at: 2026-07-12T00:56:00Z
+manifest:
+  version: 1
+  publication_enabled: false
+  lanes:
+    - task_id: persistent-host-smoke
+      lane_id: persistent-host-smoke
+      chapter_id: PERSISTENT-HOST-SMOKE-V1
+      branch: shadow/persistent-host-smoke-v1
+      layer: product-canon
+      preferred_cost_class: standard
+      allowed_paths:
+        - docs/**
+      forbidden_paths:
+        - artifacts/**
+        - .github/**
+        - scripts/**
+      allow_changes: false
+      instruction: |
+        Run a read-only persistent-host smoke test against the current MSOS checkout.
+        Report the current Git HEAD, confirm the repository is clean, and identify the
+        primary files that define the MSOS shell/PPE boundary. Do not modify files.
+        Do not commit, push, publish, or open a pull request. Return concise findings.

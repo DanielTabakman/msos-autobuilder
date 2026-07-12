@@ -26,3 +26,7 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/msos_autobuilder/candidate_gate.py" = ["E501"]
+"tests/test_candidate_gate.py" = ["E501"]

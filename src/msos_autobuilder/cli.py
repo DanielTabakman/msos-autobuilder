@@ -15,6 +15,16 @@ from .codex_shadow import (
     run_codex_shadow,
 )
 from .inventory import build_inventory, render_json, render_markdown
+from .persistent_host import (
+    HostPaths,
+    PersistentHost,
+    approve_pending_job,
+    enqueue_manifest,
+    load_persistent_host_config,
+    render_host_result_json,
+    render_host_status_json,
+    sync_git_job_feed,
+)
 from .process_witness import render_process_witness_json, run_process_witness
 from .workspace_witness import render_workspace_witness_json, run_workspace_witness
 
@@ -81,11 +91,79 @@ def _codex_shadow_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _persistent_host(args: argparse.Namespace) -> PersistentHost:
+    return PersistentHost(load_persistent_host_config(args.service_config))
+
+
+def _host_init_command(args: argparse.Namespace) -> int:
+    status = _persistent_host(args).initialize()
+    _write_or_print(render_host_status_json(status), args.json_out)
+    return 0
+
+
+def _host_run_once_command(args: argparse.Namespace) -> int:
+    result = _persistent_host(args).run_once(sync_feed=not args.no_feed)
+    _write_or_print(render_host_result_json(result), args.json_out)
+    return 1 if result.outcome == "failed" else 0
+
+
+def _host_run_command(args: argparse.Namespace) -> int:
+    _persistent_host(args).run_forever()
+    return 0
+
+
+def _host_status_command(args: argparse.Namespace) -> int:
+    status = _persistent_host(args).read_status()
+    _write_or_print(render_host_status_json(status), args.json_out)
+    return 0
+
+
+def _host_enqueue_command(args: argparse.Namespace) -> int:
+    config = load_persistent_host_config(args.service_config)
+    paths = HostPaths.from_root(config.host_root)
+    path = enqueue_manifest(
+        paths,
+        args.manifest,
+        job_id=args.job_id,
+        approved=args.approve,
+        requested_by=args.requested_by,
+        expected_source_head=args.expected_source_head,
+    )
+    _write_or_print(str(path) + "\n", args.output)
+    return 0
+
+
+def _host_approve_command(args: argparse.Namespace) -> int:
+    config = load_persistent_host_config(args.service_config)
+    path = approve_pending_job(HostPaths.from_root(config.host_root), args.job_id)
+    _write_or_print(str(path) + "\n", args.output)
+    return 0
+
+
+def _host_sync_feed_command(args: argparse.Namespace) -> int:
+    config = load_persistent_host_config(args.service_config)
+    imported = sync_git_job_feed(config, HostPaths.from_root(config.host_root))
+    output = "\n".join(imported) + ("\n" if imported else "")
+    _write_or_print(output, args.output)
+    return 0
+
+
+def _host_stop_command(args: argparse.Namespace) -> int:
+    host = _persistent_host(args)
+    host.request_stop()
+    _write_or_print(str(host.paths.stop_file) + "\n", args.output)
+    return 0
+
+
 def _workspace_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--source", required=True)
     parser.add_argument("--workspace-root", required=True)
     parser.add_argument("--runtime-root", required=True)
     parser.add_argument("--json-out")
+
+
+def _service_config_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--service-config", required=True)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -133,6 +211,76 @@ def build_parser() -> argparse.ArgumentParser:
     codex_shadow.add_argument("--manifest", required=True)
     codex_shadow.add_argument("--json-out")
     codex_shadow.set_defaults(func=_codex_shadow_command)
+
+    host_init = subparsers.add_parser(
+        "host-init",
+        help="initialize the persistent local queue and status files",
+    )
+    _service_config_argument(host_init)
+    host_init.add_argument("--json-out")
+    host_init.set_defaults(func=_host_init_command)
+
+    host_run_once = subparsers.add_parser(
+        "host-run-once",
+        help="synchronize the feed and process at most one approved job",
+    )
+    _service_config_argument(host_run_once)
+    host_run_once.add_argument("--no-feed", action="store_true")
+    host_run_once.add_argument("--json-out")
+    host_run_once.set_defaults(func=_host_run_once_command)
+
+    host_run = subparsers.add_parser(
+        "host-run",
+        help="run the approval-gated local Autobuilder host until stopped",
+    )
+    _service_config_argument(host_run)
+    host_run.set_defaults(func=_host_run_command)
+
+    host_status = subparsers.add_parser(
+        "host-status",
+        help="show persistent host heartbeat, queue counts, and last result",
+    )
+    _service_config_argument(host_status)
+    host_status.add_argument("--json-out")
+    host_status.set_defaults(func=_host_status_command)
+
+    host_enqueue = subparsers.add_parser(
+        "host-enqueue",
+        help="copy a Codex manifest into the local approval-gated queue",
+    )
+    _service_config_argument(host_enqueue)
+    host_enqueue.add_argument("--manifest", required=True)
+    host_enqueue.add_argument("--job-id", required=True)
+    host_enqueue.add_argument("--approve", action="store_true")
+    host_enqueue.add_argument("--requested-by", default="local-operator")
+    host_enqueue.add_argument("--expected-source-head")
+    host_enqueue.add_argument("--output")
+    host_enqueue.set_defaults(func=_host_enqueue_command)
+
+    host_approve = subparsers.add_parser(
+        "host-approve",
+        help="approve one already-pending local job",
+    )
+    _service_config_argument(host_approve)
+    host_approve.add_argument("--job-id", required=True)
+    host_approve.add_argument("--output")
+    host_approve.set_defaults(func=_host_approve_command)
+
+    host_sync_feed = subparsers.add_parser(
+        "host-sync-feed",
+        help="synchronize approved Git job manifests without executing them",
+    )
+    _service_config_argument(host_sync_feed)
+    host_sync_feed.add_argument("--output")
+    host_sync_feed.set_defaults(func=_host_sync_feed_command)
+
+    host_stop = subparsers.add_parser(
+        "host-stop",
+        help="request a graceful stop from the persistent local host",
+    )
+    _service_config_argument(host_stop)
+    host_stop.add_argument("--output")
+    host_stop.set_defaults(func=_host_stop_command)
     return parser
 
 

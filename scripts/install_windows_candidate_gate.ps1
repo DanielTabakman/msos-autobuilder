@@ -5,6 +5,7 @@ param(
     [string]$ResultsRepoUrl = "https://github.com/DanielTabakman/msos-autobuilder.git",
     [string]$ResultsBranch = "results",
     [string]$MachineId = $env:COMPUTERNAME,
+    [string]$WitnessJobId = "mcd-boundary-and-frozen-contract-v1",
     [int]$PollSeconds = 30
 )
 
@@ -25,6 +26,29 @@ function Convert-ToForwardSlash {
     return $Value.Replace("\", "/")
 }
 
+function Restore-EnvironmentValue {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [AllowNull()][string]$Value
+    )
+
+    if ($null -eq $Value) {
+        Remove-Item -Path "Env:\$Name" -ErrorAction SilentlyContinue
+    }
+    else {
+        Set-Item -Path "Env:\$Name" -Value $Value
+    }
+}
+
+function Invoke-GitChecked {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+    & $Git.Source @Arguments | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "Git command failed ($LASTEXITCODE): git $($Arguments -join ' ')"
+    }
+}
+
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Bootstrap = Join-Path $PSScriptRoot "bootstrap_windows_codex_host_auto.ps1"
 $VenvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
@@ -34,6 +58,9 @@ $LogRoot = Join-Path $HostRoot "logs"
 $LogFile = Join-Path $LogRoot "candidate-gate.log"
 $RunnerScript = Join-Path $HostRoot "run-candidate-gate.ps1"
 $IntegrityWitness = Join-Path $RepoRoot "scripts\check_frozen_evaluation_candidate.py"
+$ResultsCheckout = Join-Path $HostRoot "state\candidate-gate-results-repo"
+$LedgerPath = Join-Path $HostRoot "state\candidate-gate-seen.json"
+$Git = Get-Command git -ErrorAction Stop
 
 if (-not (Test-Path $VenvPython)) {
     Write-Host "Preparing the Autobuilder Python environment..." -ForegroundColor Cyan
@@ -101,10 +128,61 @@ plans:
 "@
 Set-Content -Path $GateConfig -Value $GateYaml -Encoding UTF8
 
+$ExistingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($ExistingTask) {
+    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+}
+
 Write-Host "Running the candidate gate once in the foreground..." -ForegroundColor Cyan
 $PreviousPrompt = $env:GIT_TERMINAL_PROMPT
+$PreviousGitConfigCount = $env:GIT_CONFIG_COUNT
+$PreviousGitConfigKey = $env:GIT_CONFIG_KEY_0
+$PreviousGitConfigValue = $env:GIT_CONFIG_VALUE_0
 $env:GIT_TERMINAL_PROMPT = "1"
+$env:GIT_CONFIG_COUNT = "1"
+$env:GIT_CONFIG_KEY_0 = "core.autocrlf"
+$env:GIT_CONFIG_VALUE_0 = "false"
 try {
+    # Git patch hashes are calculated over canonical LF bytes. Force the results checkout
+    # to preserve those bytes rather than applying the Windows core.autocrlf conversion.
+    if (Test-Path (Join-Path $ResultsCheckout ".git")) {
+        Invoke-GitChecked -Arguments @("-C", $ResultsCheckout, "config", "core.autocrlf", "false")
+        Invoke-GitChecked -Arguments @("-C", $ResultsCheckout, "checkout-index", "-a", "-f")
+    }
+
+    # The first Windows witness may have been recorded as failed solely because CRLF
+    # conversion changed a patch hash. Remove only that immutable ledger entry so the
+    # corrected gate can replace its report. Other processed jobs remain untouched.
+    $ExistingGateReport = Join-Path $ResultsCheckout "results\$MachineId\$WitnessJobId\gate-report.json"
+    $RetryWitness = $false
+    if (Test-Path $ExistingGateReport) {
+        try {
+            $GateReport = Get-Content -Path $ExistingGateReport -Raw | ConvertFrom-Json
+            foreach ($ErrorEntry in @($GateReport.errors)) {
+                if ($null -ne $ErrorEntry -and ([string]$ErrorEntry.message) -like "patch hash mismatch*") {
+                    $RetryWitness = $true
+                    break
+                }
+            }
+        }
+        catch {
+            Write-Warning "Could not inspect the existing candidate report: $($_.Exception.Message)"
+        }
+    }
+
+    if ($RetryWitness -and (Test-Path $LedgerPath)) {
+        $Ledger = Get-Content -Path $LedgerPath -Raw | ConvertFrom-Json
+        if ($Ledger.PSObject.Properties.Name -contains $WitnessJobId) {
+            $Ledger.PSObject.Properties.Remove($WitnessJobId)
+            $LedgerJson = ($Ledger | ConvertTo-Json -Depth 20) + [Environment]::NewLine
+            $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($LedgerPath, $LedgerJson, $Utf8NoBom)
+            Write-Host "Reprocessing the first witness after canonicalizing patch line endings." `
+                -ForegroundColor Yellow
+        }
+    }
+
     & $VenvPython -m msos_autobuilder.candidate_gate `
         --config $GateConfig `
         --once | Out-Host
@@ -113,12 +191,10 @@ try {
     }
 }
 finally {
-    if ($null -eq $PreviousPrompt) {
-        Remove-Item Env:\GIT_TERMINAL_PROMPT -ErrorAction SilentlyContinue
-    }
-    else {
-        $env:GIT_TERMINAL_PROMPT = $PreviousPrompt
-    }
+    Restore-EnvironmentValue -Name "GIT_TERMINAL_PROMPT" -Value $PreviousPrompt
+    Restore-EnvironmentValue -Name "GIT_CONFIG_COUNT" -Value $PreviousGitConfigCount
+    Restore-EnvironmentValue -Name "GIT_CONFIG_KEY_0" -Value $PreviousGitConfigKey
+    Restore-EnvironmentValue -Name "GIT_CONFIG_VALUE_0" -Value $PreviousGitConfigValue
 }
 
 $RunnerContent = @"
@@ -126,6 +202,9 @@ Set-StrictMode -Version Latest
 `$ErrorActionPreference = "Continue"
 `$env:PYTHONUTF8 = "1"
 `$env:GIT_TERMINAL_PROMPT = "0"
+`$env:GIT_CONFIG_COUNT = "1"
+`$env:GIT_CONFIG_KEY_0 = "core.autocrlf"
+`$env:GIT_CONFIG_VALUE_0 = "false"
 New-Item -ItemType Directory -Force -Path "$LogRoot" | Out-Null
 & "$VenvPython" -m msos_autobuilder.candidate_gate --config "$GateConfig" *>> "$LogFile"
 exit `$LASTEXITCODE
@@ -135,12 +214,6 @@ Set-Content -Path $RunnerScript -Value $RunnerContent -Encoding UTF8
 $PowerShellExe = (Get-Command powershell.exe -ErrorAction Stop).Source
 $TaskArgument = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$RunnerScript`""
 $UserId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-
-$ExistingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-if ($ExistingTask) {
-    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
-}
 
 $Action = New-ScheduledTaskAction -Execute $PowerShellExe -Argument $TaskArgument
 $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $UserId

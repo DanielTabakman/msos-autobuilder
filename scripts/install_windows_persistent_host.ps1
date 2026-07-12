@@ -6,7 +6,9 @@ param(
     [string]$FeedBranch = "jobs",
     [string]$FeedPath = "jobs/approved",
     [int]$PollSeconds = 10,
-    [int]$FeedRefreshSeconds = 30
+    [int]$FeedRefreshSeconds = 30,
+    [string]$WaitForJobId = "persistent-host-smoke-v1",
+    [int]$WaitMinutes = 30
 )
 
 Set-StrictMode -Version Latest
@@ -118,3 +120,28 @@ Write-Host "Completed jobs: $HostRoot\queue\completed"
 Write-Host "Failed jobs: $HostRoot\queue\failed"
 
 & $VenvPython -m msos_autobuilder host-status --service-config $ServiceConfig | Out-Host
+
+if ($WaitForJobId) {
+    $CompletedReport = Join-Path $HostRoot "queue\completed\$WaitForJobId\report.json"
+    $FailedReport = Join-Path $HostRoot "queue\failed\$WaitForJobId\error.json"
+    $Deadline = (Get-Date).AddMinutes($WaitMinutes)
+    Write-Host "Waiting for background job '$WaitForJobId' (up to $WaitMinutes minutes)..." `
+        -ForegroundColor Cyan
+
+    while ((Get-Date) -lt $Deadline) {
+        if (Test-Path $CompletedReport) {
+            Write-Host "Background smoke job completed successfully." -ForegroundColor Green
+            Get-Content -Path $CompletedReport | Out-Host
+            return
+        }
+        if (Test-Path $FailedReport) {
+            Get-Content -Path $FailedReport | Out-Host
+            throw "Background smoke job failed. See $FailedReport"
+        }
+        Start-Sleep -Seconds 5
+    }
+
+    Write-Warning "Timed out waiting for '$WaitForJobId'. The host remains installed and running."
+    & $VenvPython -m msos_autobuilder host-status --service-config $ServiceConfig | Out-Host
+    Write-Host "Inspect the host log at $LogFile"
+}

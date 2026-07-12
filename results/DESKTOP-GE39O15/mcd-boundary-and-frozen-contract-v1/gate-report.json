@@ -6,7 +6,7 @@
       "type": "CandidateGateError"
     }
   ],
-  "finished_at": "2026-07-12T12:17:32.934152+00:00",
+  "finished_at": "2026-07-12T12:36:43.976870+00:00",
   "job_id": "mcd-boundary-and-frozen-contract-v1",
   "policy_blocks": [
     "Schema write-version compatibility is unresolved: changing ppe_frozen_eval_v1 to frozen_evaluation_v1 requires explicit downstream consumer approval before this candidate can pass."
@@ -15,7 +15,7 @@
   "publication_enabled": false,
   "source_head": "1d7097be96cfdb1af9211ac3e83e22385e385b78",
   "source_report_sha256": "d9f5398352625a397ea9199669a5945882e8add7640201bb708f039c402726b0",
-  "started_at": "2026-07-12T12:17:30.846184+00:00",
+  "started_at": "2026-07-12T12:36:41.100648+00:00",
   "status": "failed",
   "version": 1,
   "workspace_removed": true

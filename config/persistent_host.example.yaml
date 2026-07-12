@@ -1,0 +1,14 @@
+version: 1
+publication_enabled: false
+
+host_root: C:/Users/USER/.msos-autobuilder
+codex_host_config: C:/Users/USER/.msos-autobuilder/host.yaml
+poll_seconds: 10
+heartbeat_seconds: 5
+
+job_feed:
+  enabled: true
+  repo_url: https://github.com/DanielTabakman/msos-autobuilder.git
+  branch: jobs
+  path: jobs/approved
+  refresh_seconds: 30

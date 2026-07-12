@@ -8,13 +8,12 @@ import pytest
 import yaml
 
 from msos_autobuilder.revision_loop import (
-    build_revision_manifest,
     RevisionLoop,
     RevisionLoopConfig,
     RevisionLoopError,
     RevisionPlan,
+    build_revision_manifest,
 )
-
 
 SOURCE_HEAD = "1" * 40
 SOURCE_REPORT_SHA = "2" * 64

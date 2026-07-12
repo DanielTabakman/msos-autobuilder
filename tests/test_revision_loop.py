@@ -8,11 +8,11 @@ import pytest
 import yaml
 
 from msos_autobuilder.revision_loop import (
+    build_revision_manifest,
     RevisionLoop,
     RevisionLoopConfig,
     RevisionLoopError,
     RevisionPlan,
-    build_revision_manifest,
 )
 
 

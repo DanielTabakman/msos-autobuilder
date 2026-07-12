@@ -1,0 +1,22 @@
+{
+  "checks": [],
+  "errors": [
+    {
+      "message": "patch hash mismatch for patches/msos-strategy-lab-boundary-strip-v1.patch: expected 845953c52aa136325ccb9ec48ee6225a755173ed4273fa3b38e94d9f9d1995f3, got 599b9a33131859e4ced3a0f84d5ea9dd5f265e4dbf0b81c949c94a0221c3d07e",
+      "type": "CandidateGateError"
+    }
+  ],
+  "finished_at": "2026-07-12T12:17:32.934152+00:00",
+  "job_id": "mcd-boundary-and-frozen-contract-v1",
+  "policy_blocks": [
+    "Schema write-version compatibility is unresolved: changing ppe_frozen_eval_v1 to frozen_evaluation_v1 requires explicit downstream consumer approval before this candidate can pass."
+  ],
+  "product_write_performed": false,
+  "publication_enabled": false,
+  "source_head": "1d7097be96cfdb1af9211ac3e83e22385e385b78",
+  "source_report_sha256": "d9f5398352625a397ea9199669a5945882e8add7640201bb708f039c402726b0",
+  "started_at": "2026-07-12T12:17:30.846184+00:00",
+  "status": "failed",
+  "version": 1,
+  "workspace_removed": true
+}

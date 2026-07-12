@@ -1,0 +1,40 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [],
+        "metadata": {
+          "output_tail": "y; desktop is operator console, VM runs relay.\n- `docs/SOP/PPE_CANONICAL_OPERATOR_SCRIPTS_V1.md`: canonical verdict-to-command mapping.\n- `docs/SOP/REPO_LAYER_MAP_V1.md`: repo layer boundary; `apps/msos-web/` is MSOS shell, `src/viz/` is PPE UI, `src/engine|data|models/` are PPE core.\n- `docs/SOP/MSOS_P1_STACK_ROUTING_ADR.md`: accepted stack/routing ADR; MSOS Next shell must not port PPE math.\n- `docs/DEPLOY/MSOS_WEB_V1.md`: runtime routing for `msos_web`, `/ppe-embed`, and `/ppe-display-api`.\n- `docs/SOP/PPE_TRADEABLE_UNIVERSE_ADR.md`: display/catalog boundary; MSOS reads PPE-owned `catalog.json` and `display.json`.\n\nKey boundary confirmation: MSOS is display/shell only; PPE owns fetch, normalization, and implied-distribution math.\ntokens used\n41,667\nRead-only smoke completed. No files modified, committed, pushed, published, or PR opened.\n\nFindings:\n- Branch: `main`\n- Git HEAD: `1d7097be96cfdb1af9211ac3e83e22385e385b78`\n- Last commit: `1d7097be Control-plane: dev changelog`\n- Repository status: clean. `git status --short` and `git diff --stat` returned no output.\n\nPrimary MSOS shell / PPE boundary files:\n- `AGENTS.md`: desktop/VM execution boundary and read-only hold rule.\n- `.cursor/rules/ppe-desktop-vm-layout.mdc`: hard machine boundary; desktop is operator console, VM runs relay.\n- `docs/SOP/PPE_CANONICAL_OPERATOR_SCRIPTS_V1.md`: canonical verdict-to-command mapping.\n- `docs/SOP/REPO_LAYER_MAP_V1.md`: repo layer boundary; `apps/msos-web/` is MSOS shell, `src/viz/` is PPE UI, `src/engine|data|models/` are PPE core.\n- `docs/SOP/MSOS_P1_STACK_ROUTING_ADR.md`: accepted stack/routing ADR; MSOS Next shell must not port PPE math.\n- `docs/DEPLOY/MSOS_WEB_V1.md`: runtime routing for `msos_web`, `/ppe-embed`, and `/ppe-display-api`.\n- `docs/SOP/PPE_TRADEABLE_UNIVERSE_ADR.md`: display/catalog boundary; MSOS reads PPE-owned `catalog.json` and `display.json`.\n\nKey boundary confirmation: MSOS is display/shell only; PPE owns fetch, normalization, and implied-distribution math.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder\\workspaces\\persistent-host-smoke"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 0 changed path(s)",
+        "task_id": "persistent-host-smoke"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "1d7097be96cfdb1af9211ac3e83e22385e385b78",
+    "status": "completed"
+  },
+  "completed_at": "2026-07-12T01:03:06.875825+00:00",
+  "job_id": "persistent-host-smoke-v1",
+  "job_sha256": "a871b69d86217f5aba67f1994629c39c325947e5636bfdc2c6a24f2715c2f500",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": false,
+      "lane_id": "persistent-host-smoke",
+      "patch_file": null,
+      "patch_sha256": null,
+      "task_id": "persistent-host-smoke"
+    }
+  ],
+  "publication_enabled": false,
+  "requested_by": "ChatGPT on Daniel Tabakman's instruction",
+  "source": "C:\\Users\\USER\\.msos-autobuilder\\queue\\pending\\persistent-host-smoke-v1.yaml",
+  "version": 1
+}

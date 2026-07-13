@@ -49,6 +49,7 @@ It must not:
 10. Candidate gates remove product remotes before checks and publish evidence only to the results branch.
 11. The controlled publisher accepts only passed immutable evidence, revalidates on current product `main`, pushes without force, creates a draft PR, and has no merge or `main` authority.
 12. Managed host updates use an external stable supervisor, exact commits, versioned releases, one atomic active pointer, health witnesses, and automatic rollback.
+13. Update manifests are generated from reviewed release requests; GitHub computes exact file hashes from the approved commit instead of trusting operator-supplied digests.
 
 ## Bootstrap
 
@@ -117,7 +118,9 @@ The one-time bootstrap installs the update supervisor outside every managed Auto
 
 Future updates consume an explicitly approved exact-commit manifest, install and test into a new version directory, switch one atomic active-release pointer, require fresh health witnesses from all five services, and automatically restore the previous release when health fails. The managed release cannot replace the supervisor executing the same transaction.
 
-See [`docs/FAIL_SAFE_SELF_UPDATE_SUPERVISOR_V1.md`](docs/FAIL_SAFE_SELF_UPDATE_SUPERVISOR_V1.md) for the manifest contract, version layout, rollback boundary, evidence, and required real Windows acceptance witnesses.
+Release requests are reviewed on `main`; GitHub calculates the exact file hashes and publishes `updates/approved/latest.yaml` to the dedicated `updates` branch. No founder or operator needs to calculate or copy hashes.
+
+See [`docs/FAIL_SAFE_SELF_UPDATE_SUPERVISOR_V1.md`](docs/FAIL_SAFE_SELF_UPDATE_SUPERVISOR_V1.md) for the runtime boundary and [`docs/SELF_UPDATE_RELEASE_CONTROL_V1.md`](docs/SELF_UPDATE_RELEASE_CONTROL_V1.md) for reviewed release requests and manifest publication.
 
 ### One-shot Windows Codex shadow host
 
@@ -133,22 +136,23 @@ See [`docs/WINDOWS_CODEX_HOST_V1.md`](docs/WINDOWS_CODEX_HOST_V1.md) for the one
 
 ```text
 src/msos_autobuilder/
-  backends/                 worker-provider interfaces and local/Codex backends
-  candidate_gate.py         disposable patch integration and validation
-  controlled_publisher.py   passed-gate verification and draft-only product publication
-  codex_shadow.py           host config, preflight, manifest loading, and shadow execution
-  persistent_host.py        approval queue, Git feed, heartbeat, recovery, and archives
-  results_relay.py          complete review-artifact reconstruction and relay
-  revision_loop.py          failed-gate to bounded correction-job conversion
-  self_update_supervisor.py exact-commit release staging, cutover, health, and rollback
-  contracts.py              product contract loading and validation
-  lanes.py                  lane ownership and concurrency checks
-  leases.py                 runtime leases outside product Git
-  models.py                 task, lane, lease, and capability models
-  scheduler.py              parallel scheduling and heartbeat renewal
-config/                      public synthetic examples and deterministic rules
-scripts/                     operator bootstrap and Windows service tools
-tests/                       factory-only tests
+  backends/                    worker-provider interfaces and local/Codex backends
+  candidate_gate.py            disposable patch integration and validation
+  controlled_publisher.py      passed-gate verification and draft-only product publication
+  codex_shadow.py              host config, preflight, manifest loading, and shadow execution
+  persistent_host.py           approval queue, Git feed, heartbeat, recovery, and archives
+  results_relay.py             complete review-artifact reconstruction and relay
+  revision_loop.py             failed-gate to bounded correction-job conversion
+  self_update_supervisor.py    exact-commit release staging, cutover, health, and rollback
+  update_manifest_publisher.py reviewed request to exact hashed manifest generation
+  contracts.py                 product contract loading and validation
+  lanes.py                     lane ownership and concurrency checks
+  leases.py                    runtime leases outside product Git
+  models.py                    task, lane, lease, and capability models
+  scheduler.py                 parallel scheduling and heartbeat renewal
+config/                         public synthetic examples and deterministic rules
+scripts/                        operator bootstrap and Windows service tools
+tests/                          factory-only tests
 ```
 
 The parent extraction chapter is tracked in `DanielTabakman/Probability-prediction-engine#5348`.

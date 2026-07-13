@@ -327,16 +327,33 @@ print(json.dumps(states, sort_keys=True))
     try {
         Write-Utf8NoBom -Path $TaskNamesPath -Value (($ManagedTaskNames | ConvertTo-Json -Compress) + [Environment]::NewLine)
         Write-Utf8NoBom -Path $ProbePath -Value $Probe
-        $Cmd = $env:ComSpec
-        if (-not $Cmd) { $Cmd = "cmd.exe" }
-        $CommandLine = ('"{0}" "{1}" "{2}" "{3}" 1> "{4}" 2> "{5}"' -f
-            $BootstrapPython.Replace('"', '\"'),
-            $ProbePath.Replace('"', '\"'),
-            $BootstrapRoot.Replace('"', '\"'),
-            $TaskNamesPath.Replace('"', '\"'),
-            $StdoutPath.Replace('"', '\"'),
-            $StderrPath.Replace('"', '\"'))
-        & $Cmd /d /c $CommandLine
+        if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+            $Cmd = $env:ComSpec
+            if (-not $Cmd) { $Cmd = "cmd.exe" }
+            $CommandLine = ('"{0}" "{1}" "{2}" "{3}" 1> "{4}" 2> "{5}"' -f
+                $BootstrapPython.Replace('"', '\"'),
+                $ProbePath.Replace('"', '\"'),
+                $BootstrapRoot.Replace('"', '\"'),
+                $TaskNamesPath.Replace('"', '\"'),
+                $StdoutPath.Replace('"', '\"'),
+                $StderrPath.Replace('"', '\"'))
+            & $Cmd /d /c $CommandLine
+        }
+        else {
+            function Quote-PosixShell {
+                param([Parameter(Mandatory = $true)][string]$Value)
+                return "'" + $Value.Replace("'", "'\''") + "'"
+            }
+            $Shell = "/bin/sh"
+            $CommandLine = ('{0} {1} {2} {3} 1> {4} 2> {5}' -f
+                (Quote-PosixShell -Value $BootstrapPython),
+                (Quote-PosixShell -Value $ProbePath),
+                (Quote-PosixShell -Value $BootstrapRoot),
+                (Quote-PosixShell -Value $TaskNamesPath),
+                (Quote-PosixShell -Value $StdoutPath),
+                (Quote-PosixShell -Value $StderrPath))
+            & $Shell -c $CommandLine
+        }
         $ExitCode = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
         $Stdout = if (Test-Path $StdoutPath) { Get-Content -Raw -Encoding UTF8 $StdoutPath } else { "" }
         $Stderr = if (Test-Path $StderrPath) { Get-Content -Raw -Encoding UTF8 $StderrPath } else { "" }

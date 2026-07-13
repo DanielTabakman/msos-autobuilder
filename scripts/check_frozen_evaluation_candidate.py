@@ -38,7 +38,7 @@ def main() -> int:
 
     try:
         from src.viz import frozen_evaluation_contract as contract
-    except ModuleNotFoundError:
+    except ImportError:
         from src.viz import frozen_evaluation_record as record_module
 
         payload = record_module.build_snapshot_review_payload(record=record, review=None)

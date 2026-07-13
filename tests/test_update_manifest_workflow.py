@@ -2,7 +2,6 @@ from pathlib import Path
 
 import yaml
 
-
 WORKFLOW = (
     Path(__file__).resolve().parents[1]
     / ".github"
@@ -20,6 +19,7 @@ def test_manifest_publication_requires_reviewed_main_request_and_has_bounded_aut
     assert "branches: [main]" in text
     assert '"updates/requests/*.yaml"' in text
     assert "Expected exactly one reviewed update request" in text
+    assert "refs/heads/*:refs/remotes/origin/*" in text
     assert "update_manifest_publisher" in text
     assert "--self-commit \"$TARGET_SHA\"" in text
     assert "git -C \"$worktree\" push origin HEAD:updates" in text

@@ -60,17 +60,17 @@ An update manifest is valid only when all of the following hold:
 
 Before any live task stops, the external supervisor:
 
-1. creates a fresh staging directory under `versions`;
+1. creates an incomplete exact-commit directory at `versions/<commit>`;
 2. initializes Git and fetches only the approved exact commit;
 3. checks out detached `FETCH_HEAD` and verifies `HEAD` equals the requested SHA;
-4. verifies required GitHub status/check contexts;
-5. verifies expected-file SHA-256 hashes;
-6. creates a release-local virtual environment;
-7. installs `.[dev]` into that environment;
-8. runs Ruff;
-9. runs the full pytest suite;
-10. runs the external stable managed-entry-point health probe;
-11. on Windows, parses every PowerShell script with the PowerShell AST parser;
+4. verifies expected-file SHA-256 hashes;
+5. creates a release-local virtual environment at its permanent path;
+6. installs `.[dev]` into that environment;
+7. runs Ruff;
+8. runs the full pytest suite;
+9. runs the external stable managed-entry-point health probe;
+10. on Windows, parses every PowerShell script with the PowerShell AST parser;
+11. re-verifies required GitHub status/check contexts immediately before eligibility;
 12. atomically writes `release.json` as the completion marker inside `versions/<commit>`.
 
 The version environment is built at its final exact-commit path so virtualenv and editable-install paths never point at a renamed staging directory. Until the completion marker exists, the directory is incomplete and cannot be activated. Any failure before step 12 removes it. The managed tasks and active pointer remain untouched.
@@ -83,7 +83,7 @@ After staging passes:
 2. all five explicit managed tasks stop;
 3. `active-release.json` is atomically replaced with the staged release pointer;
 4. all five tasks restart;
-5. the supervisor requires every task to be `Running` and every service witness to be fresh, `running`, and bound to the requested commit;
+5. the supervisor requires every task to be `Running` and every service witness to be fresh, `running`, bound to the requested commit, and continuously healthy through the configured stability window;
 6. if health passes, the exact commit is recorded as successful in the repeat-safe ledger;
 7. if health fails, all five tasks stop, the previous pointer is restored, the tasks restart, and the previous commit must produce a fresh complete health witness;
 8. a release that required rollback is ledger-blocked from repeated automatic cutovers.
@@ -108,7 +108,7 @@ Every attempt receives a unique immutable JSON report. Reports contain:
 - rollback evidence;
 - terminal outcome and errors.
 
-The ledger binds each cut-over exact commit to one manifest hash, terminal outcome, immutable report ID, and report SHA-256. A separate immutable notification record marks outcomes requiring founder attention. Tokens are read only from the configured environment variable for GitHub API requests and are never written to manifests, argv, reports, fixtures, or notifications.
+The ledger binds each cut-over exact commit to one manifest hash, terminal outcome, immutable report ID, and report SHA-256. A separate immutable notification record marks outcomes requiring founder attention. The polling wrapper records the downloaded manifest file hash only after a terminal successful or repeat-safe blocked result, so unchanged successful manifests do not generate repeated evidence while transient failures remain retryable. Tokens are read only from the configured environment variable for GitHub API requests and are never written to manifests, argv, reports, fixtures, or notifications.
 
 ## Initial bootstrap and acceptance witnesses
 

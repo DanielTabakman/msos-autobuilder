@@ -22,7 +22,11 @@ def test_manifest_publication_requires_reviewed_main_request_and_has_bounded_aut
     assert "refs/heads/*:refs/remotes/origin/*" in text
     assert "update_manifest_publisher" in text
     assert "--self-commit \"$TARGET_SHA\"" in text
-    assert "git -C \"$worktree\" push origin HEAD:updates" in text
+    assert "update_check_waiter" in text
+    assert "GITHUB_TOKEN: ${{ github.token }}" in text
+    assert text.index("update_check_waiter") < text.index(
+        "git -C \"$worktree\" push origin HEAD:updates"
+    )
     assert "git -C \"$worktree\" push --force" not in text
     assert "git push --force" not in text
     assert "issues: write" not in text

@@ -245,6 +245,7 @@ $HealthDeadline = (Get-Date).AddSeconds(90)
 $TaskStates = @{}
 $ServiceWitnesses = @{}
 $Healthy = $false
+$StableHealthy = $false
 $HealthySince = $null
 while ((Get-Date) -lt $HealthDeadline) {
     $Healthy = $true
@@ -277,15 +278,18 @@ while ((Get-Date) -lt $HealthDeadline) {
     }
     if ($Healthy) {
         if ($null -eq $HealthySince) { $HealthySince = Get-Date }
-        if (((Get-Date) - $HealthySince).TotalSeconds -ge 10) { break }
+        if (((Get-Date) - $HealthySince).TotalSeconds -ge 10) {
+            $StableHealthy = $true
+            break
+        }
     }
     else {
         $HealthySince = $null
     }
     Start-Sleep -Seconds 2
 }
-if (-not $Healthy) {
-    throw "Initial managed release did not produce five fresh exact-commit service witnesses."
+if (-not $StableHealthy) {
+    throw "Initial managed release did not remain healthy for the required stability window."
 }
 
 Write-Utf8NoBom -Path $BootstrapReport -Value ((@{

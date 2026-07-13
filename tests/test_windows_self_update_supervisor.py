@@ -175,6 +175,7 @@ def test_task_controller_round_trips_task_names_through_powershell_stdin(
     controller = PowerShellTaskController(stubbed_task_control, executable=powershell)
 
     controller.stop(task_names)
+    controller.start(task_names)
     states = controller.states(task_names)
 
     assert states == {name: "Running" for name in task_names}
@@ -183,7 +184,10 @@ def test_task_controller_round_trips_task_names_through_powershell_stdin(
         for line in calls_path.read_text(encoding="utf-8-sig").splitlines()
     ]
     assert [call["name"] for call in calls if call["action"] == "stop"] == task_names
+    assert [call["name"] for call in calls if call["action"] == "enable"] == task_names
+    assert [call["name"] for call in calls if call["action"] == "start"] == task_names
     assert [call["name"] for call in calls if call["action"] == "get"] == [
+        *task_names,
         *task_names,
         *task_names,
     ]

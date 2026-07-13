@@ -49,9 +49,9 @@ def test_controlled_publisher_installer_handles_non_exec_task_actions() -> None:
     assert "function Get-ScheduledTaskActionText" in script
     assert '.PSObject.Properties["Actions"]' in script
     assert ".PSObject.Properties[$PropertyName]" in script
-    assert 'Get-ScheduledTaskActionText -Task $_' in script
-    assert '$($_.Execute)' not in script
-    assert '$($_.Arguments)' not in script
+    assert "Get-ScheduledTaskActionText -Task $_" in script
+    assert "$($_.Execute)" not in script
+    assert "$($_.Arguments)" not in script
 
 
 def test_controlled_publisher_installer_parses_in_powershell() -> None:
@@ -83,18 +83,21 @@ def test_scheduled_task_action_text_works_under_strict_mode() -> None:
         pytest.skip("PowerShell is not installed on this runner")
 
     script = INSTALLER.read_text(encoding="utf-8")
-    function_body = script.split("function Get-ScheduledTaskActionText", 1)[1].split(
-        "function Stop-TaskIfPresent", 1
-    )[0]
+    function_body = (
+        script.split("function Get-ScheduledTaskActionText", 1)[1]
+        .split("function Stop-TaskIfPresent", 1)[0]
+    )
     function_text = "function Get-ScheduledTaskActionText" + function_body
     command = (
         "Set-StrictMode -Version Latest; "
-        + function_text
-        + "; $exec=[pscustomobject]@{Execute='powershell.exe';Arguments='-File C:/Probability-prediction-engine/operator.ps1'}; "
+        f"{function_text}; "
+        "$exec=[pscustomobject]@{Execute='powershell.exe';"
+        "Arguments='-File C:/Probability-prediction-engine/operator.ps1'}; "
         "$com=[pscustomobject]@{ClassId='abc';Data='payload'}; "
         "$task=[pscustomobject]@{Actions=@($exec,$com)}; "
         "$text=Get-ScheduledTaskActionText -Task $task; "
-        "if ($text -notmatch 'Probability-prediction-engine' -or $text -match 'payload') { exit 1 }; "
+        "if ($text -notmatch 'Probability-prediction-engine' "
+        "-or $text -match 'payload') { exit 1 }; "
         "$empty=Get-ScheduledTaskActionText -Task ([pscustomobject]@{}); "
         "if ($empty -ne '') { exit 1 }"
     )

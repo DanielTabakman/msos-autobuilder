@@ -92,6 +92,7 @@ class SupervisorConfig:
     managed_tasks: tuple[ManagedTask, ...]
     health_timeout_seconds: float = 90.0
     health_poll_seconds: float = 2.0
+    health_stability_seconds: float = 10.0
     github_token_env: str = "GITHUB_TOKEN"
 
     @property
@@ -386,8 +387,13 @@ def load_supervisor_config(path: str | Path) -> SupervisorConfig:
 
     health_timeout = float(raw.get("health_timeout_seconds", 90.0))
     health_poll = float(raw.get("health_poll_seconds", 2.0))
-    if health_timeout <= 0 or health_poll <= 0:
-        raise SupervisorError("health timeout and poll interval must be positive")
+    health_stability = float(raw.get("health_stability_seconds", 10.0))
+    if health_timeout <= 0 or health_poll <= 0 or health_stability < 0:
+        raise SupervisorError(
+            "health timeout and poll interval must be positive and stability non-negative"
+        )
+    if health_stability >= health_timeout:
+        raise SupervisorError("health stability window must be shorter than the health timeout")
 
     return SupervisorConfig(
         supervisor_root=resolve(raw.get("supervisor_root"), "supervisor_root"),
@@ -399,6 +405,7 @@ def load_supervisor_config(path: str | Path) -> SupervisorConfig:
         managed_tasks=tuple(tasks),
         health_timeout_seconds=health_timeout,
         health_poll_seconds=health_poll,
+        health_stability_seconds=health_stability,
         github_token_env=str(raw.get("github_token_env") or "GITHUB_TOKEN").strip(),
     )
 
@@ -656,9 +663,6 @@ class ReleaseBuilder:
             if not head_result.passed or head_result.stdout.strip() != manifest.commit:
                 raise SupervisorError("staged Git HEAD does not equal the approved exact commit")
 
-            self.status_verifier.verify(
-                manifest.repository, manifest.commit, manifest.required_status_contexts
-            )
             verify_expected_files(staging_path, manifest.expected_files)
             if not self.config.release_probe_script.is_file():
                 raise SupervisorError(
@@ -730,6 +734,11 @@ class ReleaseBuilder:
                 if not result.passed:
                     raise SupervisorError("PowerShell parser checks failed")
 
+            # A long staging run must not activate a commit whose required review status
+            # changed while tests were running.
+            self.status_verifier.verify(
+                manifest.repository, manifest.commit, manifest.required_status_contexts
+            )
             _atomic_write_json(
                 staging_path / "release.json",
                 {
@@ -782,9 +791,8 @@ class PowerShellTaskController:
             timeout=120,
         )
         if completed.returncode != 0:
-            raise SupervisorError(
-                f"scheduled-task {action} failed: {completed.stderr or completed.stdout}"
-            )
+            detail = _redact(completed.stderr or completed.stdout)
+            raise SupervisorError(f"scheduled-task {action} failed: {detail}")
         if action == "states":
             try:
                 return json.loads(completed.stdout)
@@ -816,7 +824,9 @@ class FileHealthVerifier:
         deadline = time.monotonic() + self.config.health_timeout_seconds
         task_names = [task.task_name for task in self.config.managed_tasks]
         last_detail: dict[str, Any] = {}
+        healthy_since: float | None = None
         while time.monotonic() < deadline:
+            observed_at = time.monotonic()
             states = dict(self.task_controller.states(task_names))
             witnesses: dict[str, Any] = {}
             healthy = True
@@ -840,7 +850,15 @@ class FileHealthVerifier:
                     healthy = False
             last_detail = {"task_states": states, "witnesses": witnesses}
             if healthy:
-                return last_detail
+                if healthy_since is None:
+                    healthy_since = observed_at
+                if observed_at - healthy_since >= self.config.health_stability_seconds:
+                    return {
+                        **last_detail,
+                        "stability_seconds": self.config.health_stability_seconds,
+                    }
+            else:
+                healthy_since = None
             time.sleep(self.config.health_poll_seconds)
         raise SupervisorError(
             "managed tasks did not produce a complete post-cutover health witness: "

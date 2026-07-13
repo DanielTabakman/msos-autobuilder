@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 _SAFE_TEXT_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class EvidenceNotificationError(RuntimeError):
@@ -30,6 +32,14 @@ class EvidenceNotification:
 def _safe_text(value: Any, *, fallback: str) -> str:
     text = _SAFE_TEXT_RE.sub("-", str(value or "").strip()).strip(".-")
     return text[:160] or fallback
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _load_object(path: Path) -> dict[str, Any]:
@@ -51,10 +61,31 @@ def build_notification(
 ) -> EvidenceNotification:
     notification = _load_object(notification_path)
     report_path = notification_path.parent / "update-report.json"
+    relay_path = notification_path.parent / "relay.json"
     report = _load_object(report_path)
+    relay = _load_object(relay_path)
 
-    attempt_id = _safe_text(notification.get("attempt_id"), fallback="unknown-attempt")
-    outcome = _safe_text(report.get("outcome") or notification.get("outcome"), fallback="unknown")
+    raw_attempt_id = str(notification.get("attempt_id") or "").strip()
+    raw_outcome = str(report.get("outcome") or notification.get("outcome") or "").strip()
+    if (
+        relay.get("version") != 1
+        or relay.get("publication_enabled") is not False
+        or relay.get("attempt_id") != raw_attempt_id
+        or relay.get("outcome") != raw_outcome
+    ):
+        raise EvidenceNotificationError("relay metadata does not match update evidence")
+    report_hash = str(relay.get("report_sha256") or "").strip()
+    notification_hash = str(relay.get("notification_sha256") or "").strip()
+    if (
+        not _SHA256_RE.fullmatch(report_hash)
+        or not _SHA256_RE.fullmatch(notification_hash)
+        or report_hash != _sha256(report_path)
+        or notification_hash != _sha256(notification_path)
+    ):
+        raise EvidenceNotificationError("relay SHA-256 bindings do not match update evidence")
+
+    attempt_id = _safe_text(raw_attempt_id, fallback="unknown-attempt")
+    outcome = _safe_text(raw_outcome, fallback="unknown")
     requested_commit = _safe_text(
         report.get("requested_commit") or report.get("commit"),
         fallback="no-commit",

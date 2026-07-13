@@ -762,7 +762,12 @@ class PowerShellTaskController:
 
     def __init__(self, script_path: Path, *, executable: str | None = None) -> None:
         self.script_path = script_path
-        self.executable = executable or shutil.which("powershell.exe") or shutil.which("pwsh")
+        self.executable = (
+            executable
+            or os.environ.get("MSOS_TASK_CONTROLLER_POWERSHELL")
+            or shutil.which("powershell.exe")
+            or shutil.which("pwsh")
+        )
         if not self.executable:
             raise SupervisorError("PowerShell is required for Windows task control")
         if not self.script_path.is_file():

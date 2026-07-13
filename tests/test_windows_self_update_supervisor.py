@@ -20,6 +20,13 @@ ROLLBACK = ROOT / "scripts" / "rollback_windows_self_update.ps1"
 BOOTSTRAP_HANDOFF = ROOT / "scripts" / "update_windows_stable_supervisor_bootstrap.ps1"
 PROBE = ROOT / "scripts" / "managed_release_health_probe.py"
 SCRIPTS = (INSTALLER, RUNNER, TASK_CONTROL, INVOKER, ROLLBACK, BOOTSTRAP_HANDOFF)
+MANAGED_TASK_NAMES = [
+    "MSOS Autobuilder Host",
+    "MSOS Autobuilder Result Relay",
+    "MSOS Autobuilder Candidate Gate",
+    "MSOS Autobuilder Revision Loop",
+    "MSOS Autobuilder Controlled Publisher",
+]
 
 
 def test_installer_preserves_external_supervisor_and_atomic_release_boundary() -> None:
@@ -140,6 +147,11 @@ def test_stable_bootstrap_handoff_is_exact_commit_reversible_and_non_mutating() 
     assert "Assert-NoActiveUpdateAttempt" in script
     assert "PowerShellTaskController" in script
     assert "controller.states(task_names)" in script
+    assert "previous = sys.modules.get(module_name)" in script
+    assert "sys.modules[module_name] = module" in script
+    assert "sys.modules.pop(module_name, None)" in script
+    assert "RedirectStandardOutput = $true" in script
+    assert "RedirectStandardError = $true" in script
     assert "Move-Item -Path $BootstrapRoot -Destination $ActivationBackup" in script
     assert "Move-Item -Path $StagedBootstrap -Destination $BootstrapRoot" in script
     assert "stable-bootstrap-update-handoff" in script
@@ -147,6 +159,34 @@ def test_stable_bootstrap_handoff_is_exact_commit_reversible_and_non_mutating() 
     assert "update-ledger.json" not in script
     assert "Unregister-ScheduledTask" not in script
     assert "Register-ScheduledTask" not in script
+
+
+def test_old_unregistered_stable_supervisor_import_fails_in_subprocess() -> None:
+    supervisor_path = ROOT / "src" / "msos_autobuilder" / "self_update_supervisor.py"
+    code = "\n".join(
+        [
+            "import importlib.util",
+            f"module_path = {str(supervisor_path)!r}",
+            "spec = importlib.util.spec_from_file_location(",
+            "    'staged_self_update_supervisor', module_path",
+            ")",
+            "module = importlib.util.module_from_spec(spec)",
+            "assert spec.loader is not None",
+            "spec.loader.exec_module(module)",
+        ]
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "Traceback (most recent call last)" in result.stderr
+    assert "dataclasses.py" in result.stderr
 
 
 def _build_stable_bootstrap_handoff_fixture(tmp_path: Path) -> dict[str, object]:
@@ -157,53 +197,25 @@ def _build_stable_bootstrap_handoff_fixture(tmp_path: Path) -> dict[str, object]
     subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
     subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=repo, check=True)
 
+    source_paths = {
+        "src/msos_autobuilder/self_update_supervisor.py": (
+            ROOT / "src" / "msos_autobuilder" / "self_update_supervisor.py"
+        ),
+        "scripts/managed_release_health_probe.py": (
+            ROOT / "scripts" / "managed_release_health_probe.py"
+        ),
+        "scripts/windows_self_update_task_control.ps1": TASK_CONTROL,
+        "scripts/run_windows_managed_service.ps1": RUNNER,
+        "scripts/invoke_windows_self_update.ps1": INVOKER,
+        "scripts/rollback_windows_self_update.ps1": ROLLBACK,
+    }
+    for relative, source in source_paths.items():
+        path = repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, path)
+        path.write_bytes(path.read_bytes().replace(b"\r\n", b"\n"))
     source_payloads = {
-        "src/msos_autobuilder/self_update_supervisor.py": """
-import json
-import pathlib
-import shutil
-import subprocess
-
-class PowerShellTaskController:
-    def __init__(self, script):
-        self.script = pathlib.Path(script)
-
-    def states(self, task_names):
-        executable = shutil.which("powershell") or shutil.which("pwsh")
-        completed = subprocess.run(
-            [
-                executable,
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                str(self.script),
-                "-Action",
-                "states",
-            ],
-            input=json.dumps(task_names),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            check=False,
-        )
-        if completed.returncode != 0:
-            raise RuntimeError(completed.stderr or completed.stdout)
-        return json.loads(completed.stdout)
-""",
         "src/msos_autobuilder/self_update_evidence_relay.py": "print('relay fixture')\n",
-        "scripts/managed_release_health_probe.py": "print('probe fixture')\n",
-        "scripts/windows_self_update_task_control.ps1": """
-param([Parameter(Mandatory = $true)][ValidateSet("stop", "start", "states")][string]$Action)
-$DecodedTaskNames = [Console]::In.ReadToEnd() | ConvertFrom-Json
-$TaskNames = @($DecodedTaskNames)
-$States = @{}
-foreach ($Name in $TaskNames) { $States[[string]$Name] = "Running" }
-$States | ConvertTo-Json -Compress
-""",
-        "scripts/run_windows_managed_service.ps1": "Write-Host 'runner fixture'\n",
-        "scripts/invoke_windows_self_update.ps1": "Write-Host 'invoke fixture'\n",
-        "scripts/rollback_windows_self_update.ps1": "Write-Host 'rollback fixture'\n",
     }
     for relative, text in source_payloads.items():
         path = repo / relative
@@ -267,6 +279,102 @@ def _read_handoff_report(fixture: dict[str, object]) -> dict[str, object]:
     return json.loads(reports[0].read_text(encoding="utf-8-sig"))
 
 
+def _quote_ps_for_command(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _write_stubbed_task_powershell(
+    tmp_path: Path,
+    powershell: str,
+    calls_path: Path,
+    *,
+    state: str = "Running",
+) -> Path:
+    wrapper_py = tmp_path / "stubbed-task-powershell.py"
+    wrapper_py.write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "import subprocess",
+                "import sys",
+                "",
+                f"POWERSHELL = {powershell!r}",
+                f"CALLS_PATH = {calls_path.as_posix()!r}",
+                f"STATE = {state!r}",
+                "",
+                "def quote_ps(value: str) -> str:",
+                "    return \"'\" + value.replace(\"'\", \"''\") + \"'\"",
+                "",
+                "args = sys.argv[1:]",
+                "script = args[args.index('-File') + 1]",
+                "action = args[args.index('-Action') + 1]",
+                "command = \"\\n\".join([",
+                "    f\"$CallsPath = {quote_ps(CALLS_PATH)}\",",
+                "    \"function Add-Call([string]$Action, [string]$Name) {\",",
+                "    \"    [pscustomobject]@{ action = $Action; name = $Name } | \"",
+                "    \"ConvertTo-Json -Compress | Add-Content -Path $CallsPath -Encoding UTF8\",",
+                "    \"}\",",
+                "    \"function Get-ScheduledTask {\",",
+                "    \"    param([string]$TaskName, [object]$ErrorAction)\",",
+                "    \"    Add-Call -Action 'get' -Name $TaskName\",",
+                "    f\"    [pscustomobject]@{{ TaskName = $TaskName; \"",
+                "    f\"State = {quote_ps(STATE)} }}\",",
+                "    \"}\",",
+                "    \"function Stop-ScheduledTask {\",",
+                "    \"    param([string]$TaskName, [object]$ErrorAction)\",",
+                "    \"    Add-Call -Action 'stop' -Name $TaskName\",",
+                "    \"}\",",
+                "    \"function Enable-ScheduledTask {\",",
+                "    \"    param([string]$TaskName, [object]$ErrorAction)\",",
+                "    \"    Add-Call -Action 'enable' -Name $TaskName\",",
+                "    \"}\",",
+                "    \"function Start-ScheduledTask {\",",
+                "    \"    param([string]$TaskName, [object]$ErrorAction)\",",
+                "    \"    Add-Call -Action 'start' -Name $TaskName\",",
+                "    \"}\",",
+                "    f\"& {quote_ps(script)} -Action {quote_ps(action)}\",",
+                "])",
+                "completed = subprocess.run(",
+                "    [",
+                "        POWERSHELL,",
+                "        '-NoProfile',",
+                "        '-ExecutionPolicy',",
+                "        'Bypass',",
+                "        '-Command',",
+                "        command,",
+                "    ],",
+                "    input=sys.stdin.read(),",
+                "    capture_output=True,",
+                "    text=True,",
+                "    encoding='utf-8',",
+                "    errors='replace',",
+                "    check=False,",
+                ")",
+                "sys.stdout.write(completed.stdout)",
+                "sys.stderr.write(completed.stderr)",
+                "raise SystemExit(completed.returncode)",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    if sys.platform == "win32":
+        wrapper = tmp_path / "stubbed-task-powershell.cmd"
+        wrapper.write_text(
+            f'@echo off\r\n"{sys.executable}" "{wrapper_py}" %*\r\n',
+            encoding="utf-8",
+        )
+    else:
+        python_exe = shutil.which("python3") or sys.executable
+        wrapper = tmp_path / "stubbed-task-powershell"
+        wrapper.write_text(
+            f"#!/bin/sh\nexec {python_exe!r} {str(wrapper_py)!r} \"$@\"\n",
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+    return wrapper
+
+
 def _run_handoff_fixture(
     fixture: dict[str, object],
     powershell: str,
@@ -284,6 +392,8 @@ def _run_handoff_fixture(
     assert isinstance(new_commit, str)
 
     calls_path = tmp_path / "scheduled-task-calls.jsonl"
+    nested_calls_path = tmp_path / "nested-scheduled-task-calls.jsonl"
+    task_powershell = _write_stubbed_task_powershell(tmp_path, powershell, nested_calls_path)
     command = f"""
 $CallsPath = '{calls_path.as_posix()}'
 function Add-Call([string]$Action, [string]$Name) {{
@@ -310,6 +420,7 @@ function Enable-ScheduledTask {{
     Add-Call -Action 'enable' -Name $TaskName
     [pscustomobject]@{{ TaskName = $TaskName; State = 'Ready' }}
 }}
+$env:MSOS_TASK_CONTROLLER_POWERSHELL = '{task_powershell.as_posix()}'
 {before_script}
 & '{BOOTSTRAP_HANDOFF.as_posix()}' `
     -Commit '{new_commit}' `
@@ -385,6 +496,13 @@ def test_stable_bootstrap_handoff_runs_with_temp_root_and_stubbed_tasks(
         "enable",
         "get",
     ]
+    nested_calls = [
+        json.loads(line)
+        for line in (tmp_path / "nested-scheduled-task-calls.jsonl")
+        .read_text(encoding="utf-8-sig")
+        .splitlines()
+    ]
+    assert [call["name"] for call in nested_calls if call["action"] == "get"] == MANAGED_TASK_NAMES
 
 
 def test_stable_bootstrap_handoff_rejects_substantive_installed_mutation_with_partial_evidence(
@@ -434,6 +552,33 @@ def test_stable_bootstrap_handoff_rejects_substantive_installed_mutation_with_pa
         if call["name"] == "MSOS Autobuilder Update Supervisor"
     ]
     assert update_task_actions == ["get", "enable", "get"]
+
+
+def test_stable_bootstrap_handoff_retains_complete_python_stderr_on_probe_failure(
+    tmp_path: Path,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    missing_executable = tmp_path / "missing-powershell"
+    result, _ = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=(
+            "$env:MSOS_TASK_CONTROLLER_POWERSHELL = "
+            f"{_quote_ps_for_command(missing_executable.as_posix())}"
+        ),
+    )
+
+    assert result.returncode != 0
+    report = _read_handoff_report(fixture)
+    report_text = json.dumps(report)
+    assert "Staged Python to PowerShell task-name transport failed" in report_text
+    assert "Traceback (most recent call last)" in report_text
+    assert "FileNotFoundError" in report_text
 
 
 def test_stable_bootstrap_handoff_restores_old_bootstrap_after_activation_failure(
@@ -514,52 +659,12 @@ def test_task_controller_round_trips_task_names_through_powershell_stdin(
         pytest.skip("PowerShell is not installed on this runner")
 
     calls_path = tmp_path / "task-calls.jsonl"
-    stubbed_task_control = tmp_path / "windows-self-update-task-control-stubbed.ps1"
-    stubs = "\n".join(
-        [
-            f"$CallsPath = '{calls_path.as_posix()}'",
-            "function Add-Call([string]$Action, [string]$Name) {",
-            "    [pscustomobject]@{ action = $Action; name = $Name } | "
-            "ConvertTo-Json -Compress | Add-Content -Path $CallsPath -Encoding UTF8",
-            "}",
-            "function Get-ScheduledTask {",
-            "    param([string]$TaskName, [object]$ErrorAction)",
-            "    Add-Call -Action 'get' -Name $TaskName",
-            "    [pscustomobject]@{ TaskName = $TaskName; State = 'Running' }",
-            "}",
-            "function Stop-ScheduledTask {",
-            "    param([string]$TaskName, [object]$ErrorAction)",
-            "    Add-Call -Action 'stop' -Name $TaskName",
-            "}",
-            "function Enable-ScheduledTask {",
-            "    param([string]$TaskName, [object]$ErrorAction)",
-            "    Add-Call -Action 'enable' -Name $TaskName",
-            "}",
-            "function Start-ScheduledTask {",
-            "    param([string]$TaskName, [object]$ErrorAction)",
-            "    Add-Call -Action 'start' -Name $TaskName",
-            "}",
-        ]
-    )
-    script = TASK_CONTROL.read_text(encoding="utf-8")
-    stubbed_task_control.write_text(
-        script.replace(
-            '$ErrorActionPreference = "Stop"',
-            f'$ErrorActionPreference = "Stop"\n{stubs}',
-        ),
-        encoding="utf-8",
-    )
+    stubbed_powershell = _write_stubbed_task_powershell(tmp_path, powershell, calls_path)
 
     from msos_autobuilder.self_update_supervisor import PowerShellTaskController
 
-    task_names = [
-        "MSOS Autobuilder Host",
-        "MSOS Autobuilder Result Relay",
-        "MSOS Autobuilder Candidate Gate",
-        "MSOS Autobuilder Revision Loop",
-        "MSOS Autobuilder Controlled Publisher",
-    ]
-    controller = PowerShellTaskController(stubbed_task_control, executable=powershell)
+    task_names = MANAGED_TASK_NAMES
+    controller = PowerShellTaskController(TASK_CONTROL, executable=str(stubbed_powershell))
 
     controller.stop(task_names)
     controller.start(task_names)

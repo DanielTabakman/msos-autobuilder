@@ -307,7 +307,17 @@ module_path = bootstrap / "self_update_supervisor.py"
 spec = importlib.util.spec_from_file_location("staged_self_update_supervisor", module_path)
 module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
-spec.loader.exec_module(module)
+module_name = spec.name
+previous = sys.modules.get(module_name)
+had_previous = module_name in sys.modules
+sys.modules[module_name] = module
+try:
+    spec.loader.exec_module(module)
+finally:
+    if had_previous:
+        sys.modules[module_name] = previous
+    else:
+        sys.modules.pop(module_name, None)
 controller = module.PowerShellTaskController(bootstrap / "windows_self_update_task_control.ps1")
 states = controller.states(task_names)
 print(json.dumps(states, sort_keys=True))
@@ -315,9 +325,30 @@ print(json.dumps(states, sort_keys=True))
     try {
         Write-Utf8NoBom -Path $TaskNamesPath -Value (($ManagedTaskNames | ConvertTo-Json -Compress) + [Environment]::NewLine)
         Write-Utf8NoBom -Path $ProbePath -Value $Probe
-        $Output = & $BootstrapPython $ProbePath $BootstrapRoot $TaskNamesPath
-        if ($LASTEXITCODE -ne 0) { throw "Staged Python to PowerShell task-name transport failed." }
-        $States = $Output | ConvertFrom-Json
+        $StartInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $StartInfo.FileName = $BootstrapPython
+        $StartInfo.Arguments = ('"{0}" "{1}" "{2}"' -f
+            $ProbePath.Replace('"', '\"'),
+            $BootstrapRoot.Replace('"', '\"'),
+            $TaskNamesPath.Replace('"', '\"'))
+        $StartInfo.UseShellExecute = $false
+        $StartInfo.RedirectStandardOutput = $true
+        $StartInfo.RedirectStandardError = $true
+        $Process = New-Object System.Diagnostics.Process
+        $Process.StartInfo = $StartInfo
+        try {
+            if (-not $Process.Start()) { throw "Could not start staged Python task transport probe." }
+            $Stdout = $Process.StandardOutput.ReadToEnd()
+            $Stderr = $Process.StandardError.ReadToEnd()
+            $Process.WaitForExit()
+            if ($Process.ExitCode -ne 0) {
+                throw "Staged Python to PowerShell task-name transport failed with exit $($Process.ExitCode). stdout:`n$Stdout`nstderr:`n$Stderr"
+            }
+        }
+        finally {
+            $Process.Dispose()
+        }
+        $States = $Stdout | ConvertFrom-Json
         foreach ($TaskName in $ManagedTaskNames) {
             if (-not ($States.PSObject.Properties.Name -contains $TaskName)) {
                 throw "Staged task transport omitted task name: $TaskName"

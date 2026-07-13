@@ -1,0 +1,24 @@
+version: 1
+release_id: healthy-self-update-witness-v1
+approved: true
+repository: DanielTabakman/msos-autobuilder
+repo_url: https://github.com/DanielTabakman/msos-autobuilder.git
+commit: 9b24ac7ed8fe572da93248c07200eef89cc68877
+required_status_contexts:
+- test
+- windows-test
+expected_files:
+- path: pyproject.toml
+  sha256: 281d0677f2700f6b056f5fefed6cd8b8c5008f2f8fe4026cf501e7cdeb3205b6
+- path: src/msos_autobuilder/self_update_supervisor.py
+  sha256: 4457ee23885058595f033284aeb89de308bcad0fcb84ed4689045b2f533da5bd
+- path: src/msos_autobuilder/self_update_evidence_relay.py
+  sha256: 9591b5658d17895f38c2f4c5e080e524eb335627b928efc24170bb0e452b6e28
+- path: scripts/run_windows_managed_service.ps1
+  sha256: 8f21938c6c05dd724a2758f68121d1220a145e2cbba62b494020981db22665f1
+- path: scripts/invoke_windows_self_update.ps1
+  sha256: c4d73c46b69cecebfd7609b6cbb535eac38c8c476aaa309f25acc1582358d395
+- path: scripts/windows_self_update_task_control.ps1
+  sha256: ad1b6a631e070ca69cd0007afc2219383f0f5331a94e256d89c8b6cc4ab17bcd
+supervisor_update: false
+manifest_sha256: 34ba19b46965d3ad97430c82ed72d0f24bd437d306a6c1fc7d16caba8c0ae19e

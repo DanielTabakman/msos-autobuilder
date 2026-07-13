@@ -39,15 +39,14 @@ def test_installer_preserves_external_supervisor_and_atomic_release_boundary() -
     assert "bootstrap checkout must be clean" in script
     assert "health_stability_seconds: 10" in script
     assert "TotalSeconds -ge 10" in script
+    assert "$StableHealthy = $true" in script
+    assert "if (-not $StableHealthy)" in script
     assert "A different managed release is already active" in script
     assert "The active release directory is incomplete" in script
     assert "Move-Item -Path $StagingPath -Destination $VersionPath" not in script
     assert "RepoUrl must not embed credentials" in script
     assert "service-witnesses" in script
-    assert (
-        "Initial managed release did not produce five fresh exact-commit service witnesses"
-        in script
-    )
+    assert "Initial managed release did not remain healthy" in script
     assert "service_witnesses = $ServiceWitnesses" in script
     assert "git pull" not in script.lower()
     assert "push --force" not in script.lower()

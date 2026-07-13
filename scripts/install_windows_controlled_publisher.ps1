@@ -70,38 +70,6 @@ $ManagedTasks = @(
     $TaskName
 )
 
-foreach ($Name in $ManagedTasks) {
-    Stop-TaskIfPresent -Name $Name
-}
-
-# Cut over from any stale in-product operator process/task before enabling the extracted writer.
-$LegacyPattern = "Probability-prediction-engine.*(autobuilder|operator|supervisor)|(autobuilder|operator|supervisor).*Probability-prediction-engine"
-$LegacyTasks = Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
-    $_.TaskName -notin $ManagedTasks -and
-    ((@($_.Actions | ForEach-Object { "$($_.Execute) $($_.Arguments)" }) -join " ") -match $LegacyPattern)
-}
-foreach ($Task in @($LegacyTasks)) {
-    Write-Host "Disabling legacy product writer task: $($Task.TaskName)" -ForegroundColor Yellow
-    Stop-ScheduledTask -TaskName $Task.TaskName -ErrorAction SilentlyContinue
-    Disable-ScheduledTask -TaskName $Task.TaskName -ErrorAction SilentlyContinue | Out-Null
-}
-
-$CurrentPid = $PID
-$LegacyProcesses = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-    $_.ProcessId -ne $CurrentPid -and
-    $null -ne $_.CommandLine -and
-    $_.CommandLine -match $LegacyPattern
-}
-foreach ($Process in @($LegacyProcesses)) {
-    Write-Host "Stopping legacy product writer process $($Process.ProcessId)" -ForegroundColor Yellow
-    Stop-Process -Id $Process.ProcessId -Force -ErrorAction SilentlyContinue
-}
-
-# The legacy in-product publisher remains fail-closed even if an old process is restarted.
-$env:PPE_GIT_AUTONOMOUS_WRITES = $null
-$env:PPE_ALLOW_LEGACY_GIT_PUBLISH = $null
-[Environment]::SetEnvironmentVariable("PPE_GIT_AUTONOMOUS_WRITES", $null, "User")
-[Environment]::SetEnvironmentVariable("PPE_ALLOW_LEGACY_GIT_PUBLISH", $null, "User")
 
 if (-not (Test-Path $VenvPython)) {
     & $Bootstrap -HostRoot $HostRoot
@@ -225,6 +193,41 @@ exit `$LASTEXITCODE
 "@
 Set-Content -Path $RunnerScript -Value $RunnerContent -Encoding UTF8
 
+$CutoverSucceeded = $false
+try {
+    foreach ($Name in $ManagedTasks) {
+        Stop-TaskIfPresent -Name $Name
+    }
+
+    # Cut over from any stale in-product operator process/task before enabling the extracted writer.
+    $LegacyPattern = "Probability-prediction-engine.*(autobuilder|operator|supervisor)|(autobuilder|operator|supervisor).*Probability-prediction-engine"
+    $LegacyTasks = Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+        $_.TaskName -notin $ManagedTasks -and
+        ((@($_.Actions | ForEach-Object { "$($_.Execute) $($_.Arguments)" }) -join " ") -match $LegacyPattern)
+    }
+    foreach ($Task in @($LegacyTasks)) {
+        Write-Host "Disabling legacy product writer task: $($Task.TaskName)" -ForegroundColor Yellow
+        Stop-ScheduledTask -TaskName $Task.TaskName -ErrorAction SilentlyContinue
+        Disable-ScheduledTask -TaskName $Task.TaskName -ErrorAction SilentlyContinue | Out-Null
+    }
+
+    $CurrentPid = $PID
+    $LegacyProcesses = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.ProcessId -ne $CurrentPid -and
+        $null -ne $_.CommandLine -and
+        $_.CommandLine -match $LegacyPattern
+    }
+    foreach ($Process in @($LegacyProcesses)) {
+        Write-Host "Stopping legacy product writer process $($Process.ProcessId)" -ForegroundColor Yellow
+        Stop-Process -Id $Process.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+
+    # The legacy in-product publisher remains fail-closed even if an old process is restarted.
+    $env:PPE_GIT_AUTONOMOUS_WRITES = $null
+    $env:PPE_ALLOW_LEGACY_GIT_PUBLISH = $null
+    [Environment]::SetEnvironmentVariable("PPE_GIT_AUTONOMOUS_WRITES", $null, "User")
+    [Environment]::SetEnvironmentVariable("PPE_ALLOW_LEGACY_GIT_PUBLISH", $null, "User")
+
 $ExistingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($ExistingTask) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
@@ -296,8 +299,17 @@ Register-ScheduledTask `
     -Description "Single-writer draft-only MSOS product PR publisher" `
     -Force | Out-Null
 
-foreach ($Name in $ManagedTasks) {
-    Start-TaskIfPresent -Name $Name
+    $CutoverSucceeded = $true
+}
+finally {
+    # Existing builder tasks are restarted even when the publisher witness fails.
+    foreach ($Name in $ManagedTasks) {
+        Start-TaskIfPresent -Name $Name
+    }
+}
+
+if (-not $CutoverSucceedd) {
+    throw "Controlled publisher cutover did not complete."
 }
 
 Write-Host "Controlled publisher installed and the Autobuilder machine is running." -ForegroundColor Green

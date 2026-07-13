@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import importlib.util
 import re
 import shutil
 import subprocess
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -13,6 +15,7 @@ RUNNER = ROOT / "scripts" / "run_windows_managed_service.ps1"
 TASK_CONTROL = ROOT / "scripts" / "windows_self_update_task_control.ps1"
 INVOKER = ROOT / "scripts" / "invoke_windows_self_update.ps1"
 ROLLBACK = ROOT / "scripts" / "rollback_windows_self_update.ps1"
+PROBE = ROOT / "scripts" / "managed_release_health_probe.py"
 SCRIPTS = (INSTALLER, RUNNER, TASK_CONTROL, INVOKER, ROLLBACK)
 
 
@@ -32,6 +35,10 @@ def test_installer_preserves_external_supervisor_and_atomic_release_boundary() -
     assert "MSOS Autobuilder Controlled Publisher" in script
     assert "run_windows_managed_service.ps1" in script
     assert "windows_self_update_task_control.ps1" in script
+    assert "managed_release_health_probe.py" in script
+    assert "A different managed release is already active" in script
+    assert "The active release directory is incomplete" in script
+    assert "Move-Item -Path $StagingPath -Destination $VersionPath" not in script
     assert "RepoUrl must not embed credentials" in script
     assert "service-witnesses" in script
     assert (
@@ -50,7 +57,8 @@ def test_managed_runner_resolves_only_the_active_version_and_writes_witnesses() 
     assert "active-release.json" in script
     assert "release.json" in script
     assert ".venv\\Scripts\\python.exe" in script
-    assert "release-smoke" in script
+    assert "managed_release_health_probe.py" in script
+    assert "msos_autobuilder.self_update_supervisor release-smoke" not in script
     assert "service-witnesses" in script
     assert "release_commit = $ReleaseCommit" in script
     assert 'state = "running"' in script
@@ -58,6 +66,42 @@ def test_managed_runner_resolves_only_the_active_version_and_writes_witnesses() 
     assert "{managed_python}" in script
     assert "{managed_release_root}" in script
     assert "{runtime_config}" in script
+
+
+def test_stable_probe_requires_modules_to_resolve_inside_selected_release(
+    tmp_path: Path,
+) -> None:
+    spec = importlib.util.spec_from_file_location("managed_release_health_probe", PROBE)
+    assert spec is not None and spec.loader is not None
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+
+    root = tmp_path / "release"
+    (root / "pyproject.toml").parent.mkdir(parents=True)
+    (root / "pyproject.toml").write_text("[project]\nname='fixture'\n", encoding="utf-8")
+
+    def importer(name: str) -> ModuleType:
+        path = root / "src" / Path(*name.split("."))
+        path = path.with_suffix(".py")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# fixture\n", encoding="utf-8")
+        module = ModuleType(name)
+        module.__file__ = str(path)
+        return module
+
+    imported = probe.probe_release(root, importer=importer)
+    assert set(imported) == set(probe.MANAGED_MODULES)
+
+    outside = tmp_path / "outside.py"
+    outside.write_text("# outside\n", encoding="utf-8")
+
+    def outside_importer(name: str) -> ModuleType:
+        module = ModuleType(name)
+        module.__file__ = str(outside)
+        return module
+
+    with pytest.raises(RuntimeError, match="outside the selected release"):
+        probe.probe_release(root, importer=outside_importer)
 
 
 def test_task_controller_can_touch_only_explicit_task_names() -> None:

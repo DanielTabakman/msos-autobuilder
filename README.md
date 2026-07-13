@@ -6,6 +6,8 @@ Open-source build-factory infrastructure for Market Structure OS (MSOS).
 
 This repository is in **controlled draft-publication** mode. It can run approved Codex jobs in disposable product clones, relay complete patches, gate candidates, generate bounded revisions, and publish configured passing candidates as review-only draft product pull requests.
 
+For the current operating model, founder boundary, and idea-to-PR flow, see [`docs/AUTOBUILDER_OPERATING_MANUAL_V1.md`](docs/AUTOBUILDER_OPERATING_MANUAL_V1.md). For the current chapter closeout and exact next Codex objective, see [`docs/CURRENT_STATE_AND_CODEX_NEXT_2026-07-13.md`](docs/CURRENT_STATE_AND_CODEX_NEXT_2026-07-13.md).
+
 It may:
 
 - load and validate a product contract;

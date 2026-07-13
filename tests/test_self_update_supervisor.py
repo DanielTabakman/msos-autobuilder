@@ -60,12 +60,15 @@ def _manifest_text(**kwargs: Any) -> str:
 
 
 def _config(tmp_path: Path) -> SupervisorConfig:
+    probe = tmp_path / "managed-release-health-probe.py"
+    probe.write_text("# stable fixture probe\n", encoding="utf-8")
     return SupervisorConfig(
         supervisor_root=tmp_path / "supervisor",
         host_root=tmp_path / "host",
         repo_url="https://github.com/DanielTabakman/msos-autobuilder.git",
         repository="DanielTabakman/msos-autobuilder",
         task_controller_script=tmp_path / "task-control.ps1",
+        release_probe_script=probe,
         managed_tasks=(
             __import__(
                 "msos_autobuilder.self_update_supervisor", fromlist=["ManagedTask"]
@@ -128,6 +131,23 @@ def test_manifest_rejects_repo_urls_with_embedded_credentials() -> None:
         parse_update_manifest(yaml.safe_dump(raw))
 
 
+def test_rejected_manifest_writes_immutable_report_without_exposing_contents(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    tasks = FakeTasks()
+    report, report_path = _supervisor(
+        config, FakeBuilder(error=AssertionError("must not stage")), tasks, FakeHealth([])
+    ).apply("repo_url: https://secret@example.com/repo.git\n")
+
+    assert report.outcome == "rejected_manifest"
+    assert report.cutover == {"performed": False}
+    assert tasks.calls == []
+    saved = report_path.read_text(encoding="utf-8")
+    assert "secret@example.com" not in saved
+    assert json.loads(saved)["errors"]
+
+
 def test_expected_files_are_path_safe_and_hash_verified(tmp_path: Path) -> None:
     (tmp_path / "good.txt").write_text("content", encoding="utf-8")
     verify_expected_files(tmp_path, [ExpectedFile("good.txt", _sha("content"))])
@@ -137,6 +157,25 @@ def test_expected_files_are_path_safe_and_hash_verified(tmp_path: Path) -> None:
 
     with pytest.raises(SupervisorError, match="escapes release root"):
         verify_expected_files(tmp_path, [ExpectedFile("../outside.txt", "0" * 64)])
+
+
+def test_command_evidence_redacts_common_credentials(tmp_path: Path) -> None:
+    from msos_autobuilder.self_update_supervisor import default_command_executor
+
+    result = default_command_executor(
+        [
+            __import__("sys").executable,
+            "-c",
+            "print('https://user:secret@example.com/repo token=abc github_pat_1234567890abcdef')",
+        ],
+        tmp_path,
+        10.0,
+    )
+
+    assert "secret" not in result.stdout
+    assert "token=abc" not in result.stdout
+    assert "github_pat_" not in result.stdout
+    assert "[redacted]" in result.stdout
 
 
 @dataclass
@@ -167,6 +206,18 @@ class FakeTasks:
         return {name: "Running" for name in task_names}
 
 
+class FailFirstStartTasks(FakeTasks):
+    def __init__(self) -> None:
+        super().__init__()
+        self.start_count = 0
+
+    def start(self, task_names: Sequence[str]) -> None:
+        super().start(task_names)
+        self.start_count += 1
+        if self.start_count == 1:
+            raise SupervisorError("new release tasks did not start")
+
+
 class FakeHealth:
     def __init__(self, outcomes: list[dict[str, Any] | Exception]) -> None:
         self.outcomes = outcomes
@@ -193,6 +244,25 @@ def _supervisor(
         task_controller=tasks,
         health_verifier=health,  # type: ignore[arg-type]
     )
+
+
+def test_corrupt_stale_lock_is_recovered(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    previous = _release(config, "1" * 40)
+    current = _release(config, "a" * 40)
+    _write_active_pointer(config, "1" * 40, previous)
+    config.lock_path.parent.mkdir(parents=True, exist_ok=True)
+    config.lock_path.write_text("{not-json", encoding="utf-8")
+
+    report, _ = _supervisor(
+        config,
+        FakeBuilder(staged=StagedRelease("a" * 40, current, ())),
+        FakeTasks(),
+        FakeHealth([{}]),
+    ).apply(_manifest_text())
+
+    assert report.outcome == "success"
+    assert not config.lock_path.exists()
 
 
 def test_staging_failure_never_stops_managed_tasks(tmp_path: Path) -> None:
@@ -259,6 +329,29 @@ def test_failed_health_automatically_restores_previous_release(tmp_path: Path) -
     assert json.loads(config.active_pointer.read_text())["commit"] == "1" * 40
     ledger = json.loads(config.ledger_path.read_text())
     assert ledger["commits"]["a" * 40]["outcome"] == "rolled_back"
+
+
+def test_task_start_failure_after_pointer_swap_still_restores_previous_release(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    previous = _release(config, "1" * 40)
+    broken = _release(config, "a" * 40)
+    _write_active_pointer(config, "1" * 40, previous)
+    tasks = FailFirstStartTasks()
+    health = FakeHealth([{"task_states": {"host": "Running"}}])
+
+    report, _ = _supervisor(
+        config, FakeBuilder(staged=StagedRelease("a" * 40, broken, ())), tasks, health
+    ).apply(_manifest_text())
+
+    assert report.outcome == "rolled_back"
+    assert report.cutover["pointer_swapped"] is True
+    assert report.cutover["tasks_started"] is False
+    assert report.rollback["pointer_restored"] is True
+    assert report.rollback["tasks_started"] is True
+    assert json.loads(config.active_pointer.read_text())["commit"] == "1" * 40
+    assert [call[0] for call in tasks.calls] == ["stop", "start", "stop", "start"]
 
 
 def test_repeat_exact_commit_is_safe_and_does_not_cut_over_again(tmp_path: Path) -> None:
@@ -386,6 +479,7 @@ def test_release_builder_fetches_and_verifies_only_exact_commit(tmp_path: Path) 
 
     assert staged.commit == commit
     assert staged.release_path.name == commit
+    assert all(Path(check.cwd) == staged.release_path for check in staged.checks)
     assert json.loads((staged.release_path / "release.json").read_text())["commit"] == commit
     assert verifier.calls == [("fixture/repo", commit, ("CI", "Windows Smoke"))]
     reused = builder.stage(manifest)

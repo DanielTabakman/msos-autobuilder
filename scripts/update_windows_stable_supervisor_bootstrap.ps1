@@ -78,20 +78,72 @@ function Invoke-Checked {
 
 function Get-FileSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
-    $Stream = [System.IO.File]::OpenRead($Path)
+    return Get-ByteArraySha256 -Bytes ([System.IO.File]::ReadAllBytes($Path))
+}
+
+function Get-ByteArraySha256 {
+    param([Parameter(Mandatory = $true)][byte[]]$Bytes)
+    $Sha256 = [System.Security.Cryptography.SHA256]::Create()
     try {
-        $Sha256 = [System.Security.Cryptography.SHA256]::Create()
-        try {
-            return [System.BitConverter]::ToString($Sha256.ComputeHash($Stream)).
-                Replace("-", "").
-                ToLowerInvariant()
-        }
-        finally {
-            $Sha256.Dispose()
-        }
+        return [System.BitConverter]::ToString($Sha256.ComputeHash($Bytes)).
+            Replace("-", "").
+            ToLowerInvariant()
     }
     finally {
-        $Stream.Dispose()
+        $Sha256.Dispose()
+    }
+}
+
+function Get-CrlfCanonicalSha256 {
+    param([Parameter(Mandatory = $true)][byte[]]$Bytes)
+    $Canonical = New-Object System.IO.MemoryStream
+    try {
+        for ($Index = 0; $Index -lt $Bytes.Length; $Index++) {
+            if ($Bytes[$Index] -eq 13 -and $Index + 1 -lt $Bytes.Length -and $Bytes[$Index + 1] -eq 10) {
+                [void]$Canonical.WriteByte(10)
+                $Index++
+            }
+            else {
+                [void]$Canonical.WriteByte($Bytes[$Index])
+            }
+        }
+        return Get-ByteArraySha256 -Bytes $Canonical.ToArray()
+    }
+    finally {
+        $Canonical.Dispose()
+    }
+}
+
+function Get-GitBlobBytes {
+    param(
+        [Parameter(Mandatory = $true)][string]$Git,
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$Commit,
+        [Parameter(Mandatory = $true)][string]$RepositoryPath
+    )
+    $ObjectName = "{0}:{1}" -f $Commit, $RepositoryPath
+    $StartInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $StartInfo.FileName = $Git
+    $StartInfo.Arguments = ('-C "{0}" cat-file blob {1}' -f $RepoRoot.Replace('"', '\"'), $ObjectName)
+    $StartInfo.UseShellExecute = $false
+    $StartInfo.RedirectStandardOutput = $true
+    $StartInfo.RedirectStandardError = $true
+    $Process = New-Object System.Diagnostics.Process
+    $Process.StartInfo = $StartInfo
+    $Output = New-Object System.IO.MemoryStream
+    try {
+        if (-not $Process.Start()) { throw "Could not start git to read $ObjectName." }
+        $Process.StandardOutput.BaseStream.CopyTo($Output)
+        $ErrorOutput = $Process.StandardError.ReadToEnd()
+        $Process.WaitForExit()
+        if ($Process.ExitCode -ne 0) {
+            throw "Could not read exact Git blob $ObjectName. $ErrorOutput"
+        }
+        return ,$Output.ToArray()
+    }
+    finally {
+        $Output.Dispose()
+        $Process.Dispose()
     }
 }
 
@@ -126,13 +178,20 @@ function Assert-NoActiveUpdateAttempt {
 function Copy-BootstrapSourceFiles {
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot,
-        [Parameter(Mandatory = $true)][string]$DestinationRoot
+        [Parameter(Mandatory = $true)][string]$DestinationRoot,
+        [Parameter(Mandatory = $true)][hashtable]$Evidence
     )
     foreach ($Entry in $BootstrapFileMap) {
         $Source = Join-Path $RepoRoot $Entry.source
         $Destination = Join-Path $DestinationRoot $Entry.target
         if (-not (Test-Path $Source -PathType Leaf)) { throw "Required source file missing: $($Entry.source)" }
         Copy-Item -Force -Path $Source -Destination $Destination
+        $StagedBytes = [System.IO.File]::ReadAllBytes($Destination)
+        $Evidence[$Entry.target]["staged_sha256"] = Get-ByteArraySha256 -Bytes $StagedBytes
+        $Evidence[$Entry.target]["staged_canonical_sha256"] = Get-CrlfCanonicalSha256 -Bytes $StagedBytes
+        if ($Evidence[$Entry.target]["staged_sha256"] -ne $Evidence[$Entry.target]["new_checkout_sha256"]) {
+            throw "Staged bootstrap file $($Entry.target) does not match the reviewed checkout bytes."
+        }
     }
 }
 
@@ -154,44 +213,43 @@ function Get-BootstrapHashEvidence {
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot,
         [Parameter(Mandatory = $true)][string]$BootstrapRoot,
-        [Parameter(Mandatory = $true)][string]$OldCommit
+        [Parameter(Mandatory = $true)][string]$OldCommit,
+        [Parameter(Mandatory = $true)][string]$NewCommit,
+        [Parameter(Mandatory = $true)][hashtable]$Evidence
     )
     $Git = (Get-Command git -ErrorAction Stop).Source
-    $OldSourceRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("msos-bootstrap-old-" + [Guid]::NewGuid().ToString("N"))
-    $Evidence = @{}
-    try {
-        & $Git -c core.autocrlf=false clone --quiet --no-hardlinks --no-checkout $RepoRoot $OldSourceRoot
-        if ($LASTEXITCODE -ne 0) { throw "Could not clone source repository for old bootstrap verification." }
-        & $Git -C $OldSourceRoot -c core.autocrlf=false checkout --quiet --detach $OldCommit
-        if ($LASTEXITCODE -ne 0) { throw "Could not check out expected old bootstrap commit." }
-        foreach ($Entry in $BootstrapFileMap) {
-            $Installed = Join-Path $BootstrapRoot $Entry.target
-            if (-not (Test-Path $Installed -PathType Leaf)) {
-                throw "Installed bootstrap file missing: $($Entry.target)"
-            }
-            $OldSource = Join-Path $OldSourceRoot $Entry.source
-            if (-not (Test-Path $OldSource -PathType Leaf)) {
-                throw "Could not export $($Entry.source) from expected old commit $OldCommit."
-            }
-            $OldExpected = Get-FileSha256 -Path $OldSource
-            $InstalledHash = Get-FileSha256 -Path $Installed
-            $NewSource = Join-Path $RepoRoot $Entry.source
-            $NewHash = Get-FileSha256 -Path $NewSource
-            $Evidence[$Entry.target] = @{
-                source = $Entry.source
-                installed_sha256 = $InstalledHash
-                expected_old_commit_sha256 = $OldExpected
-                new_commit_sha256 = $NewHash
-            }
-            if ($InstalledHash -ne $OldExpected) {
-                throw "Installed bootstrap file $($Entry.target) does not match expected old commit $OldCommit."
-            }
+    foreach ($Entry in $BootstrapFileMap) {
+        $FileEvidence = @{ source = $Entry.source; canonicalization = "CRLF-to-LF byte pairs only" }
+        $Evidence[$Entry.target] = $FileEvidence
+        $OldBlobBytes = Get-GitBlobBytes -Git $Git -RepoRoot $RepoRoot -Commit $OldCommit -RepositoryPath $Entry.source
+        $NewBlobBytes = Get-GitBlobBytes -Git $Git -RepoRoot $RepoRoot -Commit $NewCommit -RepositoryPath $Entry.source
+        $FileEvidence["expected_old_commit_sha256"] = Get-ByteArraySha256 -Bytes $OldBlobBytes
+        $FileEvidence["expected_old_commit_canonical_sha256"] = Get-CrlfCanonicalSha256 -Bytes $OldBlobBytes
+        $FileEvidence["new_commit_sha256"] = Get-ByteArraySha256 -Bytes $NewBlobBytes
+        $FileEvidence["new_commit_canonical_sha256"] = Get-CrlfCanonicalSha256 -Bytes $NewBlobBytes
+
+        $NewSource = Join-Path $RepoRoot $Entry.source
+        if (-not (Test-Path $NewSource -PathType Leaf)) {
+            throw "Required reviewed source file missing: $($Entry.source)"
+        }
+        $NewCheckoutBytes = [System.IO.File]::ReadAllBytes($NewSource)
+        $FileEvidence["new_checkout_sha256"] = Get-ByteArraySha256 -Bytes $NewCheckoutBytes
+        $FileEvidence["new_checkout_canonical_sha256"] = Get-CrlfCanonicalSha256 -Bytes $NewCheckoutBytes
+        if ($FileEvidence["new_checkout_canonical_sha256"] -ne $FileEvidence["new_commit_canonical_sha256"]) {
+            throw "Reviewed checkout file $($Entry.source) does not match exact Git blob content for $NewCommit."
+        }
+
+        $Installed = Join-Path $BootstrapRoot $Entry.target
+        if (-not (Test-Path $Installed -PathType Leaf)) {
+            throw "Installed bootstrap file missing: $($Entry.target)"
+        }
+        $InstalledBytes = [System.IO.File]::ReadAllBytes($Installed)
+        $FileEvidence["installed_sha256"] = Get-ByteArraySha256 -Bytes $InstalledBytes
+        $FileEvidence["installed_canonical_sha256"] = Get-CrlfCanonicalSha256 -Bytes $InstalledBytes
+        if ($FileEvidence["installed_canonical_sha256"] -ne $FileEvidence["expected_old_commit_canonical_sha256"]) {
+            throw "Installed bootstrap file $($Entry.target) does not match expected old commit $OldCommit."
         }
     }
-    finally {
-        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $OldSourceRoot
-    }
-    return $Evidence
 }
 
 function Confirm-ActivatedBootstrapHashes {
@@ -204,10 +262,11 @@ function Confirm-ActivatedBootstrapHashes {
         if (-not (Test-Path $Live -PathType Leaf)) {
             throw "Activated bootstrap file missing: $($Entry.target)"
         }
-        $ActivatedHash = Get-FileSha256 -Path $Live
-        $Evidence[$Entry.target]["activated_sha256"] = $ActivatedHash
-        if ($ActivatedHash -ne $Evidence[$Entry.target]["new_commit_sha256"]) {
-            throw "Activated bootstrap file $($Entry.target) does not match reviewed source hash."
+        $ActivatedBytes = [System.IO.File]::ReadAllBytes($Live)
+        $Evidence[$Entry.target]["activated_sha256"] = Get-ByteArraySha256 -Bytes $ActivatedBytes
+        $Evidence[$Entry.target]["activated_canonical_sha256"] = Get-CrlfCanonicalSha256 -Bytes $ActivatedBytes
+        if ($Evidence[$Entry.target]["activated_sha256"] -ne $Evidence[$Entry.target]["staged_sha256"]) {
+            throw "Activated bootstrap file $($Entry.target) does not match staged reviewed checkout bytes."
         }
     }
 }
@@ -330,11 +389,11 @@ try {
         throw "Installed stable bootstrap not found at $BootstrapRoot"
     }
     Test-ReportPathWritable -Path $ReportPath
-    $Report.file_hashes = Get-BootstrapHashEvidence -RepoRoot $RepoRoot -BootstrapRoot $BootstrapRoot -OldCommit $ExpectedOldBootstrapCommit
+    Get-BootstrapHashEvidence -RepoRoot $RepoRoot -BootstrapRoot $BootstrapRoot -OldCommit $ExpectedOldBootstrapCommit -NewCommit $Commit -Evidence $Report.file_hashes
 
     New-Item -ItemType Directory -Force -Path $StageParent, $RollbackParent, $ReportsRoot | Out-Null
     Copy-Item -Recurse -Force -Path $BootstrapRoot -Destination $StagedBootstrap
-    Copy-BootstrapSourceFiles -RepoRoot $RepoRoot -DestinationRoot $StagedBootstrap
+    Copy-BootstrapSourceFiles -RepoRoot $RepoRoot -DestinationRoot $StagedBootstrap -Evidence $Report.file_hashes
 
     Invoke-Checked -Name "staged PowerShell parser" -Results $ValidationResults -Command {
         Test-PowerShellScriptsParse -BootstrapRoot $StagedBootstrap

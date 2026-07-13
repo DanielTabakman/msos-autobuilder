@@ -1,0 +1,42 @@
+name: Self-update evidence notifier
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: self-update-evidence-notifier
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out notifier code
+        uses: actions/checkout@v4
+        with:
+          path: control
+          persist-credentials: false
+
+      - name: Check out immutable results evidence
+        uses: actions/checkout@v4
+        with:
+          ref: results
+          path: evidence
+          persist-credentials: false
+
+      - name: Notify issue 32 about new evidence
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PYTHONPATH: control/src
+        run: >-
+          python -m msos_autobuilder.self_update_evidence_notify
+          --evidence-root evidence/results
+          --repository "${GITHUB_REPOSITORY}"
+          --issue-number 32
+          --evidence-branch results

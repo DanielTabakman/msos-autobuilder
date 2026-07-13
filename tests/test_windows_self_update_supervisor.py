@@ -36,6 +36,9 @@ def test_installer_preserves_external_supervisor_and_atomic_release_boundary() -
     assert "run_windows_managed_service.ps1" in script
     assert "windows_self_update_task_control.ps1" in script
     assert "managed_release_health_probe.py" in script
+    assert "bootstrap checkout must be clean" in script
+    assert "health_stability_seconds: 10" in script
+    assert "TotalSeconds -ge 10" in script
     assert "A different managed release is already active" in script
     assert "The active release directory is incomplete" in script
     assert "Move-Item -Path $StagingPath -Destination $VersionPath" not in script
@@ -123,6 +126,8 @@ def test_update_invoker_downloads_one_manifest_then_calls_stable_python() -> Non
     assert "bootstrap-venv\\Scripts\\python.exe" in script
     assert "bootstrap\\self_update_supervisor.py" in script
     assert " apply --config " in script
+    assert "last-successful-manifest.sha256" in script
+    assert "Get-FileHash" in script
     assert "git pull" not in script.lower()
 
 

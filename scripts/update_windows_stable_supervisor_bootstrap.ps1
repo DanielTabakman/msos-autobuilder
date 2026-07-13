@@ -136,6 +136,20 @@ function Copy-BootstrapSourceFiles {
     }
 }
 
+function Test-ReportPathWritable {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (Test-Path $Path) { throw "Immutable report already exists: $Path" }
+    $Parent = Split-Path -Parent $Path
+    New-Item -ItemType Directory -Force -Path $Parent | Out-Null
+    $Probe = Join-Path $Parent (".report-write-probe-" + [Guid]::NewGuid().ToString("N") + ".tmp")
+    try {
+        Write-Utf8NoBom -Path $Probe -Value "probe"
+    }
+    finally {
+        Remove-Item -Force -ErrorAction SilentlyContinue $Probe
+    }
+}
+
 function Get-BootstrapHashEvidence {
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot,
@@ -178,6 +192,24 @@ function Get-BootstrapHashEvidence {
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $OldSourceRoot
     }
     return $Evidence
+}
+
+function Confirm-ActivatedBootstrapHashes {
+    param(
+        [Parameter(Mandatory = $true)][string]$BootstrapRoot,
+        [Parameter(Mandatory = $true)][hashtable]$Evidence
+    )
+    foreach ($Entry in $BootstrapFileMap) {
+        $Live = Join-Path $BootstrapRoot $Entry.target
+        if (-not (Test-Path $Live -PathType Leaf)) {
+            throw "Activated bootstrap file missing: $($Entry.target)"
+        }
+        $ActivatedHash = Get-FileSha256 -Path $Live
+        $Evidence[$Entry.target]["activated_sha256"] = $ActivatedHash
+        if ($ActivatedHash -ne $Evidence[$Entry.target]["new_commit_sha256"]) {
+            throw "Activated bootstrap file $($Entry.target) does not match reviewed source hash."
+        }
+    }
 }
 
 function Test-PowerShellScriptsParse {
@@ -297,6 +329,7 @@ try {
     if (-not (Test-Path $BootstrapRoot -PathType Container)) {
         throw "Installed stable bootstrap not found at $BootstrapRoot"
     }
+    Test-ReportPathWritable -Path $ReportPath
     $Report.file_hashes = Get-BootstrapHashEvidence -RepoRoot $RepoRoot -BootstrapRoot $BootstrapRoot -OldCommit $ExpectedOldBootstrapCommit
 
     New-Item -ItemType Directory -Force -Path $StageParent, $RollbackParent, $ReportsRoot | Out-Null
@@ -332,10 +365,15 @@ try {
     Move-Item -Path $BootstrapRoot -Destination $ActivationBackup
     try {
         Move-Item -Path $StagedBootstrap -Destination $BootstrapRoot
+        if ($env:MSOS_STABLE_BOOTSTRAP_HANDOFF_TEST_CORRUPT_ACTIVATED_FILE -eq "1") {
+            Add-Content -Path (Join-Path $BootstrapRoot $BootstrapFileMap[0].target) -Value "test-only-corruption"
+        }
+        Confirm-ActivatedBootstrapHashes -BootstrapRoot $BootstrapRoot -Evidence $Report.file_hashes
         $Report.activation = @{
             performed = $true
             activated_bootstrap = $BootstrapRoot
             activation_backup = $ActivationBackup
+            activated_hashes_verified = $true
         }
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $ActivationBackup
         $ActivationBackup = $null
@@ -377,13 +415,19 @@ finally {
     $Report.validation_results = @($ValidationResults)
     $Report.recorded_at = [DateTimeOffset]::UtcNow.ToString("o")
     try {
+        if ($env:MSOS_STABLE_BOOTSTRAP_HANDOFF_TEST_REPORT_WRITE_FAILURE -eq "1") {
+            throw "Simulated report write failure."
+        }
         Write-ImmutableJson -Path $ReportPath -Value $Report
         Write-Host "Stable supervisor bootstrap handoff report: $ReportPath"
     }
     catch {
-        Write-Warning "Could not write stable bootstrap update report: $($_.Exception.Message)"
+        $Report.errors += "Could not write stable bootstrap update report: $($_.Exception.Message)"
+        if ($Report.outcome -eq "success") { $Report.outcome = "failed_evidence_missing" }
+        throw "Could not write stable bootstrap update report: $($_.Exception.Message)"
     }
-    if ($Report.outcome -eq "success") {
-        Write-Host "Stable supervisor bootstrap updated to $Commit" -ForegroundColor Green
+    if ($Report.outcome -ne "success") {
+        throw "Stable supervisor bootstrap handoff finished with outcome $($Report.outcome)."
     }
+    Write-Host "Stable supervisor bootstrap updated to $Commit" -ForegroundColor Green
 }

@@ -144,6 +144,166 @@ def test_stable_bootstrap_handoff_is_exact_commit_reversible_and_non_mutating() 
     assert "Register-ScheduledTask" not in script
 
 
+def _build_stable_bootstrap_handoff_fixture(tmp_path: Path) -> dict[str, object]:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+
+    source_payloads = {
+        "src/msos_autobuilder/self_update_supervisor.py": """
+import json
+import pathlib
+import shutil
+import subprocess
+
+class PowerShellTaskController:
+    def __init__(self, script):
+        self.script = pathlib.Path(script)
+
+    def states(self, task_names):
+        executable = shutil.which("powershell") or shutil.which("pwsh")
+        completed = subprocess.run(
+            [
+                executable,
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(self.script),
+                "-Action",
+                "states",
+            ],
+            input=json.dumps(task_names),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(completed.stderr or completed.stdout)
+        return json.loads(completed.stdout)
+""",
+        "src/msos_autobuilder/self_update_evidence_relay.py": "print('relay fixture')\n",
+        "scripts/managed_release_health_probe.py": "print('probe fixture')\n",
+        "scripts/windows_self_update_task_control.ps1": """
+param([Parameter(Mandatory = $true)][ValidateSet("stop", "start", "states")][string]$Action)
+$DecodedTaskNames = [Console]::In.ReadToEnd() | ConvertFrom-Json
+$TaskNames = @($DecodedTaskNames)
+$States = @{}
+foreach ($Name in $TaskNames) { $States[[string]$Name] = "Running" }
+$States | ConvertTo-Json -Compress
+""",
+        "scripts/run_windows_managed_service.ps1": "Write-Host 'runner fixture'\n",
+        "scripts/invoke_windows_self_update.ps1": "Write-Host 'invoke fixture'\n",
+        "scripts/rollback_windows_self_update.ps1": "Write-Host 'rollback fixture'\n",
+    }
+    for relative, text in source_payloads.items():
+        path = repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text.strip() + "\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "old bootstrap"], cwd=repo, check=True)
+    old_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+
+    (repo / "src/msos_autobuilder/self_update_evidence_relay.py").write_text(
+        "print('relay fixture v2')\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "new bootstrap"], cwd=repo, check=True)
+    new_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+
+    supervisor = tmp_path / "supervisor"
+    live_bootstrap = supervisor / "bootstrap"
+    live_bootstrap.mkdir(parents=True)
+    subprocess.run(["git", "checkout", "-q", old_commit], cwd=repo, check=True)
+    target_names = {
+        "src/msos_autobuilder/self_update_supervisor.py": "self_update_supervisor.py",
+        "src/msos_autobuilder/self_update_evidence_relay.py": "self_update_evidence_relay.py",
+        "scripts/managed_release_health_probe.py": "managed_release_health_probe.py",
+        "scripts/windows_self_update_task_control.ps1": "windows_self_update_task_control.ps1",
+        "scripts/run_windows_managed_service.ps1": "run_windows_managed_service.ps1",
+        "scripts/invoke_windows_self_update.ps1": "invoke_windows_self_update.ps1",
+        "scripts/rollback_windows_self_update.ps1": "rollback_windows_self_update.ps1",
+    }
+    for source, target in target_names.items():
+        shutil.copy2(repo / source, live_bootstrap / target)
+    subprocess.run(["git", "checkout", "-q", new_commit], cwd=repo, check=True)
+
+    return {
+        "repo": repo,
+        "supervisor": supervisor,
+        "live_bootstrap": live_bootstrap,
+        "old_commit": old_commit,
+        "new_commit": new_commit,
+        "target_names": target_names,
+    }
+
+
+def _run_handoff_fixture(
+    fixture: dict[str, object],
+    powershell: str,
+    tmp_path: Path,
+    *,
+    before_script: str = "",
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    repo = fixture["repo"]
+    supervisor = fixture["supervisor"]
+    old_commit = fixture["old_commit"]
+    new_commit = fixture["new_commit"]
+    assert isinstance(repo, Path)
+    assert isinstance(supervisor, Path)
+    assert isinstance(old_commit, str)
+    assert isinstance(new_commit, str)
+
+    calls_path = tmp_path / "scheduled-task-calls.jsonl"
+    command = f"""
+$CallsPath = '{calls_path.as_posix()}'
+function Add-Call([string]$Action, [string]$Name) {{
+    [pscustomobject]@{{ action = $Action; name = $Name }} |
+        ConvertTo-Json -Compress |
+        Add-Content -Path $CallsPath -Encoding UTF8
+}}
+function Get-ScheduledTask {{
+    param([string]$TaskName, [object]$ErrorAction)
+    Add-Call -Action 'get' -Name $TaskName
+    [pscustomobject]@{{ TaskName = $TaskName; State = 'Ready' }}
+}}
+function Stop-ScheduledTask {{
+    param([string]$TaskName, [object]$ErrorAction)
+    Add-Call -Action 'stop' -Name $TaskName
+}}
+function Disable-ScheduledTask {{
+    param([string]$TaskName, [object]$ErrorAction)
+    Add-Call -Action 'disable' -Name $TaskName
+    [pscustomobject]@{{ TaskName = $TaskName; State = 'Disabled' }}
+}}
+function Enable-ScheduledTask {{
+    param([string]$TaskName, [object]$ErrorAction)
+    Add-Call -Action 'enable' -Name $TaskName
+    [pscustomobject]@{{ TaskName = $TaskName; State = 'Ready' }}
+}}
+{before_script}
+& '{BOOTSTRAP_HANDOFF.as_posix()}' `
+    -Commit '{new_commit}' `
+    -ExpectedOldBootstrapCommit '{old_commit}' `
+    -RepoRoot '{repo.as_posix()}' `
+    -SupervisorRoot '{supervisor.as_posix()}' `
+    -BootstrapPython '{Path(sys.executable).as_posix()}'
+"""
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=60,
+    )
+    return result, calls_path
+
+
 def test_stable_bootstrap_handoff_runs_with_temp_root_and_stubbed_tasks(
     tmp_path: Path,
 ) -> None:
@@ -294,6 +454,8 @@ function Enable-ScheduledTask {{
     assert report["rollback"]["performed"] is False
     assert report["update_task"]["restored"] is True
     assert "self_update_evidence_relay.py" in report["file_hashes"]
+    relay_hashes = report["file_hashes"]["self_update_evidence_relay.py"]
+    assert relay_hashes["activated_sha256"] == relay_hashes["new_commit_sha256"]
     calls = [
         json.loads(line)
         for line in calls_path.read_text(encoding="utf-8-sig").splitlines()
@@ -313,6 +475,76 @@ function Enable-ScheduledTask {{
         "enable",
         "get",
     ]
+
+
+def test_stable_bootstrap_handoff_restores_old_bootstrap_after_activation_failure(
+    tmp_path: Path,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    live_bootstrap = fixture["live_bootstrap"]
+    target_names = fixture["target_names"]
+    assert isinstance(live_bootstrap, Path)
+    assert isinstance(target_names, dict)
+    old_bytes = {
+        target: (live_bootstrap / target).read_bytes()
+        for target in target_names.values()
+    }
+
+    result, calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script="$env:MSOS_STABLE_BOOTSTRAP_HANDOFF_TEST_CORRUPT_ACTIVATED_FILE = '1'",
+    )
+
+    assert result.returncode != 0
+    assert all(
+        (live_bootstrap / target).read_bytes() == content
+        for target, content in old_bytes.items()
+    )
+    relay_bytes = (live_bootstrap / "self_update_evidence_relay.py").read_bytes()
+    assert b"relay fixture v2" not in relay_bytes
+    reports = list((fixture["supervisor"] / "reports").glob("stable-bootstrap-update-*.json"))
+    assert len(reports) == 1
+    report = json.loads(reports[0].read_text(encoding="utf-8-sig"))
+    assert report["outcome"] == "failed"
+    assert report["rollback"]["performed"] is True
+    assert report["update_task"]["restored"] is True
+    assert "activated_sha256" in report["file_hashes"]["self_update_supervisor.py"]
+    calls = [
+        json.loads(line)
+        for line in calls_path.read_text(encoding="utf-8-sig").splitlines()
+    ]
+    assert any(
+        call["action"] == "enable"
+        and call["name"] == "MSOS Autobuilder Update Supervisor"
+        for call in calls
+    )
+
+
+def test_stable_bootstrap_handoff_report_write_failure_is_not_nominal_success(
+    tmp_path: Path,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    result, _ = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script="$env:MSOS_STABLE_BOOTSTRAP_HANDOFF_TEST_REPORT_WRITE_FAILURE = '1'",
+    )
+
+    assert result.returncode != 0
+    assert "Stable supervisor bootstrap updated" not in result.stdout
+    assert "Could not write stable bootstrap update report" in (result.stderr + result.stdout)
+    assert not list((fixture["supervisor"] / "reports").glob("stable-bootstrap-update-*.json"))
 
 
 def test_task_controller_round_trips_task_names_through_powershell_stdin(

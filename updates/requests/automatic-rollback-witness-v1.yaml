@@ -3,9 +3,10 @@ release_id: automatic-rollback-witness-v1
 approved: true
 repository: DanielTabakman/msos-autobuilder
 repo_url: https://github.com/DanielTabakman/msos-autobuilder.git
-commit: 73c3b13d72335fa09ca9fdcd300ba06f95c54d0c
+commit: 81878ed8f3444b124c2be3b59d79e6f28203c8e2
 required_status_contexts:
   - test
+  - windows-test
 expected_files:
   - pyproject.toml
   - src/msos_autobuilder/self_update_supervisor.py

@@ -17,13 +17,13 @@
         "tests/test_frozen_review_store.py"
       ],
       "cwd": ".",
-      "finished_at": "2026-07-13T01:03:36.392851+00:00",
+      "finished_at": "2026-07-13T01:20:10.367399+00:00",
       "name": "focused-ppe-contract-tests",
       "passed": true,
       "returncode": 0,
-      "started_at": "2026-07-13T01:03:34.690128+00:00",
+      "started_at": "2026-07-13T01:20:08.472294+00:00",
       "stderr": "",
-      "stdout": ".............                                                            [100%]\n13 passed in 1.04s\n",
+      "stdout": ".............                                                            [100%]\n13 passed in 1.29s\n",
       "timed_out": false
     },
     {
@@ -33,13 +33,13 @@
         "."
       ],
       "cwd": ".",
-      "finished_at": "2026-07-13T01:03:36.510839+00:00",
+      "finished_at": "2026-07-13T01:20:10.485750+00:00",
       "name": "frozen-evaluation-snapshot-identity",
-      "passed": false,
-      "returncode": 1,
-      "started_at": "2026-07-13T01:03:36.393882+00:00",
-      "stderr": "Traceback (most recent call last):\n  File \"C:\\Users\\USER\\msos-autobuilder\\scripts\\check_frozen_evaluation_candidate.py\", line 73, in <module>\n    raise SystemExit(main())\n                     ^^^^^^\n  File \"C:\\Users\\USER\\msos-autobuilder\\scripts\\check_frozen_evaluation_candidate.py\", line 40, in main\n    from src.viz import frozen_evaluation_contract as contract\nImportError: cannot import name 'frozen_evaluation_contract' from 'src.viz' (unknown location). Did you mean: 'frozen_evaluation_record'?\n",
-      "stdout": "",
+      "passed": true,
+      "returncode": 0,
+      "started_at": "2026-07-13T01:20:10.368401+00:00",
+      "stderr": "",
+      "stdout": "snapshot identity mismatch rejected\n",
       "timed_out": false
     },
     {
@@ -49,18 +49,18 @@
         "."
       ],
       "cwd": ".",
-      "finished_at": "2026-07-13T01:03:36.614832+00:00",
+      "finished_at": "2026-07-13T01:20:10.580197+00:00",
       "name": "frozen-evaluation-schema-compatibility",
       "passed": true,
       "returncode": 0,
-      "started_at": "2026-07-13T01:03:36.511838+00:00",
+      "started_at": "2026-07-13T01:20:10.486708+00:00",
       "stderr": "",
       "stdout": "frozen-evaluation schema compatibility preserved\n",
       "timed_out": false
     }
   ],
   "errors": [],
-  "finished_at": "2026-07-13T01:03:37.140542+00:00",
+  "finished_at": "2026-07-13T01:20:11.096881+00:00",
   "job_id": "ppe-frozen-evaluation-contract-v1-revision-1",
   "patches": [
     {
@@ -80,8 +80,8 @@
   "publication_enabled": false,
   "source_head": "1d7097be96cfdb1af9211ac3e83e22385e385b78",
   "source_report_sha256": "b8db244e3f595eada718ac046af8b8b194f6b98f03a5d9cc4692f3ca9bcd1ccd",
-  "started_at": "2026-07-13T01:03:32.443760+00:00",
-  "status": "failed",
+  "started_at": "2026-07-13T01:20:06.209876+00:00",
+  "status": "passed",
   "version": 1,
   "workspace_removed": true
 }

@@ -43,7 +43,11 @@ def validate_snapshot_review_payload(payload):
         encoding="utf-8",
     )
 
-    script = Path(__file__).resolve().parents[1] / "scripts" / "check_frozen_evaluation_candidate.py"
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "check_frozen_evaluation_candidate.py"
+    )
     proc = subprocess.run(
         [sys.executable, str(script), str(candidate)],
         capture_output=True,

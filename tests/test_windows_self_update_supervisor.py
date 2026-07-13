@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -150,8 +151,11 @@ def test_stable_bootstrap_handoff_is_exact_commit_reversible_and_non_mutating() 
     assert "previous = sys.modules.get(module_name)" in script
     assert "sys.modules[module_name] = module" in script
     assert "sys.modules.pop(module_name, None)" in script
-    assert "RedirectStandardOutput = $true" in script
-    assert "RedirectStandardError = $true" in script
+    transport_script = script[script.index("function Test-StagedTaskTransport") :]
+    assert "1> \"{4}\" 2> \"{5}\"" in transport_script
+    assert "& $Cmd /d /c $CommandLine" in transport_script
+    assert "Get-Content -Raw -Encoding UTF8 $StdoutPath" in transport_script
+    assert "Get-Content -Raw -Encoding UTF8 $StderrPath" in transport_script
     assert "Move-Item -Path $BootstrapRoot -Destination $ActivationBackup" in script
     assert "Move-Item -Path $StagedBootstrap -Destination $BootstrapRoot" in script
     assert "stable-bootstrap-update-handoff" in script
@@ -159,6 +163,9 @@ def test_stable_bootstrap_handoff_is_exact_commit_reversible_and_non_mutating() 
     assert "update-ledger.json" not in script
     assert "Unregister-ScheduledTask" not in script
     assert "Register-ScheduledTask" not in script
+    assert "MSOS_TASK_CONTROLLER_POWERSHELL" not in (
+        ROOT / "src" / "msos_autobuilder" / "self_update_supervisor.py"
+    ).read_text(encoding="utf-8")
 
 
 def test_old_unregistered_stable_supervisor_import_fails_in_subprocess() -> None:
@@ -189,7 +196,12 @@ def test_old_unregistered_stable_supervisor_import_fails_in_subprocess() -> None
     assert "dataclasses.py" in result.stderr
 
 
-def _build_stable_bootstrap_handoff_fixture(tmp_path: Path) -> dict[str, object]:
+def _build_stable_bootstrap_handoff_fixture(
+    tmp_path: Path,
+    *,
+    task_control_stderr_failure: str | None = None,
+    task_control_stderr_repeat: int = 0,
+) -> dict[str, object]:
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
@@ -212,7 +224,16 @@ def _build_stable_bootstrap_handoff_fixture(tmp_path: Path) -> dict[str, object]
     for relative, source in source_paths.items():
         path = repo / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, path)
+        if relative == "scripts/windows_self_update_task_control.ps1":
+            path.write_text(
+                _stubbed_task_control_script(
+                    stderr_failure=task_control_stderr_failure,
+                    stderr_repeat=task_control_stderr_repeat,
+                ),
+                encoding="utf-8",
+            )
+        else:
+            shutil.copy2(source, path)
         path.write_bytes(path.read_bytes().replace(b"\r\n", b"\n"))
     source_payloads = {
         "src/msos_autobuilder/self_update_evidence_relay.py": "print('relay fixture')\n",
@@ -279,100 +300,65 @@ def _read_handoff_report(fixture: dict[str, object]) -> dict[str, object]:
     return json.loads(reports[0].read_text(encoding="utf-8-sig"))
 
 
-def _quote_ps_for_command(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
-
-
-def _write_stubbed_task_powershell(
-    tmp_path: Path,
-    powershell: str,
-    calls_path: Path,
+def _stubbed_task_control_script(
     *,
     state: str = "Running",
-) -> Path:
-    wrapper_py = tmp_path / "stubbed-task-powershell.py"
-    wrapper_py.write_text(
-        "\n".join(
-            [
-                "from __future__ import annotations",
-                "import subprocess",
-                "import sys",
-                "",
-                f"POWERSHELL = {powershell!r}",
-                f"CALLS_PATH = {calls_path.as_posix()!r}",
-                f"STATE = {state!r}",
-                "",
-                "def quote_ps(value: str) -> str:",
-                "    return \"'\" + value.replace(\"'\", \"''\") + \"'\"",
-                "",
-                "args = sys.argv[1:]",
-                "script = args[args.index('-File') + 1]",
-                "action = args[args.index('-Action') + 1]",
-                "command = \"\\n\".join([",
-                "    f\"$CallsPath = {quote_ps(CALLS_PATH)}\",",
-                "    \"function Add-Call([string]$Action, [string]$Name) {\",",
-                "    \"    [pscustomobject]@{ action = $Action; name = $Name } | \"",
-                "    \"ConvertTo-Json -Compress | Add-Content -Path $CallsPath -Encoding UTF8\",",
-                "    \"}\",",
-                "    \"function Get-ScheduledTask {\",",
-                "    \"    param([string]$TaskName, [object]$ErrorAction)\",",
-                "    \"    Add-Call -Action 'get' -Name $TaskName\",",
-                "    f\"    [pscustomobject]@{{ TaskName = $TaskName; \"",
-                "    f\"State = {quote_ps(STATE)} }}\",",
-                "    \"}\",",
-                "    \"function Stop-ScheduledTask {\",",
-                "    \"    param([string]$TaskName, [object]$ErrorAction)\",",
-                "    \"    Add-Call -Action 'stop' -Name $TaskName\",",
-                "    \"}\",",
-                "    \"function Enable-ScheduledTask {\",",
-                "    \"    param([string]$TaskName, [object]$ErrorAction)\",",
-                "    \"    Add-Call -Action 'enable' -Name $TaskName\",",
-                "    \"}\",",
-                "    \"function Start-ScheduledTask {\",",
-                "    \"    param([string]$TaskName, [object]$ErrorAction)\",",
-                "    \"    Add-Call -Action 'start' -Name $TaskName\",",
-                "    \"}\",",
-                "    f\"& {quote_ps(script)} -Action {quote_ps(action)}\",",
-                "])",
-                "completed = subprocess.run(",
-                "    [",
-                "        POWERSHELL,",
-                "        '-NoProfile',",
-                "        '-ExecutionPolicy',",
-                "        'Bypass',",
-                "        '-Command',",
-                "        command,",
-                "    ],",
-                "    input=sys.stdin.read(),",
-                "    capture_output=True,",
-                "    text=True,",
-                "    encoding='utf-8',",
-                "    errors='replace',",
-                "    check=False,",
-                ")",
-                "sys.stdout.write(completed.stdout)",
-                "sys.stderr.write(completed.stderr)",
-                "raise SystemExit(completed.returncode)",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    if sys.platform == "win32":
-        wrapper = tmp_path / "stubbed-task-powershell.cmd"
-        wrapper.write_text(
-            f'@echo off\r\n"{sys.executable}" "{wrapper_py}" %*\r\n',
-            encoding="utf-8",
+    stderr_failure: str | None = None,
+    stderr_repeat: int = 0,
+) -> str:
+    script = TASK_CONTROL.read_text(encoding="utf-8")
+    if stderr_failure is None:
+        get_body = (
+            "    Add-Call -Action 'get' -Name $TaskName\n"
+            f"    [pscustomobject]@{{ TaskName = $TaskName; State = '{state}' }}\n"
         )
     else:
-        python_exe = shutil.which("python3") or sys.executable
-        wrapper = tmp_path / "stubbed-task-powershell"
-        wrapper.write_text(
-            f"#!/bin/sh\nexec {python_exe!r} {str(wrapper_py)!r} \"$@\"\n",
-            encoding="utf-8",
-        )
-        wrapper.chmod(0o755)
-    return wrapper
+        escaped = stderr_failure.replace("'", "''")
+        if stderr_repeat > 0:
+            get_body = (
+                "    Add-Call -Action 'get' -Name $TaskName\n"
+                f"    $Payload = '{escaped}' -f ('x' * {stderr_repeat})\n"
+                "    [Console]::Error.WriteLine($Payload)\n"
+                "    throw 'stubbed scheduled task failure'\n"
+            )
+        else:
+            get_body = (
+                "    Add-Call -Action 'get' -Name $TaskName\n"
+                f"    [Console]::Error.WriteLine('{escaped}')\n"
+                "    throw 'stubbed scheduled task failure'\n"
+            )
+    stubs = "\n".join(
+        [
+            "$CallsPath = $env:MSOS_STUBBED_TASK_CALLS_PATH",
+            "if (-not $CallsPath) { throw 'MSOS_STUBBED_TASK_CALLS_PATH is required.' }",
+            "function Add-Call([string]$Action, [string]$Name) {",
+            "    [pscustomobject]@{ action = $Action; name = $Name } |",
+            "        ConvertTo-Json -Compress |",
+            "        Add-Content -Path $CallsPath -Encoding UTF8",
+            "}",
+            "function Get-ScheduledTask {",
+            "    param([string]$TaskName, [object]$ErrorAction)",
+            get_body.rstrip(),
+            "}",
+            "function Stop-ScheduledTask {",
+            "    param([string]$TaskName, [object]$ErrorAction)",
+            "    Add-Call -Action 'stop' -Name $TaskName",
+            "}",
+            "function Enable-ScheduledTask {",
+            "    param([string]$TaskName, [object]$ErrorAction)",
+            "    Add-Call -Action 'enable' -Name $TaskName",
+            "}",
+            "function Start-ScheduledTask {",
+            "    param([string]$TaskName, [object]$ErrorAction)",
+            "    Add-Call -Action 'start' -Name $TaskName",
+            "}",
+            "",
+        ]
+    )
+    return script.replace(
+        '$ErrorActionPreference = "Stop"',
+        f'$ErrorActionPreference = "Stop"\n{stubs}',
+    )
 
 
 def _run_handoff_fixture(
@@ -381,6 +367,7 @@ def _run_handoff_fixture(
     tmp_path: Path,
     *,
     before_script: str = "",
+    capture_output: bool = True,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     repo = fixture["repo"]
     supervisor = fixture["supervisor"]
@@ -393,7 +380,6 @@ def _run_handoff_fixture(
 
     calls_path = tmp_path / "scheduled-task-calls.jsonl"
     nested_calls_path = tmp_path / "nested-scheduled-task-calls.jsonl"
-    task_powershell = _write_stubbed_task_powershell(tmp_path, powershell, nested_calls_path)
     command = f"""
 $CallsPath = '{calls_path.as_posix()}'
 function Add-Call([string]$Action, [string]$Name) {{
@@ -420,7 +406,7 @@ function Enable-ScheduledTask {{
     Add-Call -Action 'enable' -Name $TaskName
     [pscustomobject]@{{ TaskName = $TaskName; State = 'Ready' }}
 }}
-$env:MSOS_TASK_CONTROLLER_POWERSHELL = '{task_powershell.as_posix()}'
+$env:MSOS_STUBBED_TASK_CALLS_PATH = '{nested_calls_path.as_posix()}'
 {before_script}
 & '{BOOTSTRAP_HANDOFF.as_posix()}' `
     -Commit '{new_commit}' `
@@ -429,15 +415,40 @@ $env:MSOS_TASK_CONTROLLER_POWERSHELL = '{task_powershell.as_posix()}'
     -SupervisorRoot '{supervisor.as_posix()}' `
     -BootstrapPython '{Path(sys.executable).as_posix()}'
 """
-    result = subprocess.run(
-        [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-        timeout=60,
-    )
+    argv = [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command]
+    if capture_output:
+        result = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=60,
+        )
+    else:
+        stdout_path = tmp_path / "outer-handoff-stdout.txt"
+        stderr_path = tmp_path / "outer-handoff-stderr.txt"
+        with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open(
+            "w",
+            encoding="utf-8",
+        ) as stderr:
+            completed = subprocess.run(
+                argv,
+                stdout=stdout,
+                stderr=stderr,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=60,
+            )
+        result = subprocess.CompletedProcess(
+            completed.args,
+            completed.returncode,
+            stdout_path.read_text(encoding="utf-8"),
+            stderr_path.read_text(encoding="utf-8"),
+        )
     return result, calls_path
 
 
@@ -561,24 +572,39 @@ def test_stable_bootstrap_handoff_retains_complete_python_stderr_on_probe_failur
     if powershell is None:
         pytest.skip("PowerShell is not installed on this runner")
 
-    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
-    missing_executable = tmp_path / "missing-powershell"
-    result, _ = _run_handoff_fixture(
+    stderr_begin = "BEGIN-LARGE-STUBBED-STDERR"
+    stderr_end = "END-LARGE-STUBBED-STDERR"
+    fixture = _build_stable_bootstrap_handoff_fixture(
+        tmp_path,
+        task_control_stderr_failure=stderr_begin + "{0}" + stderr_end,
+        task_control_stderr_repeat=80_000,
+    )
+    result, calls_path = _run_handoff_fixture(
         fixture,
         powershell,
         tmp_path,
-        before_script=(
-            "$env:MSOS_TASK_CONTROLLER_POWERSHELL = "
-            f"{_quote_ps_for_command(missing_executable.as_posix())}"
-        ),
+        capture_output=False,
     )
 
     assert result.returncode != 0
     report = _read_handoff_report(fixture)
     report_text = json.dumps(report)
     assert "Staged Python to PowerShell task-name transport failed" in report_text
+    assert stderr_begin in report_text
+    assert stderr_end in report_text
     assert "Traceback (most recent call last)" in report_text
-    assert "FileNotFoundError" in report_text
+    assert "SupervisorError" in report_text
+    assert report["activation"]["performed"] is False
+    assert report["update_task"]["restored"] is True
+    calls = [
+        json.loads(line)
+        for line in calls_path.read_text(encoding="utf-8-sig").splitlines()
+    ]
+    assert any(
+        call["action"] == "enable"
+        and call["name"] == "MSOS Autobuilder Update Supervisor"
+        for call in calls
+    )
 
 
 def test_stable_bootstrap_handoff_restores_old_bootstrap_after_activation_failure(
@@ -659,16 +685,25 @@ def test_task_controller_round_trips_task_names_through_powershell_stdin(
         pytest.skip("PowerShell is not installed on this runner")
 
     calls_path = tmp_path / "task-calls.jsonl"
-    stubbed_powershell = _write_stubbed_task_powershell(tmp_path, powershell, calls_path)
+    stubbed_task_control = tmp_path / "windows-self-update-task-control-stubbed.ps1"
+    stubbed_task_control.write_text(_stubbed_task_control_script(), encoding="utf-8")
 
     from msos_autobuilder.self_update_supervisor import PowerShellTaskController
 
     task_names = MANAGED_TASK_NAMES
-    controller = PowerShellTaskController(TASK_CONTROL, executable=str(stubbed_powershell))
+    controller = PowerShellTaskController(stubbed_task_control, executable=powershell)
 
-    controller.stop(task_names)
-    controller.start(task_names)
-    states = controller.states(task_names)
+    previous_calls_path = os.environ.get("MSOS_STUBBED_TASK_CALLS_PATH")
+    os.environ["MSOS_STUBBED_TASK_CALLS_PATH"] = calls_path.as_posix()
+    try:
+        controller.stop(task_names)
+        controller.start(task_names)
+        states = controller.states(task_names)
+    finally:
+        if previous_calls_path is None:
+            os.environ.pop("MSOS_STUBBED_TASK_CALLS_PATH", None)
+        else:
+            os.environ["MSOS_STUBBED_TASK_CALLS_PATH"] = previous_calls_path
 
     assert states == {name: "Running" for name in task_names}
     calls = [

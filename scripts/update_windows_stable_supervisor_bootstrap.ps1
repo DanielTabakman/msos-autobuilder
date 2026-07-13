@@ -295,6 +295,8 @@ function Test-StagedTaskTransport {
     }
     $TaskNamesPath = Join-Path ([System.IO.Path]::GetTempPath()) ("msos-bootstrap-task-names-" + [Guid]::NewGuid().ToString("N") + ".json")
     $ProbePath = Join-Path ([System.IO.Path]::GetTempPath()) ("msos-bootstrap-task-transport-" + [Guid]::NewGuid().ToString("N") + ".py")
+    $StdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) ("msos-bootstrap-task-transport-stdout-" + [Guid]::NewGuid().ToString("N") + ".txt")
+    $StderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ("msos-bootstrap-task-transport-stderr-" + [Guid]::NewGuid().ToString("N") + ".txt")
     $Probe = @"
 import importlib.util
 import json
@@ -325,28 +327,21 @@ print(json.dumps(states, sort_keys=True))
     try {
         Write-Utf8NoBom -Path $TaskNamesPath -Value (($ManagedTaskNames | ConvertTo-Json -Compress) + [Environment]::NewLine)
         Write-Utf8NoBom -Path $ProbePath -Value $Probe
-        $StartInfo = New-Object System.Diagnostics.ProcessStartInfo
-        $StartInfo.FileName = $BootstrapPython
-        $StartInfo.Arguments = ('"{0}" "{1}" "{2}"' -f
+        $Cmd = $env:ComSpec
+        if (-not $Cmd) { $Cmd = "cmd.exe" }
+        $CommandLine = ('"{0}" "{1}" "{2}" "{3}" 1> "{4}" 2> "{5}"' -f
+            $BootstrapPython.Replace('"', '\"'),
             $ProbePath.Replace('"', '\"'),
             $BootstrapRoot.Replace('"', '\"'),
-            $TaskNamesPath.Replace('"', '\"'))
-        $StartInfo.UseShellExecute = $false
-        $StartInfo.RedirectStandardOutput = $true
-        $StartInfo.RedirectStandardError = $true
-        $Process = New-Object System.Diagnostics.Process
-        $Process.StartInfo = $StartInfo
-        try {
-            if (-not $Process.Start()) { throw "Could not start staged Python task transport probe." }
-            $Stdout = $Process.StandardOutput.ReadToEnd()
-            $Stderr = $Process.StandardError.ReadToEnd()
-            $Process.WaitForExit()
-            if ($Process.ExitCode -ne 0) {
-                throw "Staged Python to PowerShell task-name transport failed with exit $($Process.ExitCode). stdout:`n$Stdout`nstderr:`n$Stderr"
-            }
-        }
-        finally {
-            $Process.Dispose()
+            $TaskNamesPath.Replace('"', '\"'),
+            $StdoutPath.Replace('"', '\"'),
+            $StderrPath.Replace('"', '\"'))
+        & $Cmd /d /c $CommandLine
+        $ExitCode = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
+        $Stdout = if (Test-Path $StdoutPath) { Get-Content -Raw -Encoding UTF8 $StdoutPath } else { "" }
+        $Stderr = if (Test-Path $StderrPath) { Get-Content -Raw -Encoding UTF8 $StderrPath } else { "" }
+        if ($ExitCode -ne 0) {
+            throw "Staged Python to PowerShell task-name transport failed with exit $ExitCode. stdout:`n$Stdout`nstderr:`n$Stderr"
         }
         $States = $Stdout | ConvertFrom-Json
         foreach ($TaskName in $ManagedTaskNames) {
@@ -362,6 +357,8 @@ print(json.dumps(states, sort_keys=True))
     finally {
         Remove-Item -Force -ErrorAction SilentlyContinue $TaskNamesPath
         Remove-Item -Force -ErrorAction SilentlyContinue $ProbePath
+        Remove-Item -Force -ErrorAction SilentlyContinue $StdoutPath
+        Remove-Item -Force -ErrorAction SilentlyContinue $StderrPath
     }
 }
 

@@ -764,7 +764,6 @@ class PowerShellTaskController:
         self.script_path = script_path
         self.executable = (
             executable
-            or os.environ.get("MSOS_TASK_CONTROLLER_POWERSHELL")
             or shutil.which("powershell.exe")
             or shutil.which("pwsh")
         )

@@ -12,7 +12,7 @@ The one-time installer creates a separate root:
 
 ```text
 %USERPROFILE%\.msos-autobuilder-supervisor\
-  bootstrap\                 stable scripts, probe, and supervisor module
+  bootstrap\                 stable scripts, probe, supervisor, and evidence relay
   bootstrap-venv\            stable Python environment
   versions\<commit>\         immutable managed Autobuilder releases
   state\active-release.json  atomic routing pointer
@@ -20,8 +20,8 @@ The one-time installer creates a separate root:
   state\service-witnesses\   machine-readable post-start witnesses
   reports\                   immutable update and bootstrap reports
   notifications\             immutable founder-attention outbox
-  inbox\                      downloaded approved manifest
-  logs\                       updater logs
+  inbox\                     downloaded approved manifest
+  logs\                      updater logs
 ```
 
 The stable bootstrap is copied outside `versions`. A managed release may contain newer supervisor source for review, but the running update transaction cannot replace the bootstrap executing that transaction. Any future bootstrap update therefore requires a separate two-stage handoff; there is no same-transaction supervisor self-update path.
@@ -96,7 +96,7 @@ The stable manual rollback entry point is:
 
 It restores the recorded previous release through the same task-control, pointer, restart, and health-witness boundary.
 
-## Evidence
+## Evidence and founder notification
 
 Every attempt receives a unique immutable JSON report. Reports contain:
 
@@ -108,17 +108,33 @@ Every attempt receives a unique immutable JSON report. Reports contain:
 - rollback evidence;
 - terminal outcome and errors.
 
-The ledger binds each cut-over exact commit to one manifest hash, terminal outcome, immutable report ID, and report SHA-256. A separate immutable notification record marks outcomes requiring founder attention. The polling wrapper records the downloaded manifest file hash only after a terminal successful or repeat-safe blocked result, so unchanged successful manifests do not generate repeated evidence while transient failures remain retryable. Tokens are read only from the configured environment variable for GitHub API requests and are never written to manifests, argv, reports, fixtures, or notifications.
+The ledger binds each cut-over exact commit to one manifest hash, terminal outcome, immutable report ID, and report SHA-256. A separate immutable notification record marks outcomes requiring founder attention. Tokens are read only from the configured environment variable for GitHub API requests and are never written to manifests, argv, reports, fixtures, or notifications.
+
+The stable bootstrap includes a separate evidence relay. It scans the durable local notification outbox, verifies that each notification points to a report inside the immutable reports root, binds both source files by SHA-256, and pushes them without force to:
+
+```text
+results/<machine-id>/self-updates/<attempt-id>/
+  update-report.json
+  notification.json
+  relay.json
+```
+
+The relay can target only a configured non-default branch. It retries non-fast-forward races with other results writers, refuses path replacement, and records the resulting Git commit in a local repeat-safe relay ledger. It runs before manifest deduplication and after every update attempt, so a temporary network or Git failure cannot make a completed update invisible.
+
+A scheduled workflow stored on protected `main` checks out the `results` branch as data, scans relayed notification records, and comments issue #32 using the repository-scoped GitHub Actions token. Comment markers are derived from the requested commit or manifest hash plus terminal outcome, so repeated polling cannot create duplicate founder notifications. Executable notifier code is loaded from `main`, never from the host-writable results branch.
+
+The polling wrapper records the downloaded manifest file hash only after both the update transaction and evidence relay succeed. Unchanged successful manifests therefore stop producing evidence, while transient update or relay failures remain retryable.
 
 ## Initial bootstrap and acceptance witnesses
 
-The initial installer is the only unavoidable local bootstrap because no external supervisor exists before it runs. It creates the stable environment, clones the current exact commit into the first versioned release, runs installation/Ruff/pytest/PowerShell parser checks, installs the stable wrappers, starts all five services, and writes an initial bootstrap report.
+The initial installer is the only unavoidable local bootstrap because no external supervisor exists before it runs. It creates the stable environment, clones the current exact commit into the first versioned release, runs installation/Ruff/pytest/PowerShell parser checks, installs the stable wrappers, starts all five services, writes an initial bootstrap report and notification, and attempts the first automatic results-branch relay. If that first Git push is temporarily unavailable, the installed updater retries the durable local evidence automatically.
 
 Issue #32 should close only after GitHub CI/review plus these real Windows witnesses exist:
 
-1. initial external-supervisor bootstrap report;
+1. initial external-supervisor bootstrap report relayed to GitHub;
 2. one approved exact-commit update with a complete successful health witness and no founder-run cutover commands;
 3. one deliberately broken reviewed test release that fails health and automatically restores the previous release;
-4. repeat-safe evidence that the rolled-back exact commit is blocked from another automatic cutover.
+4. repeat-safe evidence that the rolled-back exact commit is blocked from another automatic cutover;
+5. issue #32 receives the deduplicated GitHub evidence notifications without a founder copying local files.
 
 Issue #33 remains blocked until the rollback witness is accepted.

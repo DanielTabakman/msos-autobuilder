@@ -75,8 +75,8 @@ def _results_remote(
     patches = job / "patches"
     patches.mkdir(parents=True)
     patch_path = patches / "task-a.patch"
-    patch_path.write_text(patch, encoding="utf-8")
-    digest = patch_sha or hashlib.sha256(patch.encode("utf-8")).hexdigest()
+    patch_path.write_bytes(patch.encode("utf-8"))
+    digest = patch_sha or hashlib.sha256(patch_path.read_bytes()).hexdigest()
     report = {
         "version": 1,
         "job_id": job_id,

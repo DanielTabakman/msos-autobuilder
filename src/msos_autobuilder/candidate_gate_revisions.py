@@ -22,6 +22,11 @@ import yaml
 from . import candidate_gate as gate
 from . import candidate_gate_windows as windows
 
+_ROLLBACK_WITNESS_MARKER = (
+    Path(__file__).resolve().parents[2] / "config" / "rollback_witness.enabled"
+)
+_ROLLBACK_WITNESS_EXIT_CODE = 73
+
 
 def _mapping(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
@@ -101,6 +106,19 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config_path = Path(args.config).expanduser().resolve()
+    if _ROLLBACK_WITNESS_MARKER.is_file() and not args.once:
+        print(
+            json.dumps(
+                {
+                    "status": "deliberate-runtime-failure",
+                    "witness": "issue-32-automatic-rollback",
+                    "service": "candidate-gate",
+                    "publication_enabled": False,
+                },
+                sort_keys=True,
+            )
+        )
+        return _ROLLBACK_WITNESS_EXIT_CODE
     if args.once:
         processed = run_once(config_path)
         print(

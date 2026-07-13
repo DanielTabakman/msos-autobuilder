@@ -84,7 +84,7 @@ def make_fixture(tmp_path: Path, *, overlap: bool = False) -> tuple[Path, Path, 
     git(product_work, "config", "user.email", "fixture@example.invalid")
     value = product_work / "src" / "viz" / "value.py"
     value.parent.mkdir(parents=True)
-    value.write_text("VALUE = 1\n", encoding="utf-8")
+    value.write_bytes(b"VALUE = 1\n")
     git(product_work, "add", ".")
     git(product_work, "commit", "-m", "source")
     source_head = git(product_work, "rev-parse", "HEAD")
@@ -92,17 +92,17 @@ def make_fixture(tmp_path: Path, *, overlap: bool = False) -> tuple[Path, Path, 
     patch_work = tmp_path / "patch-work"
     git(None, "clone", str(product_work), str(patch_work))
     git(patch_work, "checkout", "--detach", source_head)
-    (patch_work / "src" / "viz" / "value.py").write_text("VALUE = 2\n", encoding="utf-8")
+    (patch_work / "src" / "viz" / "value.py").write_bytes(b"VALUE = 2\n")
     patch = git(patch_work, "diff", "--binary", "HEAD") + "\n"
 
     if overlap:
-        value.write_text("VALUE = 3\n", encoding="utf-8")
+        value.write_bytes(b"VALUE = 3\n")
         git(product_work, "add", ".")
         git(product_work, "commit", "-m", "overlap")
     else:
         docs = product_work / "docs" / "note.md"
         docs.parent.mkdir(parents=True)
-        docs.write_text("docs-only\n", encoding="utf-8")
+        docs.write_bytes(b"docs-only\n")
         git(product_work, "add", ".")
         git(product_work, "commit", "-m", "docs")
 
@@ -280,7 +280,7 @@ def test_controlled_publisher_detects_branch_drift(tmp_path: Path) -> None:
     git(drift, "config", "user.name", "Drift")
     git(drift, "config", "user.email", "drift@example.invalid")
     git(drift, "checkout", "-B", f"autobuilder/{job_id}", f"origin/autobuilder/{job_id}")
-    (drift / "drift.txt").write_text("drift\n", encoding="utf-8")
+    (drift / "drift.txt").write_bytes(b"drift\n")
     git(drift, "add", ".")
     git(drift, "commit", "-m", "drift")
     git(drift, "push", "origin", f"HEAD:refs/heads/autobuilder/{job_id}")

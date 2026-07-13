@@ -88,6 +88,7 @@ class SupervisorConfig:
     repo_url: str
     repository: str
     task_controller_script: Path
+    release_probe_script: Path
     managed_tasks: tuple[ManagedTask, ...]
     health_timeout_seconds: float = 90.0
     health_poll_seconds: float = 2.0
@@ -195,6 +196,22 @@ def _timestamp(value: datetime | None = None) -> str:
     return (value or _utc_now()).isoformat()
 
 
+def _redact(text: str) -> str:
+    redacted = re.sub(
+        r"([A-Za-z][A-Za-z0-9+.-]*://)[^/\s@]+@",
+        r"\1[redacted]@",
+        text,
+    )
+    redacted = re.sub(
+        r"(?i)\b(authorization\s*[:=]\s*bearer|token|access_token|password|api[_-]?key)"
+        r"(\s*[:=]\s*)([^\s&]+)",
+        r"\1\2[redacted]",
+        redacted,
+    )
+    redacted = re.sub(r"\b(?:github_pat_|gh[pousr]_)[A-Za-z0-9_]{16,}\b", "[redacted]", redacted)
+    return redacted
+
+
 def _bounded(text: str, limit: int = 16_000) -> str:
     if len(text) <= limit:
         return text
@@ -237,7 +254,7 @@ def parse_update_manifest(text: str) -> UpdateManifest:
     try:
         loaded = yaml.safe_load(text)
     except yaml.YAMLError as exc:
-        raise ManifestError(f"invalid update manifest YAML: {exc}") from exc
+        raise ManifestError("invalid update manifest YAML") from exc
     raw = _safe_mapping(loaded, "update manifest")
     if raw.get("version") != 1:
         raise ManifestError("only update manifest version 1 is supported")
@@ -322,7 +339,7 @@ def load_supervisor_config(path: str | Path) -> SupervisorConfig:
     try:
         loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
-        raise SupervisorError(f"invalid supervisor config YAML: {exc}") from exc
+        raise SupervisorError("invalid supervisor config YAML") from exc
     raw = _safe_mapping(loaded, "supervisor config")
     if raw.get("version") != 1:
         raise SupervisorError("only supervisor config version 1 is supported")
@@ -378,6 +395,7 @@ def load_supervisor_config(path: str | Path) -> SupervisorConfig:
         repo_url=repo_url,
         repository=repository,
         task_controller_script=resolve(raw.get("task_controller_script"), "task_controller_script"),
+        release_probe_script=resolve(raw.get("release_probe_script"), "release_probe_script"),
         managed_tasks=tuple(tasks),
         health_timeout_seconds=health_timeout,
         health_poll_seconds=health_poll,
@@ -456,8 +474,8 @@ def default_command_executor(argv: Sequence[str], cwd: Path, timeout: float) -> 
         cwd=str(cwd),
         returncode=completed.returncode,
         duration_seconds=time.monotonic() - started,
-        stdout=_bounded(completed.stdout),
-        stderr=_bounded(completed.stderr),
+        stdout=_bounded(_redact(completed.stdout)),
+        stderr=_bounded(_redact(completed.stderr)),
     )
 
 
@@ -512,7 +530,7 @@ class GitHubCommitStatusVerifier:
                 observed[context] = str(status.get("state") or "")
         for check in check_payload.get("check_runs", []):
             name = str(check.get("name") or "")
-            if name:
+            if name and name not in observed:
                 observed[name] = str(check.get("conclusion") or check.get("status") or "")
 
         failures = [
@@ -554,8 +572,9 @@ class ReleaseBuilder:
             timeout,
         )
         if not result.passed:
-            raise SupervisorError(
-                f"{name} failed with exit {result.returncode}: {result.stderr or result.stdout}"
+            raise StagingError(
+                f"{name} failed with exit {result.returncode}: {result.stderr or result.stdout}",
+                (result,),
             )
         return result
 
@@ -567,7 +586,7 @@ class ReleaseBuilder:
             raise SupervisorError("manifest repository identity does not match supervisor config")
         final_path = self.config.versions_root / manifest.commit
         release_marker = final_path / "release.json"
-        if final_path.exists():
+        if final_path.exists() and release_marker.is_file():
             marker = _load_json(release_marker, {})
             if marker.get("commit") != manifest.commit:
                 raise SupervisorError("existing version directory has a mismatched release marker")
@@ -580,8 +599,18 @@ class ReleaseBuilder:
             verify_expected_files(final_path, manifest.expected_files)
             return StagedRelease(manifest.commit, final_path, (), reused=True)
 
+        if final_path.exists():
+            active = _load_json(self.config.active_pointer, {})
+            active_path = (
+                Path(str(active.get("release_path") or "")) if isinstance(active, dict) else Path()
+            )
+            if active_path and active_path.resolve() == final_path.resolve():
+                raise SupervisorError(
+                    "active release directory is incomplete and may not be replaced"
+                )
+            shutil.rmtree(final_path)
         self.config.versions_root.mkdir(parents=True, exist_ok=True)
-        staging_path = self.config.versions_root / f".{manifest.commit}.staging-{uuid.uuid4().hex}"
+        staging_path = final_path
         staging_path.mkdir(parents=True, exist_ok=False)
         checks: list[CheckResult] = []
         try:
@@ -631,6 +660,10 @@ class ReleaseBuilder:
                 manifest.repository, manifest.commit, manifest.required_status_contexts
             )
             verify_expected_files(staging_path, manifest.expected_files)
+            if not self.config.release_probe_script.is_file():
+                raise SupervisorError(
+                    f"stable release health probe is missing: {self.config.release_probe_script}"
+                )
 
             venv_path = staging_path / ".venv"
             venv_python = (
@@ -656,13 +689,10 @@ class ReleaseBuilder:
                 ("ruff", [str(venv_python), "-m", "ruff", "check", "."], 300.0),
                 ("pytest", [str(venv_python), "-m", "pytest", "-q"], 1800.0),
                 (
-                    "release-smoke",
+                    "release-health-probe",
                     [
                         str(venv_python),
-                        "-m",
-                        "msos_autobuilder.self_update_supervisor",
-                        "release-smoke",
-                        "--release-root",
+                        str(self.config.release_probe_script),
                         str(staging_path),
                     ],
                     120.0,
@@ -710,12 +740,11 @@ class ReleaseBuilder:
                     "staged_at": _timestamp(),
                 },
             )
-            os.replace(staging_path, final_path)
             return StagedRelease(manifest.commit, final_path, tuple(checks), reused=False)
         except Exception as exc:
             shutil.rmtree(staging_path, ignore_errors=True)
             if isinstance(exc, StagingError):
-                raise
+                raise StagingError(str(exc), [*checks, *exc.checks]) from exc
             raise StagingError(str(exc), checks) from exc
 
 
@@ -908,7 +937,10 @@ def _exclusive_update_lock(config: SupervisorConfig):
             descriptor = os.open(config.lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             break
         except FileExistsError as exc:
-            existing = _load_json(config.lock_path, {})
+            try:
+                existing = _load_json(config.lock_path, {})
+            except (OSError, ValueError, json.JSONDecodeError):
+                existing = {}
             pid = existing.get("pid") if isinstance(existing, dict) else None
             if isinstance(pid, int) and _pid_is_running(pid):
                 raise SupervisorError(
@@ -941,9 +973,63 @@ class UpdateSupervisor:
         self.task_controller = task_controller
         self.health_verifier = health_verifier
 
+    def _restore_previous_release(
+        self,
+        task_names: Sequence[str],
+        previous_commit: str,
+        previous_release_path: Path,
+    ) -> tuple[dict[str, Any], list[str]]:
+        started = _utc_now()
+        errors: list[str] = []
+        evidence: dict[str, Any] = {
+            "performed": True,
+            "restored_commit": previous_commit,
+        }
+        try:
+            self.task_controller.stop(task_names)
+        except Exception as exc:
+            errors.append(f"rollback stop failed: {exc}")
+        try:
+            _write_active_pointer(self.config, previous_commit, previous_release_path)
+            evidence["pointer_restored"] = True
+        except Exception as exc:
+            errors.append(f"rollback pointer restore failed: {exc}")
+            evidence["pointer_restored"] = False
+        try:
+            self.task_controller.start(task_names)
+            evidence["tasks_started"] = True
+        except Exception as exc:
+            errors.append(f"rollback start failed: {exc}")
+            evidence["tasks_started"] = False
+        try:
+            evidence.update(self.health_verifier.wait_for(previous_commit, started))
+        except Exception as exc:
+            errors.append(f"rollback health failed: {exc}")
+        evidence["passed"] = not errors
+        if errors:
+            evidence["errors"] = errors
+        return evidence, errors
+
     def apply(self, manifest_text: str) -> tuple[UpdateReport, Path]:
-        manifest = parse_update_manifest(manifest_text)
         attempt_id = _utc_now().strftime("%Y%m%dT%H%M%S.%fZ") + f"-{uuid.uuid4().hex[:12]}"
+        try:
+            manifest = parse_update_manifest(manifest_text)
+        except Exception as exc:
+            report = UpdateReport(
+                version=1,
+                attempt_id=attempt_id,
+                attempted_at=_timestamp(),
+                release_id="invalid-manifest",
+                requested_commit="",
+                manifest_sha256=hashlib.sha256(manifest_text.encode("utf-8")).hexdigest(),
+                outcome="rejected_manifest",
+                cutover={"performed": False},
+                errors=[str(exc)],
+            )
+            report_path = _write_immutable_report(self.config, report)
+            _write_update_notification(self.config, report, report_path)
+            return report, report_path
+
         report = UpdateReport(
             version=1,
             attempt_id=attempt_id,
@@ -971,6 +1057,18 @@ class UpdateSupervisor:
                     if prior_entry.get("manifest_sha256") != manifest.manifest_sha256:
                         raise SupervisorError(
                             "the exact commit is already bound to a different approved manifest"
+                        )
+                    prior_report_id = str(prior_entry.get("report_attempt_id") or "")
+                    prior_report_hash = str(prior_entry.get("report_sha256") or "")
+                    prior_report = self.config.reports_root / f"{prior_report_id}.json"
+                    if (
+                        not prior_report_id
+                        or not _SHA256_RE.fullmatch(prior_report_hash)
+                        or not prior_report.is_file()
+                        or _file_sha256(prior_report) != prior_report_hash
+                    ):
+                        raise SupervisorError(
+                            "update ledger entry is missing its immutable report evidence"
                         )
                     report.outcome = (
                         "already_applied"
@@ -1003,16 +1101,20 @@ class UpdateSupervisor:
                 task_names = [task.task_name for task in self.config.managed_tasks]
                 cutover_started = _utc_now()
                 _atomic_write_json(self.config.previous_pointer, active)
-                self.task_controller.stop(task_names)
-                _write_active_pointer(self.config, staged.commit, staged.release_path)
-                self.task_controller.start(task_names)
                 report.cutover = {
                     "performed": True,
                     "at": _timestamp(cutover_started),
                     "from_commit": previous_commit,
                     "to_commit": staged.commit,
+                    "pointer_swapped": False,
+                    "tasks_started": False,
                 }
                 try:
+                    self.task_controller.stop(task_names)
+                    _write_active_pointer(self.config, staged.commit, staged.release_path)
+                    report.cutover["pointer_swapped"] = True
+                    self.task_controller.start(task_names)
+                    report.cutover["tasks_started"] = True
                     health = self.health_verifier.wait_for(staged.commit, cutover_started)
                     report.health = {"passed": True, **health}
                     report.rollback = {"performed": False}
@@ -1023,35 +1125,16 @@ class UpdateSupervisor:
                         "report_attempt_id": attempt_id,
                         "recorded_at": _timestamp(),
                     }
-                except Exception as health_exc:
-                    report.health = {"passed": False, "error": str(health_exc)}
-                    rollback_started = _utc_now()
-                    rollback_error: str | None = None
-                    try:
-                        self.task_controller.stop(task_names)
-                        _write_active_pointer(self.config, previous_commit, previous_release_path)
-                        self.task_controller.start(task_names)
-                        rollback_health = self.health_verifier.wait_for(
-                            previous_commit, rollback_started
-                        )
-                        report.rollback = {
-                            "performed": True,
-                            "passed": True,
-                            "restored_commit": previous_commit,
-                            **rollback_health,
-                        }
-                    except Exception as rollback_exc:
-                        rollback_error = str(rollback_exc)
-                        report.rollback = {
-                            "performed": True,
-                            "passed": False,
-                            "restored_commit": previous_commit,
-                            "error": rollback_error,
-                        }
-                    report.outcome = "rolled_back" if rollback_error is None else "rollback_failed"
-                    report.errors.append(str(health_exc))
-                    if rollback_error:
-                        report.errors.append(rollback_error)
+                except Exception as cutover_exc:
+                    report.cutover["error"] = str(cutover_exc)
+                    report.health = {"passed": False, "error": str(cutover_exc)}
+                    rollback, rollback_errors = self._restore_previous_release(
+                        task_names, previous_commit, previous_release_path
+                    )
+                    report.rollback = rollback
+                    report.outcome = "rolled_back" if not rollback_errors else "rollback_failed"
+                    report.errors.append(str(cutover_exc))
+                    report.errors.extend(rollback_errors)
                     ledger_entry = {
                         "manifest_sha256": manifest.manifest_sha256,
                         "outcome": report.outcome,
@@ -1078,28 +1161,6 @@ class UpdateSupervisor:
         return report, report_path
 
 
-def release_smoke(release_root: str | Path) -> None:
-    root = Path(release_root).resolve()
-    required = (
-        root / "pyproject.toml",
-        root / "src" / "msos_autobuilder" / "persistent_host.py",
-        root / "src" / "msos_autobuilder" / "results_relay.py",
-        root / "src" / "msos_autobuilder" / "candidate_gate_revisions.py",
-        root / "src" / "msos_autobuilder" / "revision_loop.py",
-        root / "src" / "msos_autobuilder" / "controlled_publisher.py",
-    )
-    missing = [str(path.relative_to(root)) for path in required if not path.is_file()]
-    if missing:
-        raise SupervisorError(
-            "release smoke is missing managed entry points: " + ", ".join(missing)
-        )
-    __import__("msos_autobuilder.persistent_host")
-    __import__("msos_autobuilder.results_relay")
-    __import__("msos_autobuilder.candidate_gate_revisions")
-    __import__("msos_autobuilder.revision_loop")
-    __import__("msos_autobuilder.controlled_publisher")
-
-
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1112,18 +1173,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "rollback", help="restore the recorded previous release"
     )
     rollback_parser.add_argument("--config", required=True)
-
-    smoke_parser = subparsers.add_parser("release-smoke", help="validate managed entry points")
-    smoke_parser.add_argument("--release-root", required=True)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    if args.command == "release-smoke":
-        release_smoke(args.release_root)
-        return 0
-
     config = load_supervisor_config(args.config)
     task_controller = PowerShellTaskController(config.task_controller_script)
     health_verifier = FileHealthVerifier(config, task_controller)

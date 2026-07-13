@@ -1,0 +1,16 @@
+version: 1
+release_id: healthy-self-update-witness-v1
+approved: true
+repository: DanielTabakman/msos-autobuilder
+repo_url: https://github.com/DanielTabakman/msos-autobuilder.git
+commit: self
+required_status_contexts:
+  - CI
+expected_files:
+  - pyproject.toml
+  - src/msos_autobuilder/self_update_supervisor.py
+  - src/msos_autobuilder/self_update_evidence_relay.py
+  - scripts/run_windows_managed_service.ps1
+  - scripts/invoke_windows_self_update.ps1
+  - scripts/windows_self_update_task_control.ps1
+supervisor_update: false

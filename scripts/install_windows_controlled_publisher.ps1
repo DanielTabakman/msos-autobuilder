@@ -70,7 +70,6 @@ $ManagedTasks = @(
     $TaskName
 )
 
-
 if (-not (Test-Path $VenvPython)) {
     & $Bootstrap -HostRoot $HostRoot
     if ($LASTEXITCODE -ne 0) {
@@ -146,7 +145,7 @@ product_base_branch: $ProductBaseYaml
 machine_id: $MachineIdYaml
 poll_seconds: $PollSeconds
 plans:
-  $WitnessYaml:
+  ${WitnessYaml}:
     branch: $BranchYaml
     title: $TitleYaml
     commit_message: $CommitYaml
@@ -228,76 +227,76 @@ try {
     [Environment]::SetEnvironmentVariable("PPE_GIT_AUTONOMOUS_WRITES", $null, "User")
     [Environment]::SetEnvironmentVariable("PPE_ALLOW_LEGACY_GIT_PUBLISH", $null, "User")
 
-$ExistingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-if ($ExistingTask) {
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
-}
+    $ExistingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($ExistingTask) {
+        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+    }
 
-Write-Host "Running the controlled publisher once in the foreground..." -ForegroundColor Cyan
-$PreviousPrompt = $env:GIT_TERMINAL_PROMPT
-$PreviousGitConfigCount = $env:GIT_CONFIG_COUNT
-$PreviousGitConfigKey = $env:GIT_CONFIG_KEY_0
-$PreviousGitConfigValue = $env:GIT_CONFIG_VALUE_0
-$env:GIT_TERMINAL_PROMPT = "1"
-$env:GIT_CONFIG_COUNT = "1"
-$env:GIT_CONFIG_KEY_0 = "core.autocrlf"
-$env:GIT_CONFIG_VALUE_0 = "false"
-try {
-    & $VenvPython -m msos_autobuilder.controlled_publisher `
-        --config $PublisherConfig `
-        --once | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        throw "The foreground controlled publisher failed."
+    Write-Host "Running the controlled publisher once in the foreground..." -ForegroundColor Cyan
+    $PreviousPrompt = $env:GIT_TERMINAL_PROMPT
+    $PreviousGitConfigCount = $env:GIT_CONFIG_COUNT
+    $PreviousGitConfigKey = $env:GIT_CONFIG_KEY_0
+    $PreviousGitConfigValue = $env:GIT_CONFIG_VALUE_0
+    $env:GIT_TERMINAL_PROMPT = "1"
+    $env:GIT_CONFIG_COUNT = "1"
+    $env:GIT_CONFIG_KEY_0 = "core.autocrlf"
+    $env:GIT_CONFIG_VALUE_0 = "false"
+    try {
+        & $VenvPython -m msos_autobuilder.controlled_publisher `
+            --config $PublisherConfig `
+            --once | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            throw "The foreground controlled publisher failed."
+        }
     }
-}
-finally {
-    if ($null -eq $PreviousPrompt) {
-        Remove-Item Env:\GIT_TERMINAL_PROMPT -ErrorAction SilentlyContinue
+    finally {
+        if ($null -eq $PreviousPrompt) {
+            Remove-Item Env:\GIT_TERMINAL_PROMPT -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:GIT_TERMINAL_PROMPT = $PreviousPrompt
+        }
+        if ($null -eq $PreviousGitConfigCount) {
+            Remove-Item Env:\GIT_CONFIG_COUNT -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:GIT_CONFIG_COUNT = $PreviousGitConfigCount
+        }
+        if ($null -eq $PreviousGitConfigKey) {
+            Remove-Item Env:\GIT_CONFIG_KEY_0 -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:GIT_CONFIG_KEY_0 = $PreviousGitConfigKey
+        }
+        if ($null -eq $PreviousGitConfigValue) {
+            Remove-Item Env:\GIT_CONFIG_VALUE_0 -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:GIT_CONFIG_VALUE_0 = $PreviousGitConfigValue
+        }
     }
-    else {
-        $env:GIT_TERMINAL_PROMPT = $PreviousPrompt
-    }
-    if ($null -eq $PreviousGitConfigCount) {
-        Remove-Item Env:\GIT_CONFIG_COUNT -ErrorAction SilentlyContinue
-    }
-    else {
-        $env:GIT_CONFIG_COUNT = $PreviousGitConfigCount
-    }
-    if ($null -eq $PreviousGitConfigKey) {
-        Remove-Item Env:\GIT_CONFIG_KEY_0 -ErrorAction SilentlyContinue
-    }
-    else {
-        $env:GIT_CONFIG_KEY_0 = $PreviousGitConfigKey
-    }
-    if ($null -eq $PreviousGitConfigValue) {
-        Remove-Item Env:\GIT_CONFIG_VALUE_0 -ErrorAction SilentlyContinue
-    }
-    else {
-        $env:GIT_CONFIG_VALUE_0 = $PreviousGitConfigValue
-    }
-}
 
-$PowerShellExe = (Get-Command powershell.exe -ErrorAction Stop).Source
-$TaskArgument = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$RunnerScript`""
-$UserId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-$Action = New-ScheduledTaskAction -Execute $PowerShellExe -Argument $TaskArgument
-$Trigger = New-ScheduledTaskTrigger -AtLogOn -User $UserId
-$Principal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType Interactive -RunLevel Limited
-$Settings = New-ScheduledTaskSettingsSet `
-    -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries `
-    -MultipleInstances IgnoreNew `
-    -RestartCount 3 `
-    -RestartInterval (New-TimeSpan -Minutes 1)
+    $PowerShellExe = (Get-Command powershell.exe -ErrorAction Stop).Source
+    $TaskArgument = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$RunnerScript`""
+    $UserId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $Action = New-ScheduledTaskAction -Execute $PowerShellExe -Argument $TaskArgument
+    $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $UserId
+    $Principal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType Interactive -RunLevel Limited
+    $Settings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -MultipleInstances IgnoreNew `
+        -RestartCount 3 `
+        -RestartInterval (New-TimeSpan -Minutes 1)
 
-Register-ScheduledTask `
-    -TaskName $TaskName `
-    -Action $Action `
-    -Trigger $Trigger `
-    -Principal $Principal `
-    -Settings $Settings `
-    -Description "Single-writer draft-only MSOS product PR publisher" `
-    -Force | Out-Null
+    Register-ScheduledTask `
+        -TaskName $TaskName `
+        -Action $Action `
+        -Trigger $Trigger `
+        -Principal $Principal `
+        -Settings $Settings `
+        -Description "Single-writer draft-only MSOS product PR publisher" `
+        -Force | Out-Null
 
     $CutoverSucceeded = $true
 }
@@ -308,7 +307,7 @@ finally {
     }
 }
 
-if (-not $CutoverSucceedd) {
+if (-not $CutoverSucceeded) {
     throw "Controlled publisher cutover did not complete."
 }
 

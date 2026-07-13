@@ -25,7 +25,8 @@ def main() -> int:
     actual = str(getattr(record_module, "PAYLOAD_SCHEMA_VERSION", ""))
     if actual != EXPECTED_VERSION:
         print(
-            f"canonical frozen-evaluation write version changed: {actual!r} != {EXPECTED_VERSION!r}",
+            "canonical frozen-evaluation write version changed: "
+            f"{actual!r} != {EXPECTED_VERSION!r}",
             file=sys.stderr,
         )
         return 1

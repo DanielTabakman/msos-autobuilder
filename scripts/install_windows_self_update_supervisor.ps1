@@ -85,6 +85,16 @@ $VersionPath = Join-Path $VersionsRoot $CurrentCommit
 $ActivePointer = Join-Path $StateRoot "active-release.json"
 $BootstrapReport = Join-Path $ReportsRoot ("bootstrap-" + $CurrentCommit + ".json")
 
+if (Test-Path $ActivePointer -PathType Leaf) {
+    $ExistingActive = Get-Content -Path $ActivePointer -Raw | ConvertFrom-Json
+    if ([string]$ExistingActive.commit -ne $CurrentCommit) {
+        throw "A different managed release is already active; use the stable supervisor, not the bootstrap installer."
+    }
+    if (-not (Test-Path (Join-Path $VersionPath "release.json") -PathType Leaf)) {
+        throw "The active release directory is incomplete; do not replace it through the bootstrap installer."
+    }
+}
+
 New-Item -ItemType Directory -Force -Path $BootstrapRoot, $VersionsRoot, $StateRoot, $ReportsRoot, $LogsRoot, $TemplatesRoot | Out-Null
 
 $SourcePython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
@@ -99,37 +109,39 @@ if (-not (Test-Path $BootstrapPython -PathType Leaf)) {
 Invoke-Checked -Failure "Could not install stable supervisor dependencies" -Command { & $BootstrapPython -m pip install --disable-pip-version-check "PyYAML>=6.0" }
 
 Copy-Item -Force (Join-Path $RepoRoot "src\msos_autobuilder\self_update_supervisor.py") (Join-Path $BootstrapRoot "self_update_supervisor.py")
+Copy-Item -Force (Join-Path $RepoRoot "scripts\managed_release_health_probe.py") (Join-Path $BootstrapRoot "managed_release_health_probe.py")
 Copy-Item -Force (Join-Path $RepoRoot "scripts\windows_self_update_task_control.ps1") (Join-Path $BootstrapRoot "windows_self_update_task_control.ps1")
 Copy-Item -Force (Join-Path $RepoRoot "scripts\run_windows_managed_service.ps1") (Join-Path $BootstrapRoot "run_windows_managed_service.ps1")
 Copy-Item -Force (Join-Path $RepoRoot "scripts\invoke_windows_self_update.ps1") (Join-Path $BootstrapRoot "invoke_windows_self_update.ps1")
 Copy-Item -Force (Join-Path $RepoRoot "scripts\rollback_windows_self_update.ps1") (Join-Path $BootstrapRoot "rollback_windows_self_update.ps1")
 
 if (-not (Test-Path (Join-Path $VersionPath "release.json") -PathType Leaf)) {
-    $StagingPath = Join-Path $VersionsRoot ("." + $CurrentCommit + ".bootstrap-" + [Guid]::NewGuid().ToString("N"))
+    if (Test-Path $VersionPath) { Remove-Item -Recurse -Force $VersionPath }
     try {
-        Invoke-Checked -Failure "Could not clone the current exact commit into versioned staging" -Command { & $Git -c core.autocrlf=false clone --quiet --no-hardlinks --no-checkout $RepoRoot $StagingPath }
-        Invoke-Checked -Failure "Could not check out the current exact commit" -Command { & $Git -C $StagingPath -c core.autocrlf=false checkout --quiet --detach $CurrentCommit }
-        $StagedHead = (& $Git -C $StagingPath rev-parse HEAD).Trim()
-        if ($StagedHead -ne $CurrentCommit) { throw "Bootstrap staging HEAD does not match the exact current commit." }
-        $VersionPython = Join-Path $StagingPath ".venv\Scripts\python.exe"
-        Invoke-Checked -Failure "Could not create the versioned release environment" -Command { & $SourcePython -m venv (Join-Path $StagingPath ".venv") }
-        Invoke-Checked -Failure "Could not install the versioned release" -Command { & $VersionPython -m pip install --disable-pip-version-check -e "$StagingPath[dev]" }
-        Invoke-Checked -Failure "Ruff failed for the initial versioned release" -Command { & $VersionPython -m ruff check $StagingPath }
-        Invoke-Checked -Failure "Pytest failed for the initial versioned release" -Command { & $VersionPython -m pytest -q $StagingPath }
+        Invoke-Checked -Failure "Could not clone the current exact commit into its version directory" -Command { & $Git -c core.autocrlf=false clone --quiet --no-hardlinks --no-checkout $RepoRoot $VersionPath }
+        Invoke-Checked -Failure "Could not check out the current exact commit" -Command { & $Git -C $VersionPath -c core.autocrlf=false checkout --quiet --detach $CurrentCommit }
+        $StagedHead = (& $Git -C $VersionPath rev-parse HEAD).Trim()
+        if ($StagedHead -ne $CurrentCommit) { throw "Bootstrap version HEAD does not match the exact current commit." }
+        $VersionPython = Join-Path $VersionPath ".venv\Scripts\python.exe"
+        Invoke-Checked -Failure "Could not create the versioned release environment" -Command { & $SourcePython -m venv (Join-Path $VersionPath ".venv") }
+        Invoke-Checked -Failure "Could not install the versioned release" -Command { & $VersionPython -m pip install --disable-pip-version-check -e "$VersionPath[dev]" }
+        Invoke-Checked -Failure "Ruff failed for the initial versioned release" -Command { & $VersionPython -m ruff check $VersionPath }
+        Invoke-Checked -Failure "Pytest failed for the initial versioned release" -Command { & $VersionPython -m pytest -q $VersionPath }
+        Invoke-Checked -Failure "Managed release health probe failed" -Command { & $VersionPython (Join-Path $BootstrapRoot "managed_release_health_probe.py") $VersionPath }
         $ParserFailures = @()
-        Get-ChildItem -Path $StagingPath -Recurse -Filter *.ps1 | ForEach-Object {
+        Get-ChildItem -Path $VersionPath -Recurse -Filter *.ps1 | ForEach-Object {
             $Tokens = $null; $Errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$Tokens, [ref]$Errors) | Out-Null
             if ($Errors.Count -gt 0) { $ParserFailures += $_.FullName }
         }
         if ($ParserFailures.Count -gt 0) { throw "PowerShell parser checks failed: $($ParserFailures -join ', ')" }
-        Write-Utf8NoBom -Path (Join-Path $StagingPath "release.json") -Value ((@{
+        Write-Utf8NoBom -Path (Join-Path $VersionPath "release.json") -Value ((@{
             version = 1; commit = $CurrentCommit; release_id = "bootstrap-$CurrentCommit"; staged_at = [DateTimeOffset]::UtcNow.ToString("o")
         } | ConvertTo-Json -Depth 10) + [Environment]::NewLine)
-        Move-Item -Path $StagingPath -Destination $VersionPath
     }
-    finally {
-        if (Test-Path $StagingPath) { Remove-Item -Recurse -Force $StagingPath }
+    catch {
+        if (Test-Path $VersionPath) { Remove-Item -Recurse -Force $VersionPath }
+        throw
     }
 }
 
@@ -148,6 +160,7 @@ $HostRootYaml = Convert-ToYamlQuoted $HostRoot
 $RepoUrlYaml = Convert-ToYamlQuoted $RepoUrl
 $RepositoryYaml = Convert-ToYamlQuoted $Repository
 $TaskControlYaml = Convert-ToYamlQuoted (Join-Path $BootstrapRoot "windows_self_update_task_control.ps1")
+$ReleaseProbeYaml = Convert-ToYamlQuoted (Join-Path $BootstrapRoot "managed_release_health_probe.py")
 $SupervisorYaml = @"
 version: 1
 supervisor_root: $SupervisorRootYaml
@@ -155,6 +168,7 @@ host_root: $HostRootYaml
 repo_url: $RepoUrlYaml
 repository: $RepositoryYaml
 task_controller_script: $TaskControlYaml
+release_probe_script: $ReleaseProbeYaml
 health_timeout_seconds: 90
 health_poll_seconds: 2
 managed_tasks:

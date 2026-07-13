@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "install_windows_self_update_supervisor.ps1"
 INVOKER = ROOT / "scripts" / "invoke_windows_self_update.ps1"

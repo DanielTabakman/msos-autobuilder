@@ -72,6 +72,11 @@ $CurrentCommit = (& $Git -C $RepoRoot rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or $CurrentCommit -notmatch "^[0-9a-f]{40}$") {
     throw "Could not resolve the exact current Autobuilder commit."
 }
+$DirtyPaths = @(& $Git -C $RepoRoot status --porcelain --untracked-files=all)
+if ($LASTEXITCODE -ne 0) { throw "Could not verify the bootstrap checkout state." }
+if ($DirtyPaths.Count -gt 0) {
+    throw "The bootstrap checkout must be clean so the stable supervisor matches the exact commit."
+}
 
 $BootstrapRoot = Join-Path $SupervisorRoot "bootstrap"
 $BootstrapVenv = Join-Path $SupervisorRoot "bootstrap-venv"
@@ -171,6 +176,7 @@ task_controller_script: $TaskControlYaml
 release_probe_script: $ReleaseProbeYaml
 health_timeout_seconds: 90
 health_poll_seconds: 2
+health_stability_seconds: 10
 managed_tasks:
   - service: host
     task_name: 'MSOS Autobuilder Host'
@@ -239,6 +245,7 @@ $HealthDeadline = (Get-Date).AddSeconds(90)
 $TaskStates = @{}
 $ServiceWitnesses = @{}
 $Healthy = $false
+$HealthySince = $null
 while ((Get-Date) -lt $HealthDeadline) {
     $Healthy = $true
     $TaskStates = @{}
@@ -268,7 +275,13 @@ while ((Get-Date) -lt $HealthDeadline) {
             $ServiceWitnesses[$Managed.service] = @{ error = $_.Exception.Message }
         }
     }
-    if ($Healthy) { break }
+    if ($Healthy) {
+        if ($null -eq $HealthySince) { $HealthySince = Get-Date }
+        if (((Get-Date) - $HealthySince).TotalSeconds -ge 10) { break }
+    }
+    else {
+        $HealthySince = $null
+    }
     Start-Sleep -Seconds 2
 }
 if (-not $Healthy) {

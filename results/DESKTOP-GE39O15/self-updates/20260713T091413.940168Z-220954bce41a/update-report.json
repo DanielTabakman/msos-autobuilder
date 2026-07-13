@@ -1,0 +1,218 @@
+{
+  "attempt_id": "20260713T091413.940168Z-220954bce41a",
+  "attempted_at": "2026-07-13T09:14:13.943105+00:00",
+  "checks": [
+    {
+      "argv": [
+        "git",
+        "init",
+        "--quiet"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\9b24ac7ed8fe572da93248c07200eef89cc68877",
+      "duration_seconds": 0.09140649999608286,
+      "name": "git-init",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "git",
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/DanielTabakman/msos-autobuilder.git"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\9b24ac7ed8fe572da93248c07200eef89cc68877",
+      "duration_seconds": 0.05910170002607629,
+      "name": "git-add-origin",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-c",
+        "core.autocrlf=false",
+        "fetch",
+        "--depth",
+        "1",
+        "origin",
+        "9b24ac7ed8fe572da93248c07200eef89cc68877"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\9b24ac7ed8fe572da93248c07200eef89cc68877",
+      "duration_seconds": 0.6248913999879733,
+      "name": "git-fetch-exact-commit",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "From https://github.com/DanielTabakman/msos-autobuilder\n * branch            9b24ac7ed8fe572da93248c07200eef89cc68877 -> FETCH_HEAD\n",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-c",
+        "core.autocrlf=false",
+        "checkout",
+        "--detach",
+        "FETCH_HEAD"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\9b24ac7ed8fe572da93248c07200eef89cc68877",
+      "duration_seconds": 0.1589642999751959,
+      "name": "git-checkout-exact-commit",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "HEAD is now at 9b24ac7 Prepare healthy zero-touch self-update witness (#37)\n",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\9b24ac7ed8fe572da93248c07200eef89cc68877",
+      "duration_seconds": 0.04723910000757314,
+      "name": "git-rev-parse-head",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "9b24ac7ed8fe572da93248c07200eef89cc68877\n"
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\bootstrap-venv\\Scripts\\python.exe",
+        "-m",
+        "venv",
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\9b24ac7ed8fe572da93248c07200eef89cc68877\\.venv"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\9b24ac7ed8fe572da93248c07200eef89cc68877",
+      "duration_seconds": 6.317947000003187,
+      "name": "create-version-venv",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\9b24ac7ed8fe572da93248c07200eef89cc68877\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+        "-e",
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\9b24ac7ed8fe572da93248c07200eef89cc68877[dev]"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\9b24ac7ed8fe572da93248c07200eef89cc68877",
+      "duration_seconds": 12.793226900015725,
+      "name": "install-release",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "Obtaining file:///C:/Users/USER/.msos-autobuilder-supervisor/versions/9b24ac7ed8fe572da93248c07200eef89cc68877\n  Installing build dependencies: started\n  Installing build dependencies: finished with status 'done'\n  Checking if build backend supports build_editable: started\n  Checking if build backend supports build_editable: finished with status 'done'\n  Getting requirements to build editable: started\n  Getting requirements to build editable: finished with status 'done'\n  Preparing editable metadata (pyproject.toml): started\n  Preparing editable metadata (pyproject.toml): finished with status 'done'\nCollecting PyYAML>=6.0 (from msos-autobuilder==0.1.0)\n  Using cached pyyaml-6.0.3-cp314-cp314-win_amd64.whl.metadata (2.4 kB)\nCollecting pytest>=8.0 (from msos-autobuilder==0.1.0)\n  Using cached pytest-9.1.1-py3-none-any.whl.metadata (7.6 kB)\nCollecting ruff>=0.9 (from msos-autobuilder==0.1.0)\n  Using cached ruff-0.15.21-py3-none-win_amd64.whl.metadata (27 kB)\nCollecting colorama>=0.4 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached colorama-0.4.6-py2.py3-none-any.whl.metadata (17 kB)\nCollecting iniconfig>=1.0.1 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached iniconfig-2.3.0-py3-none-any.whl.metadata (2.5 kB)\nCollecting packaging>=22 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached packaging-26.2-py3-none-any.whl.metadata (3.5 kB)\nCollecting pluggy<2,>=1.5 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached pluggy-1.6.0-py3-none-any.whl.metadata (4.8 kB)\nCollecting pygments>=2.7.2 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached pygments-2.20.0-py3-none-any.whl.metadata (2.5 kB)\nUsing cached pytest-9.1.1-py3-none-any.whl (386 kB)\nUsing cached pluggy-1.6.0-py3-none-any.whl (20 kB)\nUsing cached colorama-0.4.6-py2.py3-none-any.whl (25 kB)\nUsing cached iniconfig-2.3.0-py3-none-any.whl (7.5 kB)\nUsing cached packaging-26.2-py3-none-any.whl (100 kB)\nUsing cached pygments-2.20.0-py3-none-any.whl (1.2 MB)\nUsing cached pyyaml-6.0.3-cp314-cp314-win_amd64.whl (156 kB)\nUsing cached ruff-0.15.21-py3-none-win_amd64.whl (12.0 MB)\nBuilding wheels for collected packages: msos-autobuilder\n  Building editable for msos-autobuilder (pyproject.toml): started\n  Building editable for msos-autobuilder (pyproject.toml): finished with status 'done'\n  Created wheel for msos-autobuilder: filename=msos_autobuilder-0.1.0-0.editable-py3-none-any.whl size=4704 sha256=2d73032a43b61808c0d50918257e1595a8091b33944324476ec7530d57b96d66\n  Stored in directory: C:\\Users\\USER\\AppData\\Local\\Temp\\pip-ephem-wheel-cache-6gopxz9y\\wheels\\84\\12\\b2\\533a3ab47291e8fcbd6ae4dea48fc9a5877203d0a5901a4988\nSuccessfully built msos-autobuilder\nInstalling collected packages: ruff, PyYAML, pygments, pluggy, packaging, iniconfig, colorama, pytest, msos-autobuilder\n\nSuccessfully installed PyYAML-6.0.3 colorama-0.4.6 iniconfig-2.3.0 msos-autobuilder-0.1.0 packaging-26.2 pluggy-1.6.0 pygments-2.20.0 pytest-9.1.1 ruff-0.15.21\n"
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\9b24ac7ed8fe572da93248c07200eef89cc68877\\.venv\\Scripts\\python.exe",
+        "-m",
+        "ruff",
+        "check",
+        "."
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\9b24ac7ed8fe572da93248c07200eef89cc68877",
+      "duration_seconds": 0.2281170999922324,
+      "name": "ruff",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "All checks passed!\n"
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\9b24ac7ed8fe572da93248c07200eef89cc68877\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\9b24ac7ed8fe572da93248c07200eef89cc68877",
+      "duration_seconds": 73.57402849997743,
+      "name": "pytest",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "........................................................................ [ 64%]\n........................................                                 [100%]\n112 passed in 72.98s (0:01:12)\n"
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\9b24ac7ed8fe572da93248c07200eef89cc68877\\.venv\\Scripts\\python.exe",
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\bootstrap\\managed_release_health_probe.py",
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\9b24ac7ed8fe572da93248c07200eef89cc68877"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\9b24ac7ed8fe572da93248c07200eef89cc68877",
+      "duration_seconds": 0.3520021000003908,
+      "name": "release-health-probe",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "{\"modules\": {\"msos_autobuilder.candidate_gate_revisions\": \"C:\\\\Users\\\\USER\\\\.msos-autobuilder-supervisor\\\\versions\\\\9b24ac7ed8fe572da93248c07200eef89cc68877\\\\src\\\\msos_autobuilder\\\\candidate_gate_revisions.py\", \"msos_autobuilder.controlled_publisher\": \"C:\\\\Users\\\\USER\\\\.msos-autobuilder-supervisor\\\\versions\\\\9b24ac7ed8fe572da93248c07200eef89cc68877\\\\src\\\\msos_autobuilder\\\\controlled_publisher.py\", \"msos_autobuilder.persistent_host\": \"C:\\\\Users\\\\USER\\\\.msos-autobuilder-supervisor\\\\versions\\\\9b24ac7ed8fe572da93248c07200eef89cc68877\\\\src\\\\msos_autobuilder\\\\persistent_host.py\", \"msos_autobuilder.results_relay\": \"C:\\\\Users\\\\USER\\\\.msos-autobuilder-supervisor\\\\versions\\\\9b24ac7ed8fe572da93248c07200eef89cc68877\\\\src\\\\msos_autobuilder\\\\results_relay.py\", \"msos_autobuilder.revision_loop\": \"C:\\\\Users\\\\USER\\\\.msos-autobuilder-supervisor\\\\versions\\\\9b24ac7ed8fe572da93248c07200eef89cc68877\\\\src\\\\msos_autobuilder\\\\revision_loop.py\"}, \"state\": \"healthy\", \"version\": 1}\n"
+    },
+    {
+      "argv": [
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "-NoProfile",
+        "-Command",
+        "$ErrorActionPreference='Stop'; $failed=@(); Get-ChildItem -Path . -Recurse -Filter *.ps1 | ForEach-Object { $tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile($_.FullName,[ref]$tokens,[ref]$errors) | Out-Null; if($errors.Count -gt 0){$failed += $_.FullName} }; if($failed.Count -gt 0){$failed | Write-Error; exit 1}"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\9b24ac7ed8fe572da93248c07200eef89cc68877",
+      "duration_seconds": 0.4254901999956928,
+      "name": "powershell-parser",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": ""
+    }
+  ],
+  "cutover": {
+    "at": "2026-07-13T09:15:49.686299+00:00",
+    "error": "scheduled-task stop failed: Managed task names must be non-empty strings.\nAt C:\\Users\\USER\\.msos-autobuilder-supervisor\\bootstrap\\windows_self_update_task_control.ps1:18 char:5\n+     throw \"Managed task names must be non-empty strings.\"\n+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (Managed task na...-empty strings.:String) [], RuntimeException\n    + FullyQualifiedErrorId : Managed task names must be non-empty strings.\n \n",
+    "from_commit": "d3f6029faf992fc8609dd4ee69773cd6f2068917",
+    "performed": true,
+    "pointer_swapped": false,
+    "tasks_started": false,
+    "to_commit": "9b24ac7ed8fe572da93248c07200eef89cc68877"
+  },
+  "errors": [
+    "scheduled-task stop failed: Managed task names must be non-empty strings.\nAt C:\\Users\\USER\\.msos-autobuilder-supervisor\\bootstrap\\windows_self_update_task_control.ps1:18 char:5\n+     throw \"Managed task names must be non-empty strings.\"\n+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (Managed task na...-empty strings.:String) [], RuntimeException\n    + FullyQualifiedErrorId : Managed task names must be non-empty strings.\n \n",
+    "rollback stop failed: scheduled-task stop failed: Managed task names must be non-empty strings.\nAt C:\\Users\\USER\\.msos-autobuilder-supervisor\\bootstrap\\windows_self_update_task_control.ps1:18 char:5\n+     throw \"Managed task names must be non-empty strings.\"\n+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (Managed task na...-empty strings.:String) [], RuntimeException\n    + FullyQualifiedErrorId : Managed task names must be non-empty strings.\n \n",
+    "rollback start failed: scheduled-task start failed: Managed task names must be non-empty strings.\nAt C:\\Users\\USER\\.msos-autobuilder-supervisor\\bootstrap\\windows_self_update_task_control.ps1:18 char:5\n+     throw \"Managed task names must be non-empty strings.\"\n+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (Managed task na...-empty strings.:String) [], RuntimeException\n    + FullyQualifiedErrorId : Managed task names must be non-empty strings.\n \n",
+    "rollback health failed: scheduled-task states failed: Managed task names must be non-empty strings.\nAt C:\\Users\\USER\\.msos-autobuilder-supervisor\\bootstrap\\windows_self_update_task_control.ps1:18 char:5\n+     throw \"Managed task names must be non-empty strings.\"\n+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (Managed task na...-empty strings.:String) [], RuntimeException\n    + FullyQualifiedErrorId : Managed task names must be non-empty strings.\n \n"
+  ],
+  "health": {
+    "error": "scheduled-task stop failed: Managed task names must be non-empty strings.\nAt C:\\Users\\USER\\.msos-autobuilder-supervisor\\bootstrap\\windows_self_update_task_control.ps1:18 char:5\n+     throw \"Managed task names must be non-empty strings.\"\n+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (Managed task na...-empty strings.:String) [], RuntimeException\n    + FullyQualifiedErrorId : Managed task names must be non-empty strings.\n \n",
+    "passed": false
+  },
+  "manifest_sha256": "34ba19b46965d3ad97430c82ed72d0f24bd437d306a6c1fc7d16caba8c0ae19e",
+  "outcome": "rollback_failed",
+  "previous_commit": "d3f6029faf992fc8609dd4ee69773cd6f2068917",
+  "previous_release_path": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\d3f6029faf992fc8609dd4ee69773cd6f2068917",
+  "release_id": "healthy-self-update-witness-v1",
+  "requested_commit": "9b24ac7ed8fe572da93248c07200eef89cc68877",
+  "rollback": {
+    "errors": [
+      "rollback stop failed: scheduled-task stop failed: Managed task names must be non-empty strings.\nAt C:\\Users\\USER\\.msos-autobuilder-supervisor\\bootstrap\\windows_self_update_task_control.ps1:18 char:5\n+     throw \"Managed task names must be non-empty strings.\"\n+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (Managed task na...-empty strings.:String) [], RuntimeException\n    + FullyQualifiedErrorId : Managed task names must be non-empty strings.\n \n",
+      "rollback start failed: scheduled-task start failed: Managed task names must be non-empty strings.\nAt C:\\Users\\USER\\.msos-autobuilder-supervisor\\bootstrap\\windows_self_update_task_control.ps1:18 char:5\n+     throw \"Managed task names must be non-empty strings.\"\n+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (Managed task na...-empty strings.:String) [], RuntimeException\n    + FullyQualifiedErrorId : Managed task names must be non-empty strings.\n \n",
+      "rollback health failed: scheduled-task states failed: Managed task names must be non-empty strings.\nAt C:\\Users\\USER\\.msos-autobuilder-supervisor\\bootstrap\\windows_self_update_task_control.ps1:18 char:5\n+     throw \"Managed task names must be non-empty strings.\"\n+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (Managed task na...-empty strings.:String) [], RuntimeException\n    + FullyQualifiedErrorId : Managed task names must be non-empty strings.\n \n"
+    ],
+    "passed": false,
+    "performed": true,
+    "pointer_restored": true,
+    "restored_commit": "d3f6029faf992fc8609dd4ee69773cd6f2068917",
+    "tasks_started": false
+  },
+  "staged_release_path": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\9b24ac7ed8fe572da93248c07200eef89cc68877",
+  "version": 1
+}

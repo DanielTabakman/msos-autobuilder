@@ -1,0 +1,10 @@
+{
+  "attempt_id": "20260713T091413.940168Z-220954bce41a",
+  "outcome": "rollback_failed",
+  "recorded_at": "2026-07-13T09:15:51.382791+00:00",
+  "report_path": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\reports\\20260713T091413.940168Z-220954bce41a.json",
+  "requested_commit": "9b24ac7ed8fe572da93248c07200eef89cc68877",
+  "requires_founder_attention": true,
+  "type": "autobuilder-self-update",
+  "version": 1
+}

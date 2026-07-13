@@ -127,8 +127,12 @@ $BridgeJobPath = Join-Path $JobsCheckout "jobs\approved\$BridgeRevisionJob.yaml"
 if ((Test-Path $GatePath) -and (Test-Path $BridgeJobPath)) {
     $Ledger = @{}
     if (Test-Path $LedgerPath) {
-        $Existing = Get-Content -Path $LedgerPath -Raw | ConvertFrom-Json -AsHashtable
-        if ($null -ne $Existing) { $Ledger = $Existing }
+        $Existing = Get-Content -Path $LedgerPath -Raw | ConvertFrom-Json
+        if ($null -ne $Existing) {
+            foreach ($Property in $Existing.PSObject.Properties) {
+                $Ledger[$Property.Name] = $Property.Value
+            }
+        }
     }
     $LedgerKey = "$MachineId/$BridgeRootJob"
     if (-not $Ledger.ContainsKey($LedgerKey)) {

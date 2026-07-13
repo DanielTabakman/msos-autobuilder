@@ -2,15 +2,15 @@
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet("stop", "start", "states")]
-    [string]$Action,
-    [Parameter(Mandatory = $true)]
-    [string]$TaskNamesJson
+    [string]$Action
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$TaskNames = @($TaskNamesJson | ConvertFrom-Json)
+$TaskNamesJson = [Console]::In.ReadToEnd()
+$DecodedTaskNames = $TaskNamesJson | ConvertFrom-Json
+$TaskNames = @($DecodedTaskNames)
 if ($TaskNames.Count -eq 0) {
     throw "At least one managed task name is required."
 }

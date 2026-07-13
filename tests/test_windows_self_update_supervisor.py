@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 import shutil
 import subprocess
@@ -110,11 +111,86 @@ def test_task_controller_can_touch_only_explicit_task_names() -> None:
     script = TASK_CONTROL.read_text(encoding="utf-8")
 
     assert '[ValidateSet("stop", "start", "states")]' in script
+    assert "[Console]::In.ReadToEnd()" in script
     assert "$TaskNamesJson | ConvertFrom-Json" in script
     assert "Get-ScheduledTask -TaskName $Name" in script
     assert "Get-ScheduledTask |" not in script
     assert "Unregister-ScheduledTask" not in script
     assert "Register-ScheduledTask" not in script
+
+
+def test_task_controller_round_trips_task_names_through_powershell_stdin(
+    tmp_path: Path,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    calls_path = tmp_path / "task-calls.jsonl"
+    stubbed_task_control = tmp_path / "windows-self-update-task-control-stubbed.ps1"
+    stubs = "\n".join(
+        [
+            f"$CallsPath = '{calls_path.as_posix()}'",
+            "function Add-Call([string]$Action, [string]$Name) {",
+            "    [pscustomobject]@{ action = $Action; name = $Name } | "
+            "ConvertTo-Json -Compress | Add-Content -Path $CallsPath -Encoding UTF8",
+            "}",
+            "function Get-ScheduledTask {",
+            "    param([string]$TaskName, [object]$ErrorAction)",
+            "    Add-Call -Action 'get' -Name $TaskName",
+            "    [pscustomobject]@{ TaskName = $TaskName; State = 'Running' }",
+            "}",
+            "function Stop-ScheduledTask {",
+            "    param([string]$TaskName, [object]$ErrorAction)",
+            "    Add-Call -Action 'stop' -Name $TaskName",
+            "}",
+            "function Enable-ScheduledTask {",
+            "    param([string]$TaskName, [object]$ErrorAction)",
+            "    Add-Call -Action 'enable' -Name $TaskName",
+            "}",
+            "function Start-ScheduledTask {",
+            "    param([string]$TaskName, [object]$ErrorAction)",
+            "    Add-Call -Action 'start' -Name $TaskName",
+            "}",
+        ]
+    )
+    script = TASK_CONTROL.read_text(encoding="utf-8")
+    stubbed_task_control.write_text(
+        script.replace(
+            '$ErrorActionPreference = "Stop"',
+            f'$ErrorActionPreference = "Stop"\n{stubs}',
+        ),
+        encoding="utf-8",
+    )
+
+    from msos_autobuilder.self_update_supervisor import PowerShellTaskController
+
+    task_names = [
+        "MSOS Autobuilder Host",
+        "MSOS Autobuilder Result Relay",
+        "MSOS Autobuilder Candidate Gate",
+        "MSOS Autobuilder Revision Loop",
+        "MSOS Autobuilder Controlled Publisher",
+    ]
+    controller = PowerShellTaskController(stubbed_task_control, executable=powershell)
+
+    controller.stop(task_names)
+    controller.start(task_names)
+    states = controller.states(task_names)
+
+    assert states == {name: "Running" for name in task_names}
+    calls = [
+        json.loads(line)
+        for line in calls_path.read_text(encoding="utf-8-sig").splitlines()
+    ]
+    assert [call["name"] for call in calls if call["action"] == "stop"] == task_names
+    assert [call["name"] for call in calls if call["action"] == "enable"] == task_names
+    assert [call["name"] for call in calls if call["action"] == "start"] == task_names
+    assert [call["name"] for call in calls if call["action"] == "get"] == [
+        *task_names,
+        *task_names,
+        *task_names,
+    ]
 
 
 def test_update_invoker_downloads_one_manifest_then_calls_stable_python() -> None:

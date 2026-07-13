@@ -30,4 +30,12 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Pytest
-        run: python -m pytest -q
+        run: python -m pytest -q --junitxml=pytest-report.xml
+      - name: Preserve Pytest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report
+          path: pytest-report.xml
+          if-no-files-found: error
+          retention-days: 7

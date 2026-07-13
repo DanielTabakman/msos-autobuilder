@@ -302,59 +302,61 @@ import importlib.util
 import json
 import pathlib
 import sys
+import traceback
 
 bootstrap = pathlib.Path(sys.argv[1])
-task_names = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8-sig"))
-module_path = bootstrap / "self_update_supervisor.py"
-spec = importlib.util.spec_from_file_location("staged_self_update_supervisor", module_path)
-module = importlib.util.module_from_spec(spec)
-assert spec.loader is not None
-module_name = spec.name
-previous = sys.modules.get(module_name)
-had_previous = module_name in sys.modules
-sys.modules[module_name] = module
-try:
-    spec.loader.exec_module(module)
-finally:
-    if had_previous:
-        sys.modules[module_name] = previous
-    else:
-        sys.modules.pop(module_name, None)
-controller = module.PowerShellTaskController(bootstrap / "windows_self_update_task_control.ps1")
-states = controller.states(task_names)
-print(json.dumps(states, sort_keys=True))
+task_names_path = pathlib.Path(sys.argv[2])
+stdout_path = pathlib.Path(sys.argv[3])
+stderr_path = pathlib.Path(sys.argv[4])
+
+
+def main(stdout_file):
+    task_names = json.loads(task_names_path.read_text(encoding="utf-8-sig"))
+    module_path = bootstrap / "self_update_supervisor.py"
+    spec = importlib.util.spec_from_file_location("staged_self_update_supervisor", module_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    module_name = spec.name
+    previous = sys.modules.get(module_name)
+    had_previous = module_name in sys.modules
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if had_previous:
+            sys.modules[module_name] = previous
+        else:
+            sys.modules.pop(module_name, None)
+    controller = module.PowerShellTaskController(
+        bootstrap / "windows_self_update_task_control.ps1"
+    )
+    states = controller.states(task_names)
+    stdout_file.write(json.dumps(states, sort_keys=True))
+    stdout_file.write("\n")
+    stdout_file.flush()
+
+
+with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open(
+    "w",
+    encoding="utf-8",
+) as stderr_file:
+    try:
+        main(stdout_file)
+    except BaseException:
+        traceback.print_exc(file=stderr_file)
+        stderr_file.flush()
+        sys.exit(1)
 "@
     try {
         Write-Utf8NoBom -Path $TaskNamesPath -Value (($ManagedTaskNames | ConvertTo-Json -Compress) + [Environment]::NewLine)
         Write-Utf8NoBom -Path $ProbePath -Value $Probe
-        if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
-            $Cmd = $env:ComSpec
-            if (-not $Cmd) { $Cmd = "cmd.exe" }
-            $CommandLine = ('"{0}" "{1}" "{2}" "{3}" 1> "{4}" 2> "{5}"' -f
-                $BootstrapPython.Replace('"', '\"'),
-                $ProbePath.Replace('"', '\"'),
-                $BootstrapRoot.Replace('"', '\"'),
-                $TaskNamesPath.Replace('"', '\"'),
-                $StdoutPath.Replace('"', '\"'),
-                $StderrPath.Replace('"', '\"'))
-            & $Cmd /d /c $CommandLine
-        }
-        else {
-            function Quote-PosixShell {
-                param([Parameter(Mandatory = $true)][string]$Value)
-                return "'" + $Value.Replace("'", "'\''") + "'"
-            }
-            $Shell = "/bin/sh"
-            $CommandLine = ('{0} {1} {2} {3} 1> {4} 2> {5}' -f
-                (Quote-PosixShell -Value $BootstrapPython),
-                (Quote-PosixShell -Value $ProbePath),
-                (Quote-PosixShell -Value $BootstrapRoot),
-                (Quote-PosixShell -Value $TaskNamesPath),
-                (Quote-PosixShell -Value $StdoutPath),
-                (Quote-PosixShell -Value $StderrPath))
-            & $Shell -c $CommandLine
-        }
-        $ExitCode = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
+        & $BootstrapPython `
+            $ProbePath `
+            $BootstrapRoot `
+            $TaskNamesPath `
+            $StdoutPath `
+            $StderrPath
+        $ExitCode = $LASTEXITCODE
         $Stdout = if (Test-Path $StdoutPath) { Get-Content -Raw -Encoding UTF8 $StdoutPath } else { "" }
         $Stderr = if (Test-Path $StderrPath) { Get-Content -Raw -Encoding UTF8 $StderrPath } else { "" }
         if ($ExitCode -ne 0) {

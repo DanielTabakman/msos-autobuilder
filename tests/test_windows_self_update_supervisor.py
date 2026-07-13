@@ -152,8 +152,19 @@ def test_stable_bootstrap_handoff_is_exact_commit_reversible_and_non_mutating() 
     assert "sys.modules[module_name] = module" in script
     assert "sys.modules.pop(module_name, None)" in script
     transport_script = script[script.index("function Test-StagedTaskTransport") :]
-    assert "1> \"{4}\" 2> \"{5}\"" in transport_script
-    assert "& $Cmd /d /c $CommandLine" in transport_script
+    assert "stdout_path = pathlib.Path(sys.argv[3])" in transport_script
+    assert "stderr_path = pathlib.Path(sys.argv[4])" in transport_script
+    assert 'stdout_path.open("w", encoding="utf-8")' in transport_script
+    assert 'stderr_path.open(' in transport_script
+    assert "traceback.print_exc(file=stderr_file)" in transport_script
+    assert "& $BootstrapPython `" in transport_script
+    assert "$StdoutPath `" in transport_script
+    assert "$StderrPath" in transport_script
+    assert "$ExitCode = $LASTEXITCODE" in transport_script
+    assert "& $Cmd /d /c $CommandLine" not in transport_script
+    assert '1> "{4}" 2> "{5}"' not in transport_script
+    assert '"/bin/sh"' not in transport_script
+    assert "Quote-PosixShell" not in transport_script
     assert "Get-Content -Raw -Encoding UTF8 $StdoutPath" in transport_script
     assert "Get-Content -Raw -Encoding UTF8 $StderrPath" in transport_script
     assert "Move-Item -Path $BootstrapRoot -Destination $ActivationBackup" in script
@@ -202,6 +213,7 @@ def _build_stable_bootstrap_handoff_fixture(
     task_control_stderr_failure: str | None = None,
     task_control_stderr_repeat: int = 0,
 ) -> dict[str, object]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
@@ -369,6 +381,7 @@ def _run_handoff_fixture(
     before_script: str = "",
     capture_output: bool = True,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     repo = fixture["repo"]
     supervisor = fixture["supervisor"]
     old_commit = fixture["old_commit"]
@@ -514,6 +527,40 @@ def test_stable_bootstrap_handoff_runs_with_temp_root_and_stubbed_tasks(
         .splitlines()
     ]
     assert [call["name"] for call in nested_calls if call["action"] == "get"] == MANAGED_TASK_NAMES
+
+
+def test_stable_bootstrap_handoff_runs_with_spaced_fixture_and_probe_paths(
+    tmp_path: Path,
+) -> None:
+    if sys.platform != "win32":
+        pytest.skip("Windows path quoting regression requires Windows")
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture_root = tmp_path / "fixture root with spaces"
+    run_root = fixture_root / "run artifacts with spaces"
+    probe_temp = fixture_root / "probe output temp with spaces"
+    probe_temp.mkdir(parents=True)
+    fixture = _build_stable_bootstrap_handoff_fixture(fixture_root)
+    before_script = f"""
+$SpacedTemp = '{probe_temp.as_posix()}'
+$env:TEMP = $SpacedTemp
+$env:TMP = $SpacedTemp
+"""
+
+    result, _calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        run_root,
+        before_script=before_script,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    report = _read_handoff_report(fixture)
+    assert report["outcome"] == "success"
+    assert report["activation"]["performed"] is True
+    assert not list(probe_temp.glob("msos-bootstrap-task-transport-*"))
 
 
 def test_stable_bootstrap_handoff_rejects_substantive_installed_mutation_with_partial_evidence(

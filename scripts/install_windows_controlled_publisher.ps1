@@ -32,6 +32,25 @@ function Convert-ToForwardSlash {
     return $Value.Replace("\", "/")
 }
 
+function Get-ScheduledTaskActionText {
+    param([Parameter(Mandatory = $true)][object]$Task)
+
+    $ActionsProperty = $Task.PSObject.Properties["Actions"]
+    if ($null -eq $ActionsProperty -or $null -eq $ActionsProperty.Value) {
+        return ""
+    }
+
+    $Parts = foreach ($Action in @($ActionsProperty.Value)) {
+        foreach ($PropertyName in @("Execute", "Arguments", "WorkingDirectory")) {
+            $Property = $Action.PSObject.Properties[$PropertyName]
+            if ($null -ne $Property -and $null -ne $Property.Value) {
+                [string]$Property.Value
+            }
+        }
+    }
+    return ($Parts -join " ")
+}
+
 function Stop-TaskIfPresent {
     param([Parameter(Mandatory = $true)][string]$Name)
     $Task = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
@@ -201,8 +220,8 @@ try {
     # Cut over from any stale in-product operator process/task before enabling the extracted writer.
     $LegacyPattern = "Probability-prediction-engine.*(autobuilder|operator|supervisor)|(autobuilder|operator|supervisor).*Probability-prediction-engine"
     $LegacyTasks = Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
-        $_.TaskName -notin $ManagedTasks -and
-        ((@($_.Actions | ForEach-Object { "$($_.Execute) $($_.Arguments)" }) -join " ") -match $LegacyPattern)
+        $ActionText = Get-ScheduledTaskActionText -Task $_
+        $_.TaskName -notin $ManagedTasks -and $ActionText -match $LegacyPattern
     }
     foreach ($Task in @($LegacyTasks)) {
         Write-Host "Disabling legacy product writer task: $($Task.TaskName)" -ForegroundColor Yellow

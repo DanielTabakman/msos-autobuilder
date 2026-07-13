@@ -5,6 +5,7 @@ param(
     [string]$RepoUrl = "https://github.com/DanielTabakman/msos-autobuilder.git",
     [string]$Repository = "DanielTabakman/msos-autobuilder",
     [string]$ManifestUrl = "https://raw.githubusercontent.com/DanielTabakman/msos-autobuilder/updates/updates/approved/latest.yaml",
+    [string]$EvidenceBranch = "results",
     [int]$UpdatePollMinutes = 15,
     [string]$MachineId = $env:COMPUTERNAME
 )
@@ -14,6 +15,9 @@ $ErrorActionPreference = "Stop"
 if ($UpdatePollMinutes -lt 5) { throw "UpdatePollMinutes must be at least 5." }
 if ($RepoUrl -match '^[A-Za-z][A-Za-z0-9+.-]*://[^/]*@') {
     throw "RepoUrl must not embed credentials."
+}
+if (-not $EvidenceBranch -or $EvidenceBranch -in @("main", "master")) {
+    throw "EvidenceBranch must be a dedicated non-default branch."
 }
 
 function Write-Utf8NoBom {
@@ -84,11 +88,14 @@ $BootstrapPython = Join-Path $BootstrapVenv "Scripts\python.exe"
 $VersionsRoot = Join-Path $SupervisorRoot "versions"
 $StateRoot = Join-Path $SupervisorRoot "state"
 $ReportsRoot = Join-Path $SupervisorRoot "reports"
+$NotificationsRoot = Join-Path $SupervisorRoot "notifications"
 $LogsRoot = Join-Path $SupervisorRoot "logs"
 $TemplatesRoot = Join-Path $BootstrapRoot "config-templates"
 $VersionPath = Join-Path $VersionsRoot $CurrentCommit
 $ActivePointer = Join-Path $StateRoot "active-release.json"
-$BootstrapReport = Join-Path $ReportsRoot ("bootstrap-" + $CurrentCommit + ".json")
+$BootstrapAttemptId = "bootstrap-$CurrentCommit"
+$BootstrapReport = Join-Path $ReportsRoot ($BootstrapAttemptId + ".json")
+$BootstrapNotification = Join-Path $NotificationsRoot ($BootstrapAttemptId + ".json")
 
 if (Test-Path $ActivePointer -PathType Leaf) {
     $ExistingActive = Get-Content -Path $ActivePointer -Raw | ConvertFrom-Json
@@ -100,7 +107,7 @@ if (Test-Path $ActivePointer -PathType Leaf) {
     }
 }
 
-New-Item -ItemType Directory -Force -Path $BootstrapRoot, $VersionsRoot, $StateRoot, $ReportsRoot, $LogsRoot, $TemplatesRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $BootstrapRoot, $VersionsRoot, $StateRoot, $ReportsRoot, $NotificationsRoot, $LogsRoot, $TemplatesRoot | Out-Null
 
 $SourcePython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path $SourcePython -PathType Leaf)) {
@@ -114,6 +121,7 @@ if (-not (Test-Path $BootstrapPython -PathType Leaf)) {
 Invoke-Checked -Failure "Could not install stable supervisor dependencies" -Command { & $BootstrapPython -m pip install --disable-pip-version-check "PyYAML>=6.0" }
 
 Copy-Item -Force (Join-Path $RepoRoot "src\msos_autobuilder\self_update_supervisor.py") (Join-Path $BootstrapRoot "self_update_supervisor.py")
+Copy-Item -Force (Join-Path $RepoRoot "src\msos_autobuilder\self_update_evidence_relay.py") (Join-Path $BootstrapRoot "self_update_evidence_relay.py")
 Copy-Item -Force (Join-Path $RepoRoot "scripts\managed_release_health_probe.py") (Join-Path $BootstrapRoot "managed_release_health_probe.py")
 Copy-Item -Force (Join-Path $RepoRoot "scripts\windows_self_update_task_control.ps1") (Join-Path $BootstrapRoot "windows_self_update_task_control.ps1")
 Copy-Item -Force (Join-Path $RepoRoot "scripts\run_windows_managed_service.ps1") (Join-Path $BootstrapRoot "run_windows_managed_service.ps1")
@@ -164,6 +172,8 @@ $SupervisorRootYaml = Convert-ToYamlQuoted $SupervisorRoot
 $HostRootYaml = Convert-ToYamlQuoted $HostRoot
 $RepoUrlYaml = Convert-ToYamlQuoted $RepoUrl
 $RepositoryYaml = Convert-ToYamlQuoted $Repository
+$EvidenceBranchYaml = Convert-ToYamlQuoted $EvidenceBranch
+$MachineIdYaml = Convert-ToYamlQuoted $MachineId
 $TaskControlYaml = Convert-ToYamlQuoted (Join-Path $BootstrapRoot "windows_self_update_task_control.ps1")
 $ReleaseProbeYaml = Convert-ToYamlQuoted (Join-Path $BootstrapRoot "managed_release_health_probe.py")
 $SupervisorYaml = @"
@@ -172,6 +182,9 @@ supervisor_root: $SupervisorRootYaml
 host_root: $HostRootYaml
 repo_url: $RepoUrlYaml
 repository: $RepositoryYaml
+evidence_repo_url: $RepoUrlYaml
+evidence_branch: $EvidenceBranchYaml
+machine_id: $MachineIdYaml
 task_controller_script: $TaskControlYaml
 release_probe_script: $ReleaseProbeYaml
 health_timeout_seconds: 90
@@ -189,13 +202,14 @@ managed_tasks:
   - service: publisher
     task_name: 'MSOS Autobuilder Controlled Publisher'
 "@
-Write-Utf8NoBom -Path (Join-Path $BootstrapRoot "supervisor.yaml") -Value $SupervisorYaml
+$SupervisorConfigPath = Join-Path $BootstrapRoot "supervisor.yaml"
+Write-Utf8NoBom -Path $SupervisorConfigPath -Value $SupervisorYaml
 
 $Services = @{
     version = 1
     services = @{
         host = @{ argv = @("-m", "msos_autobuilder", "host-run", "--service-config", "{host_root}/service.yaml"); log_file = "{host_root}/logs/persistent-host.log" }
-        relay = @{ argv = @("-m", "msos_autobuilder.results_relay", "--host-root", "{host_root}", "--repo-url", $RepoUrl, "--branch", "results", "--machine-id", "{machine_id}", "--poll-seconds", "30"); log_file = "{host_root}/logs/results-relay.log" }
+        relay = @{ argv = @("-m", "msos_autobuilder.results_relay", "--host-root", "{host_root}", "--repo-url", $RepoUrl, "--branch", $EvidenceBranch, "--machine-id", "{machine_id}", "--poll-seconds", "30"); log_file = "{host_root}/logs/results-relay.log" }
         gate = @{ argv = @("-m", "msos_autobuilder.candidate_gate_revisions", "--config", "{runtime_config}"); config_template = (Join-Path $TemplatesRoot "candidate-gate.yaml"); log_file = "{host_root}/logs/candidate-gate.log" }
         revision = @{ argv = @("-m", "msos_autobuilder.revision_loop", "--config", "{host_root}/revision-loop.yaml"); log_file = "{host_root}/logs/revision-loop.log" }
         publisher = @{ argv = @("-m", "msos_autobuilder.controlled_publisher", "--config", "{runtime_config}"); config_template = (Join-Path $TemplatesRoot "controlled-publisher.yaml"); log_file = "{host_root}/logs/controlled-publisher.log" }
@@ -295,6 +309,9 @@ if (-not $StableHealthy) {
 Write-Utf8NoBom -Path $BootstrapReport -Value ((@{
     version = 1
     type = "initial-bootstrap"
+    attempt_id = $BootstrapAttemptId
+    outcome = "success"
+    requested_commit = $CurrentCommit
     commit = $CurrentCommit
     version_path = $VersionPath
     stable_supervisor_root = $SupervisorRoot
@@ -304,10 +321,27 @@ Write-Utf8NoBom -Path $BootstrapReport -Value ((@{
     recorded_at = [DateTimeOffset]::UtcNow.ToString("o")
     note = "Future managed releases cannot replace the executing stable supervisor in the same transaction."
 } | ConvertTo-Json -Depth 20) + [Environment]::NewLine)
+Write-Utf8NoBom -Path $BootstrapNotification -Value ((@{
+    version = 1
+    type = "autobuilder-self-update"
+    attempt_id = $BootstrapAttemptId
+    outcome = "success"
+    requested_commit = $CurrentCommit
+    report_path = $BootstrapReport
+    requires_founder_attention = $false
+    recorded_at = [DateTimeOffset]::UtcNow.ToString("o")
+} | ConvertTo-Json -Depth 10) + [Environment]::NewLine)
+
+$EvidenceRelayModule = Join-Path $BootstrapRoot "self_update_evidence_relay.py"
+& $BootstrapPython $EvidenceRelayModule --config $SupervisorConfigPath | Out-Host
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning "The supervisor is installed and healthy, but its bootstrap evidence has not reached the results branch yet. The scheduled updater will retry the durable local evidence automatically."
+}
 
 Write-Host "Fail-safe Autobuilder self-update supervisor installed." -ForegroundColor Green
 Write-Host "Stable supervisor: $SupervisorRoot"
 Write-Host "Active exact commit: $CurrentCommit"
 Write-Host "Bootstrap report: $BootstrapReport"
+Write-Host "Evidence branch: $EvidenceBranch"
 Write-Host "One-command rollback: $BootstrapRoot\rollback_windows_self_update.ps1"
 Write-Host "The updater task is separate from all five managed Autobuilder tasks."

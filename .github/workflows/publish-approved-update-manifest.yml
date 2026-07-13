@@ -1,0 +1,97 @@
+name: Publish approved update manifest
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "updates/requests/*.yaml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-approved-update-manifest
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out reviewed main commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install manifest generator
+        run: python -m pip install -e ".[dev]"
+
+      - name: Resolve the single reviewed release request
+        id: request
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          TARGET_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t requests < <(
+            git diff --name-only "$BEFORE_SHA" "$TARGET_SHA" -- 'updates/requests/*.yaml'
+          )
+          if [[ "${#requests[@]}" -ne 1 ]]; then
+            echo "Expected exactly one reviewed update request; found ${#requests[@]}" >&2
+            exit 1
+          fi
+          test -f "${requests[0]}"
+          echo "path=${requests[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch reviewed repository branch heads
+        run: git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+
+      - name: Build exact-commit manifest
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: >-
+          python -m msos_autobuilder.update_manifest_publisher
+          --request "${{ steps.request.outputs.path }}"
+          --repo-root .
+          --self-commit "$TARGET_SHA"
+          --output /tmp/latest.yaml
+
+      - name: Publish immutable archive and latest pointer
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "MSOS Update Manifest Publisher"
+          git config user.email "autobuilder-update-manifest@localhost"
+          git fetch --no-tags origin updates:refs/remotes/origin/updates || true
+          worktree="$(mktemp -d)"
+          cleanup() {
+            git worktree remove --force "$worktree" >/dev/null 2>&1 || true
+            rm -rf "$worktree"
+          }
+          trap cleanup EXIT
+
+          if git show-ref --verify --quiet refs/remotes/origin/updates; then
+            git worktree add -B updates "$worktree" refs/remotes/origin/updates
+          else
+            git worktree add --detach "$worktree" "$TARGET_SHA"
+            git -C "$worktree" checkout --orphan updates
+            git -C "$worktree" rm -rf .
+          fi
+
+          mkdir -p "$worktree/updates/approved/archive"
+          cp /tmp/latest.yaml "$worktree/updates/approved/latest.yaml"
+          cp /tmp/latest.yaml "$worktree/updates/approved/archive/$TARGET_SHA.yaml"
+          git -C "$worktree" add updates/approved
+          if git -C "$worktree" diff --cached --quiet; then
+            exit 0
+          fi
+          git -C "$worktree" commit -m "Publish approved Autobuilder update $TARGET_SHA"
+          git -C "$worktree" push origin HEAD:updates

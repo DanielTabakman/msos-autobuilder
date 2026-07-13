@@ -6,6 +6,7 @@ repo_url: https://github.com/DanielTabakman/msos-autobuilder.git
 commit: self
 required_status_contexts:
   - test
+  - windows-test
 expected_files:
   - pyproject.toml
   - src/msos_autobuilder/self_update_supervisor.py

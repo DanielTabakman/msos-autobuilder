@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -36,9 +38,9 @@ def _git_repo(path: Path) -> Path:
 
 
 def _fake_codex(path: Path) -> Path:
-    path.write_text(
-        """#!/usr/bin/env python3
-import pathlib
+    script = path.with_suffix(".py")
+    script.write_text(
+        """import pathlib
 import sys
 import time
 args = sys.argv[1:]
@@ -59,8 +61,16 @@ print(\"fake codex: \" + prompt)
 """,
         encoding="utf-8",
     )
-    path.chmod(path.stat().st_mode | stat.S_IXUSR)
-    return path
+    if os.name == "nt":
+        launcher = path.with_suffix(".cmd")
+        launcher.write_text(
+            f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n',
+            encoding="utf-8",
+        )
+        return launcher
+    script.write_text("#!/usr/bin/env python3\n" + script.read_text(encoding="utf-8"), encoding="utf-8")
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    return script
 
 
 def _manifest(path: Path, *, publication: bool = False, write: bool = False) -> Path:

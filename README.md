@@ -48,6 +48,7 @@ It must not:
 9. Job IDs are immutable; content replacement fails closed.
 10. Candidate gates remove product remotes before checks and publish evidence only to the results branch.
 11. The controlled publisher accepts only passed immutable evidence, revalidates on current product `main`, pushes without force, creates a draft PR, and has no merge or `main` authority.
+12. Managed host updates use an external stable supervisor, exact commits, versioned releases, one atomic active pointer, health witnesses, and automatic rollback.
 
 ## Bootstrap
 
@@ -106,6 +107,18 @@ The cutover installer disables matching legacy in-product writer processes/tasks
 
 See [`docs/CONTROLLED_DRAFT_PUBLISHER_V1.md`](docs/CONTROLLED_DRAFT_PUBLISHER_V1.md) for evidence requirements, drift protection, rollback, and the first witness.
 
+### Fail-safe host self-update supervisor
+
+The one-time bootstrap installs the update supervisor outside every managed Autobuilder release:
+
+```powershell
+.\scripts\install_windows_self_update_supervisor.ps1
+```
+
+Future updates consume an explicitly approved exact-commit manifest, install and test into a new version directory, switch one atomic active-release pointer, require fresh health witnesses from all five services, and automatically restore the previous release when health fails. The managed release cannot replace the supervisor executing the same transaction.
+
+See [`docs/FAIL_SAFE_SELF_UPDATE_SUPERVISOR_V1.md`](docs/FAIL_SAFE_SELF_UPDATE_SUPERVISOR_V1.md) for the manifest contract, version layout, rollback boundary, evidence, and required real Windows acceptance witnesses.
+
 ### One-shot Windows Codex shadow host
 
 The earlier foreground witness remains available:
@@ -127,6 +140,7 @@ src/msos_autobuilder/
   persistent_host.py        approval queue, Git feed, heartbeat, recovery, and archives
   results_relay.py          complete review-artifact reconstruction and relay
   revision_loop.py          failed-gate to bounded correction-job conversion
+  self_update_supervisor.py exact-commit release staging, cutover, health, and rollback
   contracts.py              product contract loading and validation
   lanes.py                  lane ownership and concurrency checks
   leases.py                 runtime leases outside product Git

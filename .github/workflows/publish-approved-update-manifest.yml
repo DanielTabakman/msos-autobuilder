@@ -49,6 +49,9 @@ jobs:
           test -f "${requests[0]}"
           echo "path=${requests[0]}" >> "$GITHUB_OUTPUT"
 
+      - name: Fetch reviewed repository branch heads
+        run: git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+
       - name: Build exact-commit manifest
         env:
           TARGET_SHA: ${{ github.sha }}

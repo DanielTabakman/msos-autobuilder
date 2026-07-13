@@ -1,0 +1,67 @@
+{
+    "version":  1,
+    "version_path":  "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\d3f6029faf992fc8609dd4ee69773cd6f2068917",
+    "stable_supervisor_root":  "C:\\Users\\USER\\.msos-autobuilder-supervisor",
+    "requested_commit":  "d3f6029faf992fc8609dd4ee69773cd6f2068917",
+    "type":  "initial-bootstrap",
+    "task_states":  {
+                        "MSOS Autobuilder Host":  "Running",
+                        "MSOS Autobuilder Revision Loop":  "Running",
+                        "MSOS Autobuilder Candidate Gate":  "Running",
+                        "MSOS Autobuilder Controlled Publisher":  "Running",
+                        "MSOS Autobuilder Result Relay":  "Running"
+                    },
+    "manifest_url":  "https://raw.githubusercontent.com/DanielTabakman/msos-autobuilder/updates/updates/approved/latest.yaml",
+    "outcome":  "success",
+    "recorded_at":  "2026-07-13T08:57:35.7748742+00:00",
+    "note":  "Future managed releases cannot replace the executing stable supervisor in the same transaction.",
+    "attempt_id":  "bootstrap-d3f6029faf992fc8609dd4ee69773cd6f2068917",
+    "service_witnesses":  {
+                              "relay":  {
+                                            "release_commit":  "d3f6029faf992fc8609dd4ee69773cd6f2068917",
+                                            "version":  1,
+                                            "service":  "relay",
+                                            "release_path":  "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\d3f6029faf992fc8609dd4ee69773cd6f2068917",
+                                            "started_at":  "2026-07-13T08:57:14.2611415+00:00",
+                                            "state":  "running",
+                                            "child_pid":  9452
+                                        },
+                              "host":  {
+                                           "release_commit":  "d3f6029faf992fc8609dd4ee69773cd6f2068917",
+                                           "version":  1,
+                                           "service":  "host",
+                                           "release_path":  "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\d3f6029faf992fc8609dd4ee69773cd6f2068917",
+                                           "started_at":  "2026-07-13T08:57:14.1571406+00:00",
+                                           "state":  "running",
+                                           "child_pid":  11472
+                                       },
+                              "publisher":  {
+                                                "release_commit":  "d3f6029faf992fc8609dd4ee69773cd6f2068917",
+                                                "version":  1,
+                                                "service":  "publisher",
+                                                "release_path":  "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\d3f6029faf992fc8609dd4ee69773cd6f2068917",
+                                                "started_at":  "2026-07-13T08:57:14.3551502+00:00",
+                                                "state":  "running",
+                                                "child_pid":  26792
+                                            },
+                              "gate":  {
+                                           "release_commit":  "d3f6029faf992fc8609dd4ee69773cd6f2068917",
+                                           "version":  1,
+                                           "service":  "gate",
+                                           "release_path":  "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\d3f6029faf992fc8609dd4ee69773cd6f2068917",
+                                           "started_at":  "2026-07-13T08:57:14.3241400+00:00",
+                                           "state":  "running",
+                                           "child_pid":  5572
+                                       },
+                              "revision":  {
+                                               "release_commit":  "d3f6029faf992fc8609dd4ee69773cd6f2068917",
+                                               "version":  1,
+                                               "service":  "revision",
+                                               "release_path":  "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\d3f6029faf992fc8609dd4ee69773cd6f2068917",
+                                               "started_at":  "2026-07-13T08:57:14.3661410+00:00",
+                                               "state":  "running",
+                                               "child_pid":  12872
+                                           }
+                          },
+    "commit":  "d3f6029faf992fc8609dd4ee69773cd6f2068917"
+}

@@ -1,0 +1,10 @@
+{
+    "version":  1,
+    "requested_commit":  "d3f6029faf992fc8609dd4ee69773cd6f2068917",
+    "type":  "autobuilder-self-update",
+    "recorded_at":  "2026-07-13T08:57:35.7818742+00:00",
+    "report_path":  "C:\\Users\\USER\\.msos-autobuilder-supervisor\\reports\\bootstrap-d3f6029faf992fc8609dd4ee69773cd6f2068917.json",
+    "attempt_id":  "bootstrap-d3f6029faf992fc8609dd4ee69773cd6f2068917",
+    "outcome":  "success",
+    "requires_founder_attention":  false
+}

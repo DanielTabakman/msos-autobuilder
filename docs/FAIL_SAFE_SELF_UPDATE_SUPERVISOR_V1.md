@@ -12,7 +12,7 @@ The one-time installer creates a separate root:
 
 ```text
 %USERPROFILE%\.msos-autobuilder-supervisor\
-  bootstrap\                 stable scripts and supervisor module
+  bootstrap\                 stable scripts, probe, and supervisor module
   bootstrap-venv\            stable Python environment
   versions\<commit>\         immutable managed Autobuilder releases
   state\active-release.json  atomic routing pointer
@@ -36,7 +36,7 @@ The installer re-registers exactly these five existing tasks behind one stable r
 4. `MSOS Autobuilder Revision Loop`
 5. `MSOS Autobuilder Controlled Publisher`
 
-Each runner resolves `state/active-release.json`, verifies the selected release marker, runs the release smoke import, writes a release-bound service witness, and then invokes the service with the selected release's virtual environment.
+Each runner resolves `state/active-release.json`, verifies the selected release marker, runs the external stable health probe with the selected release's Python, writes a release-bound service witness, and then invokes the service. The probe requires every managed module to import from inside the selected exact release.
 
 The task-control helper accepts only the explicit configured task-name list. It cannot discover, register, unregister, or modify unrelated scheduled tasks.
 
@@ -69,11 +69,11 @@ Before any live task stops, the external supervisor:
 7. installs `.[dev]` into that environment;
 8. runs Ruff;
 9. runs the full pytest suite;
-10. runs the managed-entry-point release smoke;
+10. runs the external stable managed-entry-point health probe;
 11. on Windows, parses every PowerShell script with the PowerShell AST parser;
-12. writes `release.json` and atomically renames staging to `versions/<commit>`.
+12. atomically writes `release.json` as the completion marker inside `versions/<commit>`.
 
-Any failure before step 12 removes the temporary staging directory. The managed tasks and active pointer remain untouched.
+The version environment is built at its final exact-commit path so virtualenv and editable-install paths never point at a renamed staging directory. Until the completion marker exists, the directory is incomplete and cannot be activated. Any failure before step 12 removes it. The managed tasks and active pointer remain untouched.
 
 ## Cutover and rollback
 

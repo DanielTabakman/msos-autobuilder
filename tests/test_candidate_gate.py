@@ -39,15 +39,15 @@ def _init_repo(path: Path) -> Path:
     _git(path, "init", "-q")
     _git(path, "config", "user.email", "test@example.com")
     _git(path, "config", "user.name", "Test")
-    (path / "app.txt").write_text("base\n", encoding="utf-8")
+    (path / "app.txt").write_bytes(b"base\n")
     _git(path, "add", "app.txt")
     _git(path, "commit", "-qm", "initial source")
     return path
 
 
 def _candidate_patch(source: Path) -> tuple[str, tuple[str, ...]]:
-    (source / "app.txt").write_text("candidate\n", encoding="utf-8")
-    (source / "new.txt").write_text("new\n", encoding="utf-8")
+    (source / "app.txt").write_bytes(b"candidate\n")
+    (source / "new.txt").write_bytes(b"new\n")
     _git(source, "add", "-N", "new.txt")
     patch = _git(source, "diff", "--binary", "HEAD") + "\n"
     changed = tuple(sorted(_git(source, "diff", "--name-only", "HEAD").splitlines()))

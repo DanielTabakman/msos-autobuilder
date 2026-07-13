@@ -50,6 +50,7 @@ function Expand-ServiceArgument {
 $StateRoot = Join-Path $SupervisorRoot "state"
 $ActivePointerPath = Join-Path $StateRoot "active-release.json"
 $ServicesPath = Join-Path $SupervisorRoot "bootstrap\managed-services.json"
+$ProbeScript = Join-Path $SupervisorRoot "bootstrap\managed_release_health_probe.py"
 $WitnessPath = Join-Path $StateRoot "service-witnesses\$ServiceName.json"
 
 if (-not (Test-Path $ActivePointerPath)) {
@@ -57,6 +58,9 @@ if (-not (Test-Path $ActivePointerPath)) {
 }
 if (-not (Test-Path $ServicesPath)) {
     throw "Managed service specification not found at $ServicesPath"
+}
+if (-not (Test-Path $ProbeScript -PathType Leaf)) {
+    throw "Stable managed-release health probe not found at $ProbeScript"
 }
 
 $Active = Get-Content -Path $ActivePointerPath -Raw | ConvertFrom-Json
@@ -98,8 +102,9 @@ $LogPath = Expand-ServiceArgument ([string]$Service.log_file)
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $LogPath) | Out-Null
 $Arguments = @($Service.argv | ForEach-Object { Expand-ServiceArgument ([string]$_) })
 
-# A release must prove that every managed entry point imports before it can emit a running witness.
-& $Python -m msos_autobuilder.self_update_supervisor release-smoke --release-root $ReleasePath *>> $LogPath
+# The stable wrapper, not managed supervisor code, proves every managed entry point imports
+# from the selected exact release before emitting a running witness.
+& $Python $ProbeScript $ReleasePath *>> $LogPath
 if ($LASTEXITCODE -ne 0) {
     Write-Utf8AtomicJson -Path $WitnessPath -Value @{
         version = 1
@@ -108,7 +113,7 @@ if ($LASTEXITCODE -ne 0) {
         release_commit = $ReleaseCommit
         wrapper_pid = $PID
         failed_at = [DateTimeOffset]::UtcNow.ToString("o")
-        error = "release smoke failed"
+        error = "stable release health probe failed"
     }
     exit $LASTEXITCODE
 }

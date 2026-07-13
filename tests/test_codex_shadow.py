@@ -68,7 +68,10 @@ print(\"fake codex: \" + prompt)
             encoding="utf-8",
         )
         return launcher
-    script.write_text("#!/usr/bin/env python3\n" + script.read_text(encoding="utf-8"), encoding="utf-8")
+    script.write_text(
+        "#!/usr/bin/env python3\n" + script.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
     return script
 

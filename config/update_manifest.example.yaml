@@ -1,0 +1,15 @@
+version: 1
+release_id: replace-with-reviewed-release-id
+approved: true
+repository: DanielTabakman/msos-autobuilder
+repo_url: https://github.com/DanielTabakman/msos-autobuilder.git
+commit: '0000000000000000000000000000000000000000'
+required_status_contexts:
+- CI
+expected_files:
+- path: pyproject.toml
+  sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+- path: src/msos_autobuilder/self_update_supervisor.py
+  sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+supervisor_update: false
+manifest_sha256: f2b9eb7470c7bfe0873735ef03fc116624d87eb7654cc1e5c736eb1778a88ee5

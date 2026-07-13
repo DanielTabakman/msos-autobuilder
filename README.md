@@ -4,7 +4,7 @@ Open-source build-factory infrastructure for Market Structure OS (MSOS).
 
 ## Current status
 
-This repository is in **extraction/persistent-host** mode. It can operate on disposable isolated MSOS clones and run an approval-gated local Codex host, while production publication remains disabled.
+This repository is in **controlled draft-publication** mode. It can run approved Codex jobs in disposable product clones, relay complete patches, gate candidates, generate bounded revisions, and publish configured passing candidates as review-only draft product pull requests.
 
 It may:
 
@@ -15,18 +15,21 @@ It may:
 - keep leases and runtime state outside product Git;
 - run fixed local worker processes inside disposable clones;
 - connect to an authenticated Codex CLI for local lanes;
-- run as a persistent Windows logon task;
+- run as persistent Windows logon tasks;
 - import immutable approved jobs from a read-only Git manifest feed;
 - archive reports and disposable workspace patches;
 - relay complete review artifacts to a dedicated results branch;
-- apply relayed patches in a disposable candidate clone and run deterministic checks;
-- collect bounded evidence while preserving a clean MSOS source mirror.
+- apply relayed patches in disposable candidate clones and run deterministic checks;
+- turn failed candidate reports into bounded correction jobs;
+- create one configured product branch, one commit, and one **draft** pull request after a passing gate and a second publication-time validation.
 
-It must not yet:
+It must not:
 
-- commit or push to MSOS;
-- open or merge pull requests;
-- hold GitHub product-write credentials;
+- write the product `main` branch;
+- force-push product branches;
+- mark draft pull requests ready for review;
+- add an automerge marker;
+- merge product pull requests;
 - use GitHub for leases, heartbeats, or mutable runtime state;
 - run concurrently as a second production publisher.
 
@@ -42,6 +45,7 @@ It must not yet:
 8. Persistent jobs require `approved: true` and `publication_enabled: false`.
 9. Job IDs are immutable; content replacement fails closed.
 10. Candidate gates remove product remotes before checks and publish evidence only to the results branch.
+11. The controlled publisher accepts only passed immutable evidence, revalidates on current product `main`, pushes without force, creates a draft PR, and has no merge or `main` authority.
 
 ## Bootstrap
 
@@ -78,9 +82,27 @@ The relay reconstructs complete patches, including newly created files, and send
 .\scripts\install_windows_candidate_gate.ps1
 ```
 
-The gate applies relayed patches to a fresh clone pinned to the recorded source commit, runs fixed validation commands, removes the clone, and writes a structured gate report to the `results` branch. Product publication remains disabled.
+The gate applies relayed patches to a fresh clone pinned to the recorded source commit, runs fixed validation commands, removes the clone, and writes a structured gate report to the `results` branch. Codex and gate publication remain disabled.
 
 See [`docs/CANDIDATE_INTEGRATION_GATE_V1.md`](docs/CANDIDATE_INTEGRATION_GATE_V1.md) for the gate contract and first witness.
+
+### Automatic revision pipeline
+
+```powershell
+.\scripts\install_windows_revision_pipeline.ps1
+```
+
+The revision pipeline turns configured failed gate reports into bounded approved correction jobs and gates the resulting revision candidates automatically.
+
+### Controlled draft product publisher
+
+```powershell
+.\scripts\install_windows_controlled_publisher.ps1
+```
+
+The cutover installer disables matching legacy in-product writer processes/tasks, clears the legacy write environment variables, verifies a single writer-owner marker, publishes the configured passing witness as one draft product PR, installs the persistent publisher task, and restarts the full Autobuilder task set. Merge and product-`main` writes remain disabled.
+
+See [`docs/CONTROLLED_DRAFT_PUBLISHER_V1.md`](docs/CONTROLLED_DRAFT_PUBLISHER_V1.md) for evidence requirements, drift protection, rollback, and the first witness.
 
 ### One-shot Windows Codex shadow host
 
@@ -96,19 +118,21 @@ See [`docs/WINDOWS_CODEX_HOST_V1.md`](docs/WINDOWS_CODEX_HOST_V1.md) for the one
 
 ```text
 src/msos_autobuilder/
-  backends/           worker-provider interfaces and local/Codex backends
-  candidate_gate.py   disposable patch integration and validation
-  codex_shadow.py     host config, preflight, manifest loading, and shadow execution
-  persistent_host.py approval queue, Git feed, heartbeat, recovery, and archives
-  results_relay.py    complete review-artifact reconstruction and relay
-  contracts.py        product contract loading and validation
-  lanes.py            lane ownership and concurrency checks
-  leases.py           runtime leases outside product Git
-  models.py           task, lane, lease, and capability models
-  scheduler.py        parallel scheduling and heartbeat renewal
-config/                public synthetic examples and deterministic rules
-scripts/               operator bootstrap and Windows service tools
-tests/                 factory-only tests
+  backends/                 worker-provider interfaces and local/Codex backends
+  candidate_gate.py         disposable patch integration and validation
+  controlled_publisher.py   passed-gate verification and draft-only product publication
+  codex_shadow.py           host config, preflight, manifest loading, and shadow execution
+  persistent_host.py        approval queue, Git feed, heartbeat, recovery, and archives
+  results_relay.py          complete review-artifact reconstruction and relay
+  revision_loop.py          failed-gate to bounded correction-job conversion
+  contracts.py              product contract loading and validation
+  lanes.py                  lane ownership and concurrency checks
+  leases.py                 runtime leases outside product Git
+  models.py                 task, lane, lease, and capability models
+  scheduler.py              parallel scheduling and heartbeat renewal
+config/                      public synthetic examples and deterministic rules
+scripts/                     operator bootstrap and Windows service tools
+tests/                       factory-only tests
 ```
 
 The parent extraction chapter is tracked in `DanielTabakman/Probability-prediction-engine#5348`.

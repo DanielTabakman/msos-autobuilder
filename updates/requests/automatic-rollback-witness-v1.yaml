@@ -1,0 +1,16 @@
+version: 1
+release_id: automatic-rollback-witness-v1
+approved: true
+repository: DanielTabakman/msos-autobuilder
+repo_url: https://github.com/DanielTabakman/msos-autobuilder.git
+commit: 73c3b13d72335fa09ca9fdcd300ba06f95c54d0c
+required_status_contexts:
+  - CI
+expected_files:
+  - pyproject.toml
+  - src/msos_autobuilder/self_update_supervisor.py
+  - src/msos_autobuilder/candidate_gate_revisions.py
+  - config/rollback_witness.enabled
+  - scripts/run_windows_managed_service.ps1
+  - scripts/windows_self_update_task_control.ps1
+supervisor_update: false

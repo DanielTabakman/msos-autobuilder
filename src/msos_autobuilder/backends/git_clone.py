@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -14,9 +15,22 @@ class GitWorkspaceError(RuntimeError):
     """Raised when a clean isolated Git workspace cannot be prepared or verified."""
 
 
+def _subprocess_path(path: str | Path) -> str:
+    """Remove Python's extended-length prefix before passing a path to Git for Windows."""
+
+    text = os.fspath(path)
+    if os.name != "nt":
+        return text
+    if text.startswith("\\\\?\\UNC\\"):
+        return "\\\\" + text[8:]
+    if text.startswith("\\\\?\\"):
+        return text[4:]
+    return text
+
+
 def _git(repo: Path, *args: str) -> str:
     proc = subprocess.run(
-        ["git", "-C", str(repo), *args],
+        ["git", "-C", _subprocess_path(repo), *args],
         capture_output=True,
         text=True,
         check=False,
@@ -64,8 +78,8 @@ class LocalGitCloneBackend:
                 "--local",
                 "--no-hardlinks",
                 "--no-tags",
-                str(self.source_repo),
-                str(workspace),
+                _subprocess_path(self.source_repo),
+                _subprocess_path(workspace),
             ],
             capture_output=True,
             text=True,

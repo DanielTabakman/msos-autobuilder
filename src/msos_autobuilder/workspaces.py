@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,8 +16,25 @@ class WorkspaceIsolationError(ValueError):
     """Raised when runtime or lane workspaces could overlap product files."""
 
 
+def _path_identity(path: str | Path) -> str:
+    """Return one comparison identity for equivalent native filesystem paths."""
+
+    text = os.fspath(Path(path).resolve())
+    if os.name == "nt":
+        if text.startswith("\\\\?\\UNC\\"):
+            text = "\\\\" + text[8:]
+        elif text.startswith("\\\\?\\"):
+            text = text[4:]
+    return os.path.normcase(os.path.normpath(text))
+
+
 def _inside(path: Path, parent: Path) -> bool:
-    return path == parent or path.is_relative_to(parent)
+    path_key = _path_identity(path)
+    parent_key = _path_identity(parent)
+    try:
+        return os.path.commonpath((path_key, parent_key)) == parent_key
+    except ValueError:
+        return False
 
 
 @dataclass(frozen=True)
@@ -33,7 +51,7 @@ class WorkspacePolicy:
             raise WorkspaceIsolationError("workspace root must be outside the product checkout")
         if _inside(runtime, product):
             raise WorkspaceIsolationError("runtime root must be outside the product checkout")
-        if workspace == runtime:
+        if _path_identity(workspace) == _path_identity(runtime):
             raise WorkspaceIsolationError("workspace and runtime roots must be distinct")
         object.__setattr__(self, "product_root", product)
         object.__setattr__(self, "workspace_root", workspace)
@@ -47,15 +65,15 @@ class WorkspacePolicy:
     def validate_backend_path(self, lane: BuildLane, path: str | Path) -> Path:
         actual = Path(path).resolve()
         expected = self.expected_path(lane)
-        if actual != expected:
+        if _path_identity(actual) != _path_identity(expected):
             raise WorkspaceIsolationError(
                 f"backend workspace {actual} does not match expected lane path {expected}"
             )
         if _inside(actual, self.product_root):
             raise WorkspaceIsolationError("lane workspace must be outside the product checkout")
-        return actual
+        return expected
 
     def assert_unique(self, assignments: list[Path] | tuple[Path, ...]) -> None:
-        normalized = [path.resolve() for path in assignments]
+        normalized = [_path_identity(path) for path in assignments]
         if len(normalized) != len(set(normalized)):
             raise WorkspaceIsolationError("parallel lanes must use unique workspaces")

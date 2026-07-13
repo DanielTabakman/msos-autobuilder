@@ -4,6 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from msos_autobuilder.self_update_evidence_notify import (
     EvidenceNotificationError,
     build_notification,
@@ -85,8 +87,6 @@ def test_notification_rejects_tampered_results_branch_evidence(tmp_path: Path) -
     notification_path = _write_fixture(root)
     report_path = notification_path.parent / "update-report.json"
     report_path.write_text(report_path.read_text(encoding="utf-8") + " ", encoding="utf-8")
-
-    import pytest
 
     with pytest.raises(EvidenceNotificationError, match="SHA-256 bindings"):
         build_notification(

@@ -118,7 +118,7 @@ def make_fixture(tmp_path: Path, *, overlap: bool = False) -> tuple[Path, Path, 
     job_dir = evidence_work / "results" / "MACHINE" / job_id
     patch_path = job_dir / "patches" / "candidate.patch"
     patch_path.parent.mkdir(parents=True)
-    patch_path.write_text(patch, encoding="utf-8")
+    patch_path.write_bytes(patch.encode("utf-8"))
     patch_hash = sha256(patch_path)
 
     source_report = {

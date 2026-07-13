@@ -11,10 +11,11 @@ import shutil
 import socket
 import subprocess
 import tempfile
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 from urllib.parse import urlsplit
 
 import yaml

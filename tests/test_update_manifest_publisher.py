@@ -52,7 +52,7 @@ def _request(commit: str = "self") -> str:
             "repository": "DanielTabakman/msos-autobuilder",
             "repo_url": "https://github.com/DanielTabakman/msos-autobuilder.git",
             "commit": commit,
-            "required_status_contexts": ["CI"],
+            "required_status_contexts": ["test"],
             "expected_files": [
                 "pyproject.toml",
                 "src/msos_autobuilder/self_update_supervisor.py",
@@ -73,6 +73,7 @@ def test_build_manifest_hashes_exact_commit_and_self_validates(tmp_path: Path) -
     parsed = parse_update_manifest(yaml.safe_dump(manifest, sort_keys=False))
     assert parsed.commit == commit
     assert parsed.release_id == "healthy-witness-v1"
+    assert parsed.required_status_contexts == ("test",)
     assert {item.path for item in parsed.expected_files} == {
         "pyproject.toml",
         "src/msos_autobuilder/self_update_supervisor.py",

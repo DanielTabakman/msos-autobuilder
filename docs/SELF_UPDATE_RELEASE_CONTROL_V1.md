@@ -24,7 +24,7 @@ repository: DanielTabakman/msos-autobuilder
 repo_url: https://github.com/DanielTabakman/msos-autobuilder.git
 commit: self
 required_status_contexts:
-  - CI
+  - test
 expected_files:
   - pyproject.toml
   - src/msos_autobuilder/self_update_supervisor.py
@@ -33,6 +33,8 @@ supervisor_update: false
 ```
 
 The request contains paths, not hashes. It must be explicitly approved and merged to `main`. Exactly one request may be introduced or changed by a release-control merge.
+
+Required status contexts are exact GitHub status or check-run names. In this repository, the required CI job is named `test`; the workflow title `CI` is not the status context consumed by the supervisor.
 
 `commit` supports two forms:
 
@@ -55,8 +57,11 @@ The workflow:
 6. calculates SHA-256 over the exact Git blob bytes;
 7. calculates the canonical `manifest_sha256`;
 8. parses the completed manifest through the same supervisor validator used on Windows;
-9. writes an immutable archive and the current pointer on the dedicated `updates` branch;
-10. pushes without force.
+9. waits until every exact required status/check name is successful, neutral, or skipped on the requested commit;
+10. writes an immutable archive and the current pointer on the dedicated `updates` branch;
+11. pushes without force.
+
+The wait gate prevents a manifest from becoming visible while the target commit's CI is pending or failed. A timeout fails the workflow without changing the `updates` branch.
 
 Published layout:
 
@@ -89,7 +94,7 @@ The first real acceptance sequence is deliberately split:
 2. prepare but do not yet merge the healthy release request;
 3. prepare and review a deliberately broken witness branch, clearly marked not for merge;
 4. perform the one-time Windows supervisor bootstrap;
-5. merge the healthy request so GitHub publishes its manifest and the host updates automatically;
+5. merge the healthy request so GitHub waits for `test`, publishes its manifest, and the host updates automatically;
 6. after the healthy witness is accepted, merge a second request naming the exact broken witness SHA;
 7. verify automatic rollback, previous-release health, evidence relay, issue notification, and replay blocking.
 

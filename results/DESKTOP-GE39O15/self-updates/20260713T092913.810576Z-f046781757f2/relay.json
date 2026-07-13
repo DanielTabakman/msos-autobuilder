@@ -1,0 +1,9 @@
+{
+  "attempt_id": "20260713T092913.810576Z-f046781757f2",
+  "notification_sha256": "67c0424e2716d34f335bccab52be1bb0c7ba3169285ac23afe7390ecbb46c610",
+  "outcome": "blocked_after_rollback",
+  "publication_enabled": false,
+  "relayed_at": "2026-07-13T09:29:14.686969+00:00",
+  "report_sha256": "fc6e86b220058bcd4c39a95e25dabe0067d364dc37c97db6df10f185a64affd5",
+  "version": 1
+}

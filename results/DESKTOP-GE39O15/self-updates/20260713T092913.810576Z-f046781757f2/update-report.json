@@ -1,0 +1,20 @@
+{
+  "attempt_id": "20260713T092913.810576Z-f046781757f2",
+  "attempted_at": "2026-07-13T09:29:13.812907+00:00",
+  "checks": [],
+  "cutover": {
+    "performed": false,
+    "reason": "blocked_after_rollback"
+  },
+  "errors": [],
+  "health": {},
+  "manifest_sha256": "34ba19b46965d3ad97430c82ed72d0f24bd437d306a6c1fc7d16caba8c0ae19e",
+  "outcome": "blocked_after_rollback",
+  "previous_commit": null,
+  "previous_release_path": null,
+  "release_id": "healthy-self-update-witness-v1",
+  "requested_commit": "9b24ac7ed8fe572da93248c07200eef89cc68877",
+  "rollback": {},
+  "staged_release_path": null,
+  "version": 1
+}

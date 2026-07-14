@@ -23,6 +23,8 @@ It may:
 - relay complete review artifacts to a dedicated results branch;
 - apply relayed patches in disposable candidate clones and run deterministic checks;
 - turn failed candidate reports into bounded correction jobs;
+- dispatch one PPE/MSOS `build next` item from the accepted read-only founder
+  portfolio selection into the immutable approved job feed;
 - create one configured product branch, one commit, and one **draft** pull request after a passing gate and a second publication-time validation.
 
 It must not:
@@ -71,6 +73,24 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 The installer prepares the existing Codex host, writes the persistent service config, registers a hidden Windows logon task, and starts it immediately.
 
 See [`docs/PERSISTENT_WINDOWS_HOST_V1.md`](docs/PERSISTENT_WINDOWS_HOST_V1.md) for the queue, approved Git feed, evidence layout, and uninstall process.
+
+### Founder `build next`
+
+The one-shot dispatcher consumes PPE's accepted read-only founder portfolio output
+and submits exactly one approved PPE/MSOS product job to the existing feed:
+
+```powershell
+.\.venv\Scripts\python.exe -m msos_autobuilder build-next `
+  --service-config "$HOME\.msos-autobuilder\service.yaml"
+```
+
+The command derives the PPE source checkout, feed URL, jobs branch/path, and
+host root from the installed persistent-host service configuration. It returns a
+JSON receipt with `RUNNING`, `QUEUED`, `BLOCKED`, or `UNFILLED`; dry runs return
+`UNFILLED` with `submitted: false` and `projected_status: QUEUED` so they cannot
+be counted as queued runtime work. It does not implement `build next 2`,
+continuous refill, clock scheduling, automatic merge, product-main writes, or
+self-deployment authority.
 
 ### Review-only result relay
 

@@ -6,6 +6,7 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
+from .build_next import BuildNextConfig, build_next, render_receipt_json
 from .codex_shadow import (
     codex_host_preflight,
     load_codex_host_config,
@@ -155,6 +156,36 @@ def _host_stop_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_next_command(args: argparse.Namespace) -> int:
+    if args.service_config:
+        config = BuildNextConfig.from_service_config(
+            args.service_config,
+            checkout_root=Path(args.checkout_root) if args.checkout_root else None,
+            max_snapshot_age_seconds=args.max_snapshot_age_seconds,
+            requested_by=args.requested_by,
+            submit=not args.dry_run,
+        )
+    else:
+        if not args.ppe_repo or not args.feed_repo_url:
+            raise SystemExit(
+                "build-next requires --service-config or both --ppe-repo and --feed-repo-url"
+            )
+        config = BuildNextConfig(
+            ppe_repo=Path(args.ppe_repo),
+            feed_repo_url=args.feed_repo_url,
+            jobs_branch=args.jobs_branch,
+            jobs_path=args.jobs_path,
+            checkout_root=Path(args.checkout_root) if args.checkout_root else None,
+            host_root=Path(args.host_root) if args.host_root else None,
+            max_snapshot_age_seconds=args.max_snapshot_age_seconds,
+            requested_by=args.requested_by,
+            submit=not args.dry_run,
+        )
+    receipt = build_next(config)
+    _write_or_print(render_receipt_json(receipt), args.json_out)
+    return 2 if receipt.status == "BLOCKED" else 0
+
+
 def _workspace_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--source", required=True)
     parser.add_argument("--workspace-root", required=True)
@@ -281,6 +312,23 @@ def build_parser() -> argparse.ArgumentParser:
     _service_config_argument(host_stop)
     host_stop.add_argument("--output")
     host_stop.set_defaults(func=_host_stop_command)
+
+    build_next_parser = subparsers.add_parser(
+        "build-next",
+        help="dispatch exactly one PPE READY_TO_BUILD item through the approved job feed",
+    )
+    build_next_parser.add_argument("--service-config")
+    build_next_parser.add_argument("--ppe-repo")
+    build_next_parser.add_argument("--feed-repo-url")
+    build_next_parser.add_argument("--jobs-branch", default="jobs")
+    build_next_parser.add_argument("--jobs-path", default="jobs/approved")
+    build_next_parser.add_argument("--checkout-root")
+    build_next_parser.add_argument("--host-root")
+    build_next_parser.add_argument("--max-snapshot-age-seconds", type=int, default=600)
+    build_next_parser.add_argument("--requested-by", default="founder build next")
+    build_next_parser.add_argument("--dry-run", action="store_true")
+    build_next_parser.add_argument("--json-out")
+    build_next_parser.set_defaults(func=_build_next_command)
     return parser
 
 

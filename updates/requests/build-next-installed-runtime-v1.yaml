@@ -1,0 +1,24 @@
+version: 1
+release_id: build-next-installed-runtime-v1
+approved: true
+repository: DanielTabakman/msos-autobuilder
+repo_url: https://github.com/DanielTabakman/msos-autobuilder.git
+commit: 4884d42ae7a7daf7dcf2831c04a05ccb59fcf7e5
+required_status_contexts:
+  - test
+  - windows-test
+expected_files:
+  - pyproject.toml
+  - src/msos_autobuilder/build_next.py
+  - src/msos_autobuilder/cli.py
+  - src/msos_autobuilder/persistent_host.py
+  - src/msos_autobuilder/results_relay.py
+  - src/msos_autobuilder/candidate_gate.py
+  - src/msos_autobuilder/revision_loop.py
+  - src/msos_autobuilder/controlled_publisher.py
+  - src/msos_autobuilder/self_update_supervisor.py
+  - src/msos_autobuilder/self_update_evidence_relay.py
+  - scripts/run_windows_managed_service.ps1
+  - scripts/invoke_windows_self_update.ps1
+  - scripts/windows_self_update_task_control.ps1
+supervisor_update: false

@@ -7,8 +7,10 @@ portfolio readiness or priority policy.
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -22,11 +24,123 @@ from typing import Any
 
 import yaml
 
-from .persistent_host import HostPaths, parse_host_job
+from .codex_shadow import load_codex_host_config
+from .persistent_host import HostPaths, load_persistent_host_config, parse_host_job
 
 
 class BuildNextError(RuntimeError):
     """Raised when build-next validation or feed submission fails closed."""
+
+
+FORBIDDEN_AUTHORITY_PATHS = (
+    ".git/**",
+    ".github/workflows/**",
+    "artifacts/**",
+    "runtime/**",
+    "state/**",
+    "queue/**",
+    "config/founder_pipeline_registry.json",
+    "docs/SOP/PHASE_QUEUE.json",
+    "docs/SOP/ACTIVE_PHASE_MANIFEST.json",
+    "docs/SOP/FOUNDER_PIPELINE_COMMANDS_V1.md",
+    "docs/SOP/PIPELINE_CREATION_SOP_V1.md",
+    "docs/SOP/SCHEDULED_AUTOBUILDER_LANE_POLICY_V1.md",
+    "docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md",
+    "docs/SOP/SPRINT_*.md",
+    "docs/SOP/*SELECTION*.md",
+    "docs/SOP/POST_*_SELECTION*.md",
+    "docs/SOP/*PRIORITY*.md",
+    "docs/SOP/*FRONTIER*.md",
+    "docs/SOP/*MANIFEST*.json",
+    "artifacts/orchestrator/**",
+    "artifacts/control_plane/**",
+    "artifacts/relay/**",
+    "artifacts/leases/**",
+)
+
+BROAD_WRITABLE_ROOTS = {
+    ".",
+    "",
+    "docs",
+    "docs/",
+    "docs/SOP",
+    "docs/SOP/",
+    "config",
+    "config/",
+    "artifacts",
+    "artifacts/",
+}
+
+
+@dataclass(frozen=True)
+class SourceIdentity:
+    remote: str
+    remote_url: str
+    ref: str
+    remote_ref: str
+    commit: str
+
+
+@dataclass(frozen=True)
+class NativeSlicePacket:
+    slice_id: str
+    build_branch: str
+    layer_preset: str
+    worker_mode: str | None
+    declared_plane: str
+    touch_set: tuple[str, ...]
+    sequence_index: int
+    total_slices: int
+    previous_slices: tuple[str, ...]
+    following_slices: tuple[str, ...]
+    sprint_spec_path: str | None
+    selection_record: str | None
+    raw_slice: Mapping[str, Any]
+
+
+class FeedMutationLock:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.handle: Any = None
+
+    def __enter__(self) -> FeedMutationLock:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.handle = self.path.open("a+b")
+        self.handle.seek(0)
+        self.handle.write(b"0")
+        self.handle.flush()
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX)
+        except OSError as exc:
+            self.handle.close()
+            self.handle = None
+            raise BuildNextError("could not acquire build-next feed mutation lock") from exc
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        if self.handle is None:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.handle.close()
+            self.handle = None
 
 
 @dataclass(frozen=True)
@@ -40,6 +154,8 @@ class BuildNextConfig:
     max_snapshot_age_seconds: int = 600
     requested_by: str = "founder build next"
     submit: bool = True
+    source_remote: str = "origin"
+    source_ref: str = "main"
 
     def __post_init__(self) -> None:
         if not self.feed_repo_url.strip():
@@ -51,6 +167,34 @@ class BuildNextConfig:
             raise ValueError("jobs_path must be a safe relative path")
         if self.max_snapshot_age_seconds < 1:
             raise ValueError("max_snapshot_age_seconds must be positive")
+        if not self.source_remote.strip() or not self.source_ref.strip():
+            raise ValueError("source remote/ref are required")
+
+    @classmethod
+    def from_service_config(
+        cls,
+        service_config: str | Path,
+        *,
+        checkout_root: Path | None = None,
+        max_snapshot_age_seconds: int = 600,
+        requested_by: str = "founder build next",
+        submit: bool = True,
+    ) -> BuildNextConfig:
+        service = load_persistent_host_config(service_config)
+        if service.feed is None:
+            raise ValueError("persistent host service config does not enable a job feed")
+        host_config = load_codex_host_config(service.codex_host_config)
+        return cls(
+            ppe_repo=host_config.source_repo,
+            feed_repo_url=service.feed.repo_url,
+            jobs_branch=service.feed.branch,
+            jobs_path=service.feed.relative_path,
+            checkout_root=checkout_root,
+            host_root=service.host_root,
+            max_snapshot_age_seconds=max_snapshot_age_seconds,
+            requested_by=requested_by,
+            submit=submit,
+        )
 
 
 @dataclass(frozen=True)
@@ -65,6 +209,8 @@ class BuildNextReceipt:
     feed_commit: str | None
     message: str
     evidence: Mapping[str, Any]
+    submitted: bool = False
+    projected_status: str | None = None
     publication_enabled: bool = False
     merge_enabled: bool = False
     product_main_write_enabled: bool = False
@@ -268,37 +414,89 @@ def _validate_pipeline_runtime(pipe: Mapping[str, Any]) -> None:
             raise BuildNextError("selected pipeline evidence is stale")
 
 
-def _phase_plan_paths(plan: Mapping[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    allowed: set[str] = set()
-    forbidden = {
-        ".git/**",
-        "artifacts/**",
-        ".github/workflows/**",
-        "docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md",
-        "docs/SOP/FOUNDER_PIPELINE_COMMANDS_V1.md",
-        "docs/SOP/PIPELINE_CREATION_SOP_V1.md",
-        "docs/SOP/SCHEDULED_AUTOBUILDER_LANE_POLICY_V1.md",
-    }
-    for raw_slice in plan.get("slices") or []:
-        if not isinstance(raw_slice, dict):
+def _path_covers(authority_path: str, forbidden_path: str) -> bool:
+    grant = authority_path.rstrip("/")
+    forbidden = forbidden_path.rstrip("/")
+    if not grant or grant in BROAD_WRITABLE_ROOTS:
+        return True
+    if forbidden.endswith("/**"):
+        forbidden = forbidden[:-3]
+    if "*" in grant:
+        return False
+    if "*" in forbidden:
+        prefix = forbidden.split("*", 1)[0].rstrip("/")
+        return bool(prefix) and (prefix == grant or prefix.startswith(grant + "/"))
+    return forbidden == grant or forbidden.startswith(grant + "/")
+
+
+def _validate_writable_path(path: str) -> str:
+    rel = _safe_relative(path, "touchSet entry")
+    normalized = rel.rstrip("/")
+    if rel in BROAD_WRITABLE_ROOTS or normalized in BROAD_WRITABLE_ROOTS:
+        raise BuildNextError(f"broad writable path is not allowed: {rel}")
+    for forbidden in FORBIDDEN_AUTHORITY_PATHS:
+        if rel == forbidden or fnmatch.fnmatchcase(rel, forbidden) or _path_covers(rel, forbidden):
+            raise BuildNextError(
+                f"writable path {rel!r} overlaps forbidden authority {forbidden!r}"
+            )
+    return rel
+
+
+def _select_native_slice(plan: Mapping[str, Any]) -> NativeSlicePacket:
+    raw_slices = plan.get("slices")
+    if not isinstance(raw_slices, list) or not raw_slices:
+        raise BuildNextError("selected phase plan does not declare native slices")
+    slices = [item for item in raw_slices if isinstance(item, dict)]
+    if len(slices) != len(raw_slices):
+        raise BuildNextError("selected phase plan contains invalid native slice entries")
+
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for index, item in enumerate(slices):
+        plane = str(item.get("declaredPlane") or "").strip().upper()
+        layer = str(item.get("layerPreset") or "").strip().upper()
+        touch_set = item.get("touchSet")
+        if item.get("closeout") or "SMOKE" in str(item.get("sliceId") or "").upper():
             continue
-        for raw_path in raw_slice.get("touchSet") or []:
-            rel = _safe_relative(raw_path, "touchSet entry")
-            allowed.add(rel if rel.endswith("/") else rel)
-        closeout = raw_slice.get("closeout") if isinstance(raw_slice.get("closeout"), dict) else {}
-        for key in ("evidenceDoc", "sprintSpec", "selectionOutcomeDoc", "nextSelectionDoc"):
-            if closeout.get(key):
-                allowed.add(_safe_relative(closeout[key], f"closeout.{key}"))
-        for raw_path in closeout.get("carryDocs") or []:
-            allowed.add(_safe_relative(raw_path, "closeout.carryDocs entry"))
-    for key in ("sprintSpecPath", "selectionRecord"):
-        if plan.get(key):
-            allowed.add(_safe_relative(plan[key], key))
-    if not allowed:
-        raise BuildNextError("selected phase plan does not declare path ownership")
-    if any(path in forbidden or path.startswith(".git/") for path in allowed):
-        raise BuildNextError("selected phase plan overlaps forbidden authority paths")
-    return tuple(sorted(allowed)), tuple(sorted(forbidden))
+        if plane == "PRODUCT-PLANE" and layer != "CONTROL" and isinstance(touch_set, list):
+            candidates.append((index, item))
+    if not candidates:
+        raise BuildNextError("selected phase plan has no bounded native implementation slice")
+    index, selected = candidates[0]
+    touch_set_raw = selected.get("touchSet")
+    if not isinstance(touch_set_raw, list) or not touch_set_raw:
+        raise BuildNextError("selected native implementation slice lacks a writable touch set")
+    touch_set = tuple(_validate_writable_path(str(item)) for item in touch_set_raw)
+    if len(set(touch_set)) != len(touch_set):
+        raise BuildNextError("selected native implementation slice has duplicate touch paths")
+
+    slice_id = str(selected.get("sliceId") or "").strip()
+    build_branch = str(selected.get("buildBranch") or "").strip()
+    layer_preset = str(selected.get("layerPreset") or "").strip()
+    if not slice_id or not build_branch or not layer_preset:
+        raise BuildNextError("selected native implementation slice is missing identity fields")
+    return NativeSlicePacket(
+        slice_id=slice_id,
+        build_branch=build_branch,
+        layer_preset=layer_preset,
+        worker_mode=str(selected.get("workerMode") or "").strip() or None,
+        declared_plane=str(selected.get("declaredPlane") or "").strip(),
+        touch_set=touch_set,
+        sequence_index=index,
+        total_slices=len(slices),
+        previous_slices=tuple(str(item.get("sliceId") or "") for item in slices[:index]),
+        following_slices=tuple(str(item.get("sliceId") or "") for item in slices[index + 1 :]),
+        sprint_spec_path=(
+            _safe_relative(plan.get("sprintSpecPath"), "sprintSpecPath")
+            if plan.get("sprintSpecPath")
+            else None
+        ),
+        selection_record=(
+            _safe_relative(plan.get("selectionRecord"), "selectionRecord")
+            if plan.get("selectionRecord")
+            else None
+        ),
+        raw_slice=dict(selected),
+    )
 
 
 def _plan_text(ppe_repo: Path, rel: str) -> tuple[dict[str, Any], str, str]:
@@ -315,23 +513,40 @@ def _plan_text(ppe_repo: Path, rel: str) -> tuple[dict[str, Any], str, str]:
     return data, safe_rel, text
 
 
-def _source_commit(ppe_repo: Path) -> str:
+def _source_identity(config: BuildNextConfig, ppe_repo: Path) -> SourceIdentity:
+    _git(ppe_repo, "fetch", "--no-tags", config.source_remote, config.source_ref)
+    remote_ref = f"{config.source_remote}/{config.source_ref}"
+    remote_commit = _git(ppe_repo, "rev-parse", remote_ref)
     commit = _git(ppe_repo, "rev-parse", "HEAD")
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise BuildNextError("PPE source commit is not a full SHA")
+    if not re.fullmatch(r"[0-9a-f]{40}", remote_commit):
+        raise BuildNextError("PPE remote source commit is not a full SHA")
     dirty = _git(ppe_repo, "status", "--porcelain")
     if dirty:
         raise BuildNextError("PPE source checkout is dirty; cannot pin an exact source identity")
-    return commit
+    if commit != remote_commit:
+        raise BuildNextError(
+            f"PPE source HEAD {commit} does not match freshly fetched {remote_ref} {remote_commit}"
+        )
+    remote_url = _git(ppe_repo, "remote", "get-url", config.source_remote)
+    return SourceIdentity(
+        remote=config.source_remote,
+        remote_url=remote_url,
+        ref=config.source_ref,
+        remote_ref=remote_ref,
+        commit=commit,
+    )
 
 
 def _evidence_identity(
     ppe_repo: Path,
     *,
-    source_commit: str,
+    source_identity: SourceIdentity,
     snapshot: Mapping[str, Any],
     selected: Mapping[str, Any],
     plan_rel: str,
+    native_slice: NativeSlicePacket,
 ) -> dict[str, Any]:
     files = {
         "registry": "config/founder_pipeline_registry.json",
@@ -346,8 +561,20 @@ def _evidence_identity(
     }
     stable = {
         "version": 1,
-        "ppe_source_commit": source_commit,
+        "source": asdict(source_identity),
         "selected": selected,
+        "native_slice": {
+            "slice_id": native_slice.slice_id,
+            "build_branch": native_slice.build_branch,
+            "layer_preset": native_slice.layer_preset,
+            "worker_mode": native_slice.worker_mode,
+            "declared_plane": native_slice.declared_plane,
+            "touch_set": list(native_slice.touch_set),
+            "sequence_index": native_slice.sequence_index,
+            "total_slices": native_slice.total_slices,
+            "previous_slices": list(native_slice.previous_slices),
+            "following_slices": list(native_slice.following_slices),
+        },
         "file_hashes": file_hashes,
         "selection_explanation": snapshot.get("recommended_next_action", {}).get(
             "selection_explanation"
@@ -364,10 +591,9 @@ def _instruction(
     pipeline_id: str,
     work: Mapping[str, Any],
     plan_rel: str,
-    plan_text: str,
-    allowed_paths: Sequence[str],
+    native_slice: NativeSlicePacket,
     forbidden_paths: Sequence[str],
-    source_commit: str,
+    source_identity: SourceIdentity,
     evidence_identity: Mapping[str, Any],
 ) -> str:
     return "\n".join(
@@ -379,23 +605,36 @@ def _instruction(
             f"Pipeline ID: {pipeline_id}",
             f"Work-item ID: {work.get('work_item_id')}",
             "Source repository: DanielTabakman/Probability-prediction-engine",
-            f"Exact source commit: {source_commit}",
+            f"Exact source commit: {source_identity.commit}",
+            f"Canonical source ref: {source_identity.remote_ref}",
+            f"Canonical source remote: {source_identity.remote_url}",
             f"Registered phase plan: {plan_rel}",
+            f"Native sliceId: {native_slice.slice_id}",
+            f"Native buildBranch: {native_slice.build_branch}",
+            f"Native layerPreset: {native_slice.layer_preset}",
+            f"Native workerMode: {native_slice.worker_mode or 'default'}",
+            f"Native sequence: {native_slice.sequence_index + 1} of {native_slice.total_slices}",
             "",
             "Authority and publication boundary:",
             "- Do not write product main or merge.",
             "- Do not force-push, enable automerge, mark a PR ready, or publish directly.",
             "- Produce only workspace changes for the Autobuilder relay/gate/publisher path.",
             "- Preserve the controlled draft publisher as the only product publisher.",
+            "- Treat sprint specs, selection records, queues, manifests, registries, "
+            "leases, and operator state as read-only canon/evidence.",
+            "- Do not perform smoke, closeout, selection, queue, or control-plane updates.",
             "",
             "Allowed paths:",
-            *[f"- {path}" for path in allowed_paths],
+            *[f"- {path}" for path in native_slice.touch_set],
             "",
             "Forbidden paths:",
             *[f"- {path}" for path in forbidden_paths],
             "",
             "Acceptance criteria and validation requirements:",
-            "- Satisfy the registered phase plan and referenced sprint/selection documents.",
+            "- Implement only the selected native PPE implementation slice.",
+            "- Preserve native PPE sequencing; do not execute later smoke or closeout slices.",
+            f"- Read sprint spec as canon: {native_slice.sprint_spec_path or 'not declared'}",
+            f"- Read selection record as canon: {native_slice.selection_record or 'not declared'}",
             "- Add or update focused tests for changed behavior.",
             "- Run the focused tests and relevant repository gates before closeout.",
             "- Return evidence suitable for the existing relay, candidate gate, revision loop, "
@@ -405,7 +644,18 @@ def _instruction(
             json.dumps(dict(evidence_identity), indent=2, sort_keys=True),
             "",
             "Relevant canon/task packet:",
-            plan_text.strip(),
+            json.dumps(
+                {
+                    "phase_plan": plan_rel,
+                    "selected_slice": dict(native_slice.raw_slice),
+                    "previous_slices": list(native_slice.previous_slices),
+                    "following_slices": list(native_slice.following_slices),
+                    "sprint_spec_path": native_slice.sprint_spec_path,
+                    "selection_record": native_slice.selection_record,
+                },
+                indent=2,
+                sort_keys=True,
+            ),
             "",
             "Non-goals:",
             "- Do not charter new product scope.",
@@ -415,8 +665,15 @@ def _instruction(
     )
 
 
-def _job_id(pipeline_id: str, work_item_id: str, source_commit: str) -> str:
-    return _safe_id(f"build-next-{pipeline_id}-{work_item_id}-{source_commit[:12]}")
+def _job_id(
+    pipeline_id: str,
+    work_item_id: str,
+    native_slice: NativeSlicePacket,
+    source_commit: str,
+) -> str:
+    return _safe_id(
+        f"build-next-{pipeline_id}-{work_item_id}-{native_slice.slice_id}-{source_commit[:12]}"
+    )
 
 
 def _build_job(
@@ -425,28 +682,39 @@ def _build_job(
     pipeline_id: str,
     work: Mapping[str, Any],
     plan_rel: str,
-    plan_text: str,
-    allowed_paths: Sequence[str],
+    native_slice: NativeSlicePacket,
     forbidden_paths: Sequence[str],
-    source_commit: str,
+    source_identity: SourceIdentity,
     evidence_identity: Mapping[str, Any],
     requested_by: str,
 ) -> dict[str, Any]:
-    lane_id = _safe_id(f"{pipeline_id}-{work.get('work_item_id')}", fallback="lane")
+    lane_id = _safe_id(native_slice.slice_id, fallback="lane")
     return {
         "version": 1,
         "job_id": job_id,
         "approved": True,
         "publication_enabled": False,
         "requested_by": requested_by,
-        "expected_source_head": source_commit,
+        "expected_source_head": source_identity.commit,
         "founder_build_next": {
             "version": 1,
             "pipeline_id": pipeline_id,
             "work_item_id": work.get("work_item_id"),
             "repository": "DanielTabakman/Probability-prediction-engine",
-            "source_commit": source_commit,
+            "source": asdict(source_identity),
             "phase_plan": plan_rel,
+            "native_slice": {
+                "slice_id": native_slice.slice_id,
+                "build_branch": native_slice.build_branch,
+                "layer_preset": native_slice.layer_preset,
+                "worker_mode": native_slice.worker_mode,
+                "declared_plane": native_slice.declared_plane,
+                "touch_set": list(native_slice.touch_set),
+                "sequence_index": native_slice.sequence_index,
+                "total_slices": native_slice.total_slices,
+                "previous_slices": list(native_slice.previous_slices),
+                "following_slices": list(native_slice.following_slices),
+            },
             "portfolio_selection_evidence": dict(evidence_identity),
             "authority": {
                 "publication_enabled": False,
@@ -462,20 +730,20 @@ def _build_job(
                     "task_id": lane_id,
                     "lane_id": lane_id,
                     "chapter_id": _safe_id(str(work.get("work_item_id") or lane_id)).upper(),
-                    "branch": f"autobuilder/{job_id}",
-                    "layer": "ppe-product",
+                    "branch": native_slice.build_branch,
+                    "layer": native_slice.layer_preset,
+                    "worker_mode": native_slice.worker_mode,
                     "preferred_cost_class": "standard",
-                    "allowed_paths": list(allowed_paths),
+                    "allowed_paths": list(native_slice.touch_set),
                     "forbidden_paths": list(forbidden_paths),
                     "allow_changes": True,
                     "instruction": _instruction(
                         pipeline_id=pipeline_id,
                         work=work,
                         plan_rel=plan_rel,
-                        plan_text=plan_text,
-                        allowed_paths=allowed_paths,
+                        native_slice=native_slice,
                         forbidden_paths=forbidden_paths,
-                        source_commit=source_commit,
+                        source_identity=source_identity,
                         evidence_identity=evidence_identity,
                     ),
                 }
@@ -553,28 +821,35 @@ def _submit_feed_job(config: BuildNextConfig, job: Mapping[str, Any]) -> tuple[s
     parse_host_job(text)
     if not config.submit:
         return None, f"{config.jobs_path}/{job_id}.yaml"
-    checkout = _prepare_feed_checkout(config)
-    relative = Path(config.jobs_path) / f"{job_id}.yaml"
-    destination = checkout / relative
-    if destination.exists():
-        existing = destination.read_text(encoding="utf-8")
-        parse_host_job(existing)
-        if existing != text:
-            raise BuildNextError(f"approved job {job_id!r} already exists with different content")
-        return _git(checkout, "rev-parse", "HEAD"), relative.as_posix()
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(text, encoding="utf-8", newline="\n")
-    _git(checkout, "add", "--", relative.as_posix())
-    changed = _run(
-        ["git", "-C", str(checkout), "diff", "--cached", "--quiet"],
-        accepted=(0, 1),
-    ).returncode
-    if changed == 0:
-        return _git(checkout, "rev-parse", "HEAD"), relative.as_posix()
-    _git(checkout, "commit", "-m", f"Queue founder build next job {job_id}")
-    commit = _git(checkout, "rev-parse", "HEAD")
-    _git(checkout, "push", "origin", f"HEAD:{config.jobs_branch}")
-    return commit, relative.as_posix()
+    lock_root = (
+        config.checkout_root
+        or Path(tempfile.gettempdir()) / "msos-autobuilder-build-next-feed"
+    ).expanduser().resolve()
+    with FeedMutationLock(lock_root.with_suffix(".lock")):
+        checkout = _prepare_feed_checkout(config)
+        relative = Path(config.jobs_path) / f"{job_id}.yaml"
+        destination = checkout / relative
+        if destination.exists():
+            existing = destination.read_text(encoding="utf-8")
+            parse_host_job(existing)
+            if existing != text:
+                raise BuildNextError(
+                    f"approved job {job_id!r} already exists with different content"
+                )
+            return _git(checkout, "rev-parse", "HEAD"), relative.as_posix()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(text, encoding="utf-8", newline="\n")
+        _git(checkout, "add", "--", relative.as_posix())
+        changed = _run(
+            ["git", "-C", str(checkout), "diff", "--cached", "--quiet"],
+            accepted=(0, 1),
+        ).returncode
+        if changed == 0:
+            return _git(checkout, "rev-parse", "HEAD"), relative.as_posix()
+        _git(checkout, "commit", "-m", f"Queue founder build next job {job_id}")
+        commit = _git(checkout, "rev-parse", "HEAD")
+        _git(checkout, "push", "origin", f"HEAD:{config.jobs_branch}")
+        return commit, relative.as_posix()
 
 
 def _blocked_receipt(message: str, evidence: Mapping[str, Any] | None = None) -> BuildNextReceipt:
@@ -610,6 +885,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                 feed_commit=None,
                 message="No safe READY_TO_BUILD work item was selected by PPE.",
                 evidence={"snapshot_as_of": snapshot.get("as_of")},
+                submitted=False,
             )
         if rec.get("state") != "READY_TO_BUILD" or rec.get("action_type") != "build":
             return BuildNextReceipt(
@@ -623,6 +899,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                 feed_commit=None,
                 message=f"PPE selected non-dispatchable state {rec.get('state')!r}.",
                 evidence={"recommended_next_action": rec},
+                submitted=False,
             )
 
         pipeline_id = str(rec.get("pipeline_id") or "")
@@ -642,16 +919,18 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             raise BuildNextError("selected work item lacks accepted evidence")
         trace = str(work.get("trace") or rec.get("trace") or "")
         plan, plan_rel, plan_raw = _plan_text(ppe_repo, trace)
-        allowed_paths, forbidden_paths = _phase_plan_paths(plan)
-        source_commit = _source_commit(ppe_repo)
+        native_slice = _select_native_slice(plan)
+        forbidden_paths = FORBIDDEN_AUTHORITY_PATHS
+        source_identity = _source_identity(config, ppe_repo)
         evidence_identity = _evidence_identity(
             ppe_repo,
-            source_commit=source_commit,
+            source_identity=source_identity,
             snapshot=snapshot,
             selected={"pipeline_id": pipeline_id, "work_item_id": work_item_id, "trace": plan_rel},
             plan_rel=plan_rel,
+            native_slice=native_slice,
         )
-        job_id = _job_id(pipeline_id, work_item_id, source_commit)
+        job_id = _job_id(pipeline_id, work_item_id, native_slice, source_identity.commit)
         state = _job_state(config, job_id)
         if state in {"RUNNING", "QUEUED"}:
             return BuildNextReceipt(
@@ -660,11 +939,12 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                 work_item_id=work_item_id,
                 job_id=job_id,
                 repository="DanielTabakman/Probability-prediction-engine",
-                source_commit=source_commit,
+                source_commit=source_identity.commit,
                 feed_path=None,
                 feed_commit=None,
                 message=f"Job {job_id} is already {state.lower()}; no duplicate was submitted.",
                 evidence=evidence_identity,
+                submitted=False,
             )
         if state == "BLOCKED":
             raise BuildNextError(f"job {job_id} already completed or failed; refusing redispatch")
@@ -673,29 +953,43 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             pipeline_id=pipeline_id,
             work=work,
             plan_rel=plan_rel,
-            plan_text=plan_raw,
-            allowed_paths=allowed_paths,
+            native_slice=native_slice,
             forbidden_paths=forbidden_paths,
-            source_commit=source_commit,
+            source_identity=source_identity,
             evidence_identity=evidence_identity,
             requested_by=config.requested_by,
         )
         feed_commit, feed_path = _submit_feed_job(config, job)
+        if not config.submit:
+            return BuildNextReceipt(
+                status="UNFILLED",
+                pipeline_id=pipeline_id,
+                work_item_id=work_item_id,
+                job_id=job_id,
+                repository="DanielTabakman/Probability-prediction-engine",
+                source_commit=source_identity.commit,
+                feed_path=feed_path,
+                feed_commit=None,
+                message=(
+                    "Dry run constructed one immutable approved build-next job; "
+                    "no feed submission occurred."
+                ),
+                evidence=evidence_identity,
+                submitted=False,
+                projected_status="QUEUED",
+            )
         return BuildNextReceipt(
             status="QUEUED",
             pipeline_id=pipeline_id,
             work_item_id=work_item_id,
             job_id=job_id,
             repository="DanielTabakman/Probability-prediction-engine",
-            source_commit=source_commit,
+            source_commit=source_identity.commit,
             feed_path=feed_path,
             feed_commit=feed_commit,
-            message=(
-                "Submitted one immutable approved build-next job."
-                if config.submit
-                else "Dry run constructed one immutable approved build-next job."
-            ),
+            message="Submitted one immutable approved build-next job.",
             evidence=evidence_identity,
+            submitted=True,
         )
     except BuildNextError as exc:
         return _blocked_receipt(str(exc))

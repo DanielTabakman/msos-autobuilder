@@ -77,16 +77,16 @@ and submits exactly one approved PPE/MSOS product job to the existing feed:
 
 ```powershell
 .\.venv\Scripts\python.exe -m msos_autobuilder build-next `
-  --ppe-repo "$HOME\Probability-prediction-engine" `
-  --feed-repo-url "https://github.com/DanielTabakman/msos-autobuilder.git" `
-  --jobs-branch jobs `
-  --jobs-path jobs/approved `
-  --host-root "$HOME\.msos-autobuilder"
+  --service-config "$HOME\.msos-autobuilder\service.yaml"
 ```
 
-It returns a JSON receipt with `RUNNING`, `QUEUED`, `BLOCKED`, or `UNFILLED`.
-It does not implement `build next 2`, continuous refill, clock scheduling,
-automatic merge, product-main writes, or self-deployment authority.
+The command derives the PPE source checkout, feed URL, jobs branch/path, and
+host root from the installed persistent-host service configuration. It returns a
+JSON receipt with `RUNNING`, `QUEUED`, `BLOCKED`, or `UNFILLED`; dry runs return
+`UNFILLED` with `submitted: false` and `projected_status: QUEUED` so they cannot
+be counted as queued runtime work. It does not implement `build next 2`,
+continuous refill, clock scheduling, automatic merge, product-main writes, or
+self-deployment authority.
 
 ### Review-only result relay
 

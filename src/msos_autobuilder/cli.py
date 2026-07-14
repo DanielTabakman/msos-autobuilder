@@ -157,8 +157,20 @@ def _host_stop_command(args: argparse.Namespace) -> int:
 
 
 def _build_next_command(args: argparse.Namespace) -> int:
-    receipt = build_next(
-        BuildNextConfig(
+    if args.service_config:
+        config = BuildNextConfig.from_service_config(
+            args.service_config,
+            checkout_root=Path(args.checkout_root) if args.checkout_root else None,
+            max_snapshot_age_seconds=args.max_snapshot_age_seconds,
+            requested_by=args.requested_by,
+            submit=not args.dry_run,
+        )
+    else:
+        if not args.ppe_repo or not args.feed_repo_url:
+            raise SystemExit(
+                "build-next requires --service-config or both --ppe-repo and --feed-repo-url"
+            )
+        config = BuildNextConfig(
             ppe_repo=Path(args.ppe_repo),
             feed_repo_url=args.feed_repo_url,
             jobs_branch=args.jobs_branch,
@@ -169,7 +181,7 @@ def _build_next_command(args: argparse.Namespace) -> int:
             requested_by=args.requested_by,
             submit=not args.dry_run,
         )
-    )
+    receipt = build_next(config)
     _write_or_print(render_receipt_json(receipt), args.json_out)
     return 2 if receipt.status == "BLOCKED" else 0
 
@@ -305,8 +317,9 @@ def build_parser() -> argparse.ArgumentParser:
         "build-next",
         help="dispatch exactly one PPE READY_TO_BUILD item through the approved job feed",
     )
-    build_next_parser.add_argument("--ppe-repo", required=True)
-    build_next_parser.add_argument("--feed-repo-url", required=True)
+    build_next_parser.add_argument("--service-config")
+    build_next_parser.add_argument("--ppe-repo")
+    build_next_parser.add_argument("--feed-repo-url")
     build_next_parser.add_argument("--jobs-branch", default="jobs")
     build_next_parser.add_argument("--jobs-path", default="jobs/approved")
     build_next_parser.add_argument("--checkout-root")

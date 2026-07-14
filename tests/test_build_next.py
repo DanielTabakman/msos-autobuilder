@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,7 @@ def _init_repo(path: Path) -> Path:
     _git(path, "init", "-q")
     _git(path, "config", "user.email", "test@example.com")
     _git(path, "config", "user.name", "Test")
+    _git(path, "checkout", "-qb", "main")
     return path
 
 
@@ -87,14 +89,30 @@ def _plan(*, touch_set: list[str] | None = None) -> dict[str, Any]:
         "selectionRecord": "docs/SOP/POST_FIXTURE_SELECTION.md",
         "slices": [
             {
-                "sliceId": "Fixture-Slice001",
+                "sliceId": "Fixture-Control-Slice001",
+                "layerPreset": "CONTROL",
+                "declaredPlane": "EVIDENCE-PLANE",
+                "buildBranch": "build/auto/control",
+            },
+            {
+                "sliceId": "Fixture-Product-Slice002",
                 "layerPreset": "PPE_UI",
-                "buildBranch": "build/auto/fixture",
+                "workerMode": "local-agent",
+                "declaredPlane": "PRODUCT-PLANE",
+                "buildBranch": "build/auto/product-slice",
                 "touchSet": paths,
+            },
+            {
+                "sliceId": "Fixture-Smoke-Slice003",
+                "layerPreset": "CONTROL",
+                "declaredPlane": "EVIDENCE-PLANE",
+                "buildBranch": "build/auto/smoke",
             },
             {
                 "sliceId": "Fixture-Closeout-Slice002",
                 "layerPreset": "CONTROL",
+                "declaredPlane": "EVIDENCE-PLANE",
+                "buildBranch": "build/auto/closeout",
                 "closeout": {
                     "evidenceDoc": "docs/SOP/FIXTURE_EVIDENCE.md",
                     "sprintSpec": "docs/SOP/SPRINT_FIXTURE.md",
@@ -218,6 +236,10 @@ def _write_ppe(
         encoding="utf-8",
     )
     _commit_all(repo)
+    origin = root.parent / f"{root.name}-origin.git"
+    _git(None, "clone", "-q", "--bare", str(repo), str(origin))
+    _git(repo, "remote", "add", "origin", str(origin))
+    _git(repo, "push", "-q", "-u", "origin", "main")
     return repo
 
 
@@ -267,8 +289,45 @@ def test_build_next_submits_exactly_one_selected_item(tmp_path: Path) -> None:
     assert job["approved"] is True
     assert job["publication_enabled"] is False
     assert job["founder_build_next"]["work_item_id"] == "fixture_work"
+    assert job["founder_build_next"]["native_slice"]["slice_id"] == "Fixture-Product-Slice002"
+    assert job["founder_build_next"]["native_slice"]["previous_slices"] == [
+        "Fixture-Control-Slice001"
+    ]
+    assert job["founder_build_next"]["native_slice"]["following_slices"] == [
+        "Fixture-Smoke-Slice003",
+        "Fixture-Closeout-Slice002",
+    ]
+    assert lane["task_id"] == "Fixture-Product-Slice002"
+    assert lane["branch"] == "build/auto/product-slice"
+    assert lane["layer"] == "PPE_UI"
+    assert lane["worker_mode"] == "local-agent"
     assert "src/viz/panel.py" in lane["allowed_paths"]
     assert ".github/workflows/**" in lane["forbidden_paths"]
+    assert "docs/SOP/SPRINT_FIXTURE.md" not in lane["allowed_paths"]
+    assert "docs/SOP/POST_FIXTURE_SELECTION.md" not in lane["allowed_paths"]
+
+
+def test_control_smoke_and_closeout_slices_are_not_folded_into_product_lane(
+    tmp_path: Path,
+) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(_config(tmp_path, ppe, feed))
+
+    review = tmp_path / "review"
+    _git(None, "clone", "-q", "--branch", "jobs", str(feed), str(review))
+    job_path = next((review / "jobs" / "approved").glob(f"{receipt.job_id}.yaml"))
+    job = yaml.safe_load(job_path.read_text(encoding="utf-8"))
+    lanes = job["manifest"]["lanes"]
+    assert len(lanes) == 1
+    instruction = lanes[0]["instruction"]
+    assert (
+        "Do not perform smoke, closeout, selection, queue, or control-plane updates."
+        in instruction
+    )
+    assert "Fixture-Smoke-Slice003" in instruction
+    assert "Fixture-Closeout-Slice002" in instruction
 
 
 def test_duplicate_invocation_is_idempotent(tmp_path: Path) -> None:
@@ -281,6 +340,8 @@ def test_duplicate_invocation_is_idempotent(tmp_path: Path) -> None:
 
     assert first.status == "QUEUED"
     assert second.status == "QUEUED"
+    assert first.submitted is True
+    assert second.submitted is True
     assert first.job_id == second.job_id
     review = tmp_path / "review"
     _git(None, "clone", "-q", "--branch", "jobs", str(feed), str(review))
@@ -327,7 +388,10 @@ def test_blocked_and_awaiting_founder_fail_closed(tmp_path: Path) -> None:
 def test_missing_adapter_path_source_or_authority_fails_closed(tmp_path: Path) -> None:
     cases = [
         {"registry": _registry(adapter_ready=False), "message": "adapter"},
-        {"plan": {"name": "bad", "slices": [{"sliceId": "x"}]}, "message": "path ownership"},
+        {
+            "plan": {"name": "bad", "slices": [{"sliceId": "x"}]},
+            "message": "no bounded native implementation slice",
+        },
         {"registry": _registry(canonical_repo="DanielTabakman/other"), "message": "supports only"},
         {
             "registry": {
@@ -356,6 +420,31 @@ def test_missing_adapter_path_source_or_authority_fails_closed(tmp_path: Path) -
         assert case["message"] in receipt.message
 
 
+def test_forbidden_control_plane_paths_and_broad_grants_fail_closed(tmp_path: Path) -> None:
+    forbidden_cases = [
+        ["docs/SOP/SPRINT_FIXTURE.md"],
+        ["docs/SOP/POST_FIXTURE_SELECTION.md"],
+        ["config/founder_pipeline_registry.json"],
+        ["docs/SOP/PHASE_QUEUE.json"],
+        ["docs/SOP/ACTIVE_PHASE_MANIFEST.json"],
+        ["docs/SOP/FOUNDER_PIPELINE_COMMANDS_V1.md"],
+        ["docs/SOP/PIPELINE_CREATION_SOP_V1.md"],
+        ["docs/SOP/SCHEDULED_AUTOBUILDER_LANE_POLICY_V1.md"],
+        ["docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md"],
+        ["docs"],
+        ["docs/SOP"],
+        ["."],
+    ]
+    for index, touch_set in enumerate(forbidden_cases):
+        ppe = _write_ppe(tmp_path / f"ppe-{index}", plan=_plan(touch_set=touch_set))
+        feed = _feed_repo(tmp_path / f"feed-{index}")
+
+        receipt = build_next(_config(tmp_path / f"case-{index}", ppe, feed))
+
+        assert receipt.status == "BLOCKED"
+        assert "forbidden authority" in receipt.message or "broad writable path" in receipt.message
+
+
 def test_no_ready_work_returns_unfilled(tmp_path: Path) -> None:
     ppe = _write_ppe(tmp_path / "ppe", snapshot=_snapshot(state="UNFILLED"))
     feed = _feed_repo(tmp_path / "feed-work")
@@ -363,6 +452,135 @@ def test_no_ready_work_returns_unfilled(tmp_path: Path) -> None:
     receipt = build_next(_config(tmp_path, ppe, feed))
 
     assert receipt.status == "UNFILLED"
+
+
+def test_stale_clean_branch_and_clean_feature_branch_fail_closed(tmp_path: Path) -> None:
+    ppe_stale = _write_ppe(tmp_path / "ppe-stale")
+    (ppe_stale / "new-main.txt").write_text("new main\n", encoding="utf-8")
+    _commit_all(ppe_stale, "advance main")
+    _git(ppe_stale, "push", "-q", "origin", "main")
+    _git(ppe_stale, "reset", "--hard", "HEAD~1")
+    assert not _git(ppe_stale, "status", "--porcelain")
+    stale_receipt = build_next(
+        _config(tmp_path / "stale", ppe_stale, _feed_repo(tmp_path / "feed-stale"))
+    )
+
+    ppe_feature = _write_ppe(tmp_path / "ppe-feature")
+    _git(ppe_feature, "checkout", "-qb", "feature/off-main")
+    (ppe_feature / "feature.txt").write_text("feature\n", encoding="utf-8")
+    _commit_all(ppe_feature, "feature")
+    assert not _git(ppe_feature, "status", "--porcelain")
+    feature_receipt = build_next(
+        _config(tmp_path / "feature", ppe_feature, _feed_repo(tmp_path / "feed-feature"))
+    )
+
+    assert stale_receipt.status == "BLOCKED"
+    assert "does not match freshly fetched origin/main" in stale_receipt.message
+    assert feature_receipt.status == "BLOCKED"
+    assert "does not match freshly fetched origin/main" in feature_receipt.message
+
+
+def test_exact_origin_main_succeeds_and_records_source_evidence(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    feed = _feed_repo(tmp_path / "feed-work")
+    origin_main = _git(ppe, "rev-parse", "origin/main")
+
+    receipt = build_next(_config(tmp_path, ppe, feed))
+
+    assert receipt.status == "QUEUED"
+    assert receipt.source_commit == origin_main
+    assert receipt.evidence["source"]["remote"] == "origin"
+    assert receipt.evidence["source"]["remote_ref"] == "origin/main"
+    review = tmp_path / "review"
+    _git(None, "clone", "-q", "--branch", "jobs", str(feed), str(review))
+    job = yaml.safe_load(next((review / "jobs" / "approved").glob("build-next-*.yaml")).read_text())
+    assert job["founder_build_next"]["source"]["commit"] == origin_main
+
+
+def test_dry_run_is_not_reported_as_queued(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(_config(tmp_path, ppe, feed).__class__(
+        ppe_repo=ppe,
+        feed_repo_url=str(feed),
+        checkout_root=tmp_path / "checkout",
+        submit=False,
+    ))
+
+    assert receipt.status == "UNFILLED"
+    assert receipt.submitted is False
+    assert receipt.projected_status == "QUEUED"
+    review = tmp_path / "review"
+    _git(None, "clone", "-q", "--branch", "jobs", str(feed), str(review))
+    assert not list((review / "jobs" / "approved").glob("build-next-*.yaml"))
+
+
+def test_concurrent_identical_invocations_create_one_immutable_job(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    feed = _feed_repo(tmp_path / "feed-work")
+    config = _config(tmp_path, ppe, feed)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        receipts = list(pool.map(lambda _: build_next(config), range(2)))
+
+    assert {receipt.status for receipt in receipts} == {"QUEUED"}
+    assert {receipt.job_id for receipt in receipts} == {receipts[0].job_id}
+    review = tmp_path / "review"
+    _git(None, "clone", "-q", "--branch", "jobs", str(feed), str(review))
+    assert len(list((review / "jobs" / "approved").glob("build-next-*.yaml"))) == 1
+
+
+def test_production_config_is_derived_from_installed_service_config(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    feed = _feed_repo(tmp_path / "feed-work")
+    host_root = tmp_path / "host"
+    codex_config = tmp_path / "host.yaml"
+    codex_config.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "publication_enabled": False,
+                "source_repo": str(ppe),
+                "workspace_root": str(tmp_path / "workspaces"),
+                "runtime_root": str(tmp_path / "runtime"),
+                "owner_id": "test-host",
+                "codex": {"sandbox_mode": "workspace-write", "max_concurrency": 1},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    service_config = tmp_path / "service.yaml"
+    service_config.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "publication_enabled": False,
+                "host_root": str(host_root),
+                "codex_host_config": str(codex_config),
+                "job_feed": {
+                    "enabled": True,
+                    "repo_url": str(feed),
+                    "branch": "jobs",
+                    "path": "jobs/approved",
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    config = BuildNextConfig.from_service_config(
+        service_config,
+        checkout_root=tmp_path / "checkout",
+    )
+    receipt = build_next(config)
+
+    assert config.ppe_repo == ppe.resolve()
+    assert config.host_root == host_root.resolve()
+    assert config.feed_repo_url == str(feed)
+    assert receipt.status == "QUEUED"
 
 
 def test_receipts_distinguish_running_queued_blocked_and_unfilled(tmp_path: Path) -> None:

@@ -295,29 +295,74 @@ function Test-StagedTaskTransport {
     }
     $TaskNamesPath = Join-Path ([System.IO.Path]::GetTempPath()) ("msos-bootstrap-task-names-" + [Guid]::NewGuid().ToString("N") + ".json")
     $ProbePath = Join-Path ([System.IO.Path]::GetTempPath()) ("msos-bootstrap-task-transport-" + [Guid]::NewGuid().ToString("N") + ".py")
+    $StdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) ("msos-bootstrap-task-transport-stdout-" + [Guid]::NewGuid().ToString("N") + ".txt")
+    $StderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ("msos-bootstrap-task-transport-stderr-" + [Guid]::NewGuid().ToString("N") + ".txt")
     $Probe = @"
 import importlib.util
 import json
 import pathlib
 import sys
+import traceback
 
 bootstrap = pathlib.Path(sys.argv[1])
-task_names = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8-sig"))
-module_path = bootstrap / "self_update_supervisor.py"
-spec = importlib.util.spec_from_file_location("staged_self_update_supervisor", module_path)
-module = importlib.util.module_from_spec(spec)
-assert spec.loader is not None
-spec.loader.exec_module(module)
-controller = module.PowerShellTaskController(bootstrap / "windows_self_update_task_control.ps1")
-states = controller.states(task_names)
-print(json.dumps(states, sort_keys=True))
+task_names_path = pathlib.Path(sys.argv[2])
+stdout_path = pathlib.Path(sys.argv[3])
+stderr_path = pathlib.Path(sys.argv[4])
+
+
+def main(stdout_file):
+    task_names = json.loads(task_names_path.read_text(encoding="utf-8-sig"))
+    module_path = bootstrap / "self_update_supervisor.py"
+    spec = importlib.util.spec_from_file_location("staged_self_update_supervisor", module_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    module_name = spec.name
+    previous = sys.modules.get(module_name)
+    had_previous = module_name in sys.modules
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if had_previous:
+            sys.modules[module_name] = previous
+        else:
+            sys.modules.pop(module_name, None)
+    controller = module.PowerShellTaskController(
+        bootstrap / "windows_self_update_task_control.ps1"
+    )
+    states = controller.states(task_names)
+    stdout_file.write(json.dumps(states, sort_keys=True))
+    stdout_file.write("\n")
+    stdout_file.flush()
+
+
+with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open(
+    "w",
+    encoding="utf-8",
+) as stderr_file:
+    try:
+        main(stdout_file)
+    except BaseException:
+        traceback.print_exc(file=stderr_file)
+        stderr_file.flush()
+        sys.exit(1)
 "@
     try {
         Write-Utf8NoBom -Path $TaskNamesPath -Value (($ManagedTaskNames | ConvertTo-Json -Compress) + [Environment]::NewLine)
         Write-Utf8NoBom -Path $ProbePath -Value $Probe
-        $Output = & $BootstrapPython $ProbePath $BootstrapRoot $TaskNamesPath
-        if ($LASTEXITCODE -ne 0) { throw "Staged Python to PowerShell task-name transport failed." }
-        $States = $Output | ConvertFrom-Json
+        & $BootstrapPython `
+            $ProbePath `
+            $BootstrapRoot `
+            $TaskNamesPath `
+            $StdoutPath `
+            $StderrPath
+        $ExitCode = $LASTEXITCODE
+        $Stdout = if (Test-Path $StdoutPath) { Get-Content -Raw -Encoding UTF8 $StdoutPath } else { "" }
+        $Stderr = if (Test-Path $StderrPath) { Get-Content -Raw -Encoding UTF8 $StderrPath } else { "" }
+        if ($ExitCode -ne 0) {
+            throw "Staged Python to PowerShell task-name transport failed with exit $ExitCode. stdout:`n$Stdout`nstderr:`n$Stderr"
+        }
+        $States = $Stdout | ConvertFrom-Json
         foreach ($TaskName in $ManagedTaskNames) {
             if (-not ($States.PSObject.Properties.Name -contains $TaskName)) {
                 throw "Staged task transport omitted task name: $TaskName"
@@ -331,6 +376,8 @@ print(json.dumps(states, sort_keys=True))
     finally {
         Remove-Item -Force -ErrorAction SilentlyContinue $TaskNamesPath
         Remove-Item -Force -ErrorAction SilentlyContinue $ProbePath
+        Remove-Item -Force -ErrorAction SilentlyContinue $StdoutPath
+        Remove-Item -Force -ErrorAction SilentlyContinue $StderrPath
     }
 }
 

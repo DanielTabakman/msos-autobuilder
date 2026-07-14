@@ -1,0 +1,10 @@
+{
+  "attempt_id": "20260714T211413.346045Z-5ba6aa2c0ceb",
+  "outcome": "success",
+  "recorded_at": "2026-07-14T21:18:15.074566+00:00",
+  "report_path": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\reports\\20260714T211413.346045Z-5ba6aa2c0ceb.json",
+  "requested_commit": "395597a2b36ddaaa58b23da870fa00498f7a1e39",
+  "requires_founder_attention": false,
+  "type": "autobuilder-self-update",
+  "version": 1
+}

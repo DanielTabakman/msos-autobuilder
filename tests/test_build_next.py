@@ -9,7 +9,11 @@ from typing import Any
 
 import yaml
 
-from msos_autobuilder.build_next import BuildNextConfig, build_next
+from msos_autobuilder.build_next import (
+    BuildNextConfig,
+    _normalize_github_repository,
+    build_next,
+)
 
 SOURCE_REPO = "DanielTabakman/Probability-prediction-engine"
 
@@ -49,7 +53,22 @@ def _commit_all(repo: Path, message: str = "fixture") -> str:
     return _git(repo, "rev-parse", "HEAD")
 
 
-def _registry(*, adapter_ready: bool = True, canonical_repo: str = SOURCE_REPO) -> dict[str, Any]:
+def _registry(
+    *,
+    adapter_ready: bool = True,
+    dispatch_enabled: bool | None = True,
+    canonical_repo: str = SOURCE_REPO,
+) -> dict[str, Any]:
+    adapter: dict[str, Any] = {
+        "adapter": "ppe_operator",
+        "readiness": (
+            "READY_FOR_MANUAL_OR_SINGLE_DISPATCH"
+            if adapter_ready
+            else "NOT_READY"
+        ),
+    }
+    if dispatch_enabled is not None:
+        adapter["dispatch_commands_enabled"] = dispatch_enabled
     return {
         "version": 1,
         "canon": [
@@ -64,14 +83,7 @@ def _registry(*, adapter_ready: bool = True, canonical_repo: str = SOURCE_REPO) 
                 "display_name": "PPE",
                 "canonical_repo": canonical_repo,
                 "registration_stage": "EXECUTION_READY",
-                "build_adapter": {
-                    "adapter": "ppe_operator",
-                    "readiness": (
-                        "READY_FOR_MANUAL_OR_SINGLE_DISPATCH"
-                        if adapter_ready
-                        else "NOT_READY"
-                    ),
-                },
+                "build_adapter": adapter,
                 "authority": {
                     "publication_authority": "controlled publisher only; draft PR by default"
                 },
@@ -132,6 +144,8 @@ def _snapshot(
     queued: list[dict[str, Any]] | None = None,
     stale: list[dict[str, Any]] | None = None,
     as_of: str | None = None,
+    prerequisite_status: str = "complete",
+    include_prerequisites: bool = True,
 ) -> dict[str, Any]:
     work = {
         "work_item_id": "fixture_work",
@@ -148,6 +162,20 @@ def _snapshot(
             "age_index": 1,
         },
     }
+    if include_prerequisites:
+        work["native_prerequisites"] = {
+            "version": 1,
+            "read_only": True,
+            "source": "ppe_native_read_only",
+            "evidence": "native_runtime",
+            "statuses": [
+                {
+                    "slice_id": "Fixture-Control-Slice001",
+                    "status": prerequisite_status,
+                    "non_blocking": False,
+                }
+            ],
+        }
     ready = [work] if work_state == "READY_TO_BUILD" else []
     return {
         "version": 1,
@@ -268,6 +296,7 @@ def _config(
         feed_repo_url=str(feed),
         checkout_root=tmp_path / "checkout",
         host_root=host_root,
+        allow_test_local_source_remote=True,
     )
 
 
@@ -341,8 +370,12 @@ def test_duplicate_invocation_is_idempotent(tmp_path: Path) -> None:
     assert first.status == "QUEUED"
     assert second.status == "QUEUED"
     assert first.submitted is True
-    assert second.submitted is True
+    assert second.submitted is False
     assert first.job_id == second.job_id
+    assert first.feed_commit == second.feed_commit
+    assert first.feed_path == second.feed_path
+    assert "Submitted one immutable" in first.message
+    assert "already exists" in second.message
     review = tmp_path / "review"
     _git(None, "clone", "-q", "--branch", "jobs", str(feed), str(review))
     assert len(list((review / "jobs" / "approved").glob("build-next-*.yaml"))) == 1
@@ -420,6 +453,63 @@ def test_missing_adapter_path_source_or_authority_fails_closed(tmp_path: Path) -
         assert case["message"] in receipt.message
 
 
+def test_dispatch_commands_enabled_must_be_explicitly_true(tmp_path: Path) -> None:
+    cases = [
+        (_registry(dispatch_enabled=False), "dispatch_commands_enabled"),
+        (_registry(dispatch_enabled=None), "dispatch_commands_enabled"),
+        (_registry(dispatch_enabled=True), None),
+    ]
+    for index, (registry, message) in enumerate(cases):
+        ppe = _write_ppe(tmp_path / f"ppe-dispatch-{index}", registry=registry)
+        feed = _feed_repo(tmp_path / f"feed-dispatch-{index}")
+
+        receipt = build_next(_config(tmp_path / f"dispatch-{index}", ppe, feed))
+
+        if message is None:
+            assert receipt.status == "QUEUED"
+        else:
+            assert receipt.status == "BLOCKED"
+            assert message in receipt.message
+            assert "#5366" in receipt.message
+
+
+def test_native_prerequisite_evidence_blocks_incomplete_product_slice(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(prerequisite_status="in_progress")
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(_config(tmp_path, ppe, feed))
+
+    assert receipt.status == "BLOCKED"
+    assert "Control-Slice001" in receipt.message
+
+
+def test_missing_native_prerequisite_evidence_fails_closed(tmp_path: Path) -> None:
+    snapshot = _snapshot(include_prerequisites=False)
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(_config(tmp_path, ppe, feed))
+
+    assert receipt.status == "BLOCKED"
+    assert "prerequisite evidence" in receipt.message
+
+
+def test_native_prerequisite_completion_permits_product_slice(tmp_path: Path) -> None:
+    snapshot = _snapshot(prerequisite_status="completed")
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(_config(tmp_path, ppe, feed))
+
+    assert receipt.status == "QUEUED"
+    assert receipt.evidence["prerequisites"]["satisfied_slices"] == [
+        "Fixture-Control-Slice001"
+    ]
+
+
 def test_forbidden_control_plane_paths_and_broad_grants_fail_closed(tmp_path: Path) -> None:
     forbidden_cases = [
         ["docs/SOP/SPRINT_FIXTURE.md"],
@@ -443,6 +533,18 @@ def test_forbidden_control_plane_paths_and_broad_grants_fail_closed(tmp_path: Pa
 
         assert receipt.status == "BLOCKED"
         assert "forbidden authority" in receipt.message or "broad writable path" in receipt.message
+
+
+def test_wildcard_touch_sets_are_rejected_in_v1(tmp_path: Path) -> None:
+    wildcard_cases = ["docs/**", "docs/SOP/**", "config/**", "artifacts/**", "src/**"]
+    for index, touch_set in enumerate(wildcard_cases):
+        ppe = _write_ppe(tmp_path / f"ppe-wildcard-{index}", plan=_plan(touch_set=[touch_set]))
+        feed = _feed_repo(tmp_path / f"feed-wildcard-{index}")
+
+        receipt = build_next(_config(tmp_path / f"wildcard-{index}", ppe, feed))
+
+        assert receipt.status == "BLOCKED"
+        assert "wildcard writable path" in receipt.message
 
 
 def test_no_ready_work_returns_unfilled(tmp_path: Path) -> None:
@@ -491,10 +593,59 @@ def test_exact_origin_main_succeeds_and_records_source_evidence(tmp_path: Path) 
     assert receipt.source_commit == origin_main
     assert receipt.evidence["source"]["remote"] == "origin"
     assert receipt.evidence["source"]["remote_ref"] == "origin/main"
+    assert receipt.evidence["source"]["repository"] == SOURCE_REPO
     review = tmp_path / "review"
     _git(None, "clone", "-q", "--branch", "jobs", str(feed), str(review))
     job = yaml.safe_load(next((review / "jobs" / "approved").glob("build-next-*.yaml")).read_text())
     assert job["founder_build_next"]["source"]["commit"] == origin_main
+    assert job["founder_build_next"]["source"]["repository"] == SOURCE_REPO
+
+
+def test_source_remote_identity_accepts_canonical_https_and_ssh() -> None:
+    assert (
+        _normalize_github_repository(
+            "https://github.com/DanielTabakman/Probability-prediction-engine.git"
+        )
+        == SOURCE_REPO
+    )
+    assert (
+        _normalize_github_repository(
+            "git@github.com:DanielTabakman/Probability-prediction-engine.git"
+        )
+        == SOURCE_REPO
+    )
+    assert (
+        _normalize_github_repository(
+            "ssh://git@github.com/DanielTabakman/Probability-prediction-engine.git"
+        )
+        == SOURCE_REPO
+    )
+
+
+def test_source_remote_identity_rejects_forks_malformed_and_local_in_production(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        "https://github.com/SomeoneElse/Probability-prediction-engine.git",
+        "https://example.com/not-github/repo.git",
+        str(tmp_path / "ppe-origin.git"),
+    ]
+    for index, remote_url in enumerate(cases):
+        ppe = _write_ppe(tmp_path / f"ppe-bad-remote-{index}")
+        feed = _feed_repo(tmp_path / f"feed-bad-remote-{index}")
+        if index < 2:
+            _git(ppe, "remote", "set-url", "origin", remote_url)
+
+        receipt = build_next(
+            BuildNextConfig(
+                ppe_repo=ppe,
+                feed_repo_url=str(feed),
+                checkout_root=tmp_path / f"checkout-bad-remote-{index}",
+            )
+        )
+
+        assert receipt.status == "BLOCKED"
+        assert "source remote" in receipt.message
 
 
 def test_dry_run_is_not_reported_as_queued(tmp_path: Path) -> None:
@@ -506,6 +657,7 @@ def test_dry_run_is_not_reported_as_queued(tmp_path: Path) -> None:
         feed_repo_url=str(feed),
         checkout_root=tmp_path / "checkout",
         submit=False,
+        allow_test_local_source_remote=True,
     ))
 
     assert receipt.status == "UNFILLED"
@@ -526,6 +678,8 @@ def test_concurrent_identical_invocations_create_one_immutable_job(tmp_path: Pat
 
     assert {receipt.status for receipt in receipts} == {"QUEUED"}
     assert {receipt.job_id for receipt in receipts} == {receipts[0].job_id}
+    assert sum(1 for receipt in receipts if receipt.submitted) == 1
+    assert sum(1 for receipt in receipts if not receipt.submitted) == 1
     review = tmp_path / "review"
     _git(None, "clone", "-q", "--branch", "jobs", str(feed), str(review))
     assert len(list((review / "jobs" / "approved").glob("build-next-*.yaml"))) == 1
@@ -574,6 +728,7 @@ def test_production_config_is_derived_from_installed_service_config(tmp_path: Pa
     config = BuildNextConfig.from_service_config(
         service_config,
         checkout_root=tmp_path / "checkout",
+        allow_test_local_source_remote=True,
     )
     receipt = build_next(config)
 

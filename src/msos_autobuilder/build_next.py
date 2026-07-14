@@ -32,6 +32,8 @@ class BuildNextError(RuntimeError):
     """Raised when build-next validation or feed submission fails closed."""
 
 
+SOURCE_REPOSITORY = "DanielTabakman/Probability-prediction-engine"
+
 FORBIDDEN_AUTHORITY_PATHS = (
     ".git/**",
     ".github/workflows/**",
@@ -76,6 +78,7 @@ BROAD_WRITABLE_ROOTS = {
 class SourceIdentity:
     remote: str
     remote_url: str
+    repository: str
     ref: str
     remote_ref: str
     commit: str
@@ -156,6 +159,8 @@ class BuildNextConfig:
     submit: bool = True
     source_remote: str = "origin"
     source_ref: str = "main"
+    expected_source_repository: str = SOURCE_REPOSITORY
+    allow_test_local_source_remote: bool = False
 
     def __post_init__(self) -> None:
         if not self.feed_repo_url.strip():
@@ -169,6 +174,8 @@ class BuildNextConfig:
             raise ValueError("max_snapshot_age_seconds must be positive")
         if not self.source_remote.strip() or not self.source_ref.strip():
             raise ValueError("source remote/ref are required")
+        if not self.expected_source_repository.strip():
+            raise ValueError("expected_source_repository is required")
 
     @classmethod
     def from_service_config(
@@ -179,6 +186,7 @@ class BuildNextConfig:
         max_snapshot_age_seconds: int = 600,
         requested_by: str = "founder build next",
         submit: bool = True,
+        allow_test_local_source_remote: bool = False,
     ) -> BuildNextConfig:
         service = load_persistent_host_config(service_config)
         if service.feed is None:
@@ -194,6 +202,7 @@ class BuildNextConfig:
             max_snapshot_age_seconds=max_snapshot_age_seconds,
             requested_by=requested_by,
             submit=submit,
+            allow_test_local_source_remote=allow_test_local_source_remote,
         )
 
 
@@ -320,6 +329,21 @@ def _collect_snapshot(ppe_repo: Path) -> dict[str, Any]:
     return payload
 
 
+def _normalize_github_repository(url: str) -> str | None:
+    text = str(url or "").strip()
+    patterns = (
+        r"^https://github\.com/([^/\s]+)/([^/\s]+?)(?:\.git)?/?$",
+        r"^git@github\.com:([^/\s]+)/([^/\s]+?)(?:\.git)?$",
+        r"^ssh://git@github\.com/([^/\s]+)/([^/\s]+?)(?:\.git)?/?$",
+    )
+    for pattern in patterns:
+        match = re.fullmatch(pattern, text, flags=re.IGNORECASE)
+        if match:
+            owner, repo = match.groups()
+            return f"{owner}/{repo}"
+    return None
+
+
 def _pipeline(registry: Mapping[str, Any], pipeline_id: str) -> dict[str, Any]:
     for raw in registry.get("pipelines") or []:
         if isinstance(raw, dict) and str(raw.get("pipeline_id") or "") == pipeline_id:
@@ -365,7 +389,7 @@ def _validate_snapshot(snapshot: Mapping[str, Any], max_age_seconds: int) -> Non
 def _validate_registry_adapter(registry_pipe: Mapping[str, Any]) -> None:
     if registry_pipe.get("registration_stage") not in {"EXECUTION_READY", "SCHEDULE_READY"}:
         raise BuildNextError("selected pipeline is not execution-ready")
-    if registry_pipe.get("canonical_repo") != "DanielTabakman/Probability-prediction-engine":
+    if registry_pipe.get("canonical_repo") != SOURCE_REPOSITORY:
         raise BuildNextError("v1 supports only the registered PPE/MSOS product repository")
     scheduling = (
         registry_pipe.get("scheduling")
@@ -383,6 +407,11 @@ def _validate_registry_adapter(registry_pipe: Mapping[str, Any]) -> None:
         raise BuildNextError("selected pipeline does not use the registered PPE build adapter")
     if adapter.get("readiness") != "READY_FOR_MANUAL_OR_SINGLE_DISPATCH":
         raise BuildNextError("selected pipeline build adapter is not single-dispatch ready")
+    if adapter.get("dispatch_commands_enabled") is not True:
+        raise BuildNextError(
+            "selected pipeline build adapter has dispatch_commands_enabled disabled; "
+            "PPE issue #5366 must explicitly enable dispatch before Autobuilder can submit"
+        )
     authority = (
         registry_pipe.get("authority")
         if isinstance(registry_pipe.get("authority"), dict)
@@ -432,6 +461,8 @@ def _path_covers(authority_path: str, forbidden_path: str) -> bool:
 def _validate_writable_path(path: str) -> str:
     rel = _safe_relative(path, "touchSet entry")
     normalized = rel.rstrip("/")
+    if any(char in rel for char in "*?["):
+        raise BuildNextError(f"wildcard writable path is not allowed in v1: {rel}")
     if rel in BROAD_WRITABLE_ROOTS or normalized in BROAD_WRITABLE_ROOTS:
         raise BuildNextError(f"broad writable path is not allowed: {rel}")
     for forbidden in FORBIDDEN_AUTHORITY_PATHS:
@@ -499,6 +530,84 @@ def _select_native_slice(plan: Mapping[str, Any]) -> NativeSlicePacket:
     )
 
 
+def _is_smoke_or_closeout_slice(raw_slice: Mapping[str, Any]) -> bool:
+    slice_id = str(raw_slice.get("sliceId") or "").upper()
+    return bool(raw_slice.get("closeout")) or "SMOKE" in slice_id or "CLOSEOUT" in slice_id
+
+
+def _prerequisite_packet(work: Mapping[str, Any]) -> Mapping[str, Any]:
+    packet = work.get("native_prerequisites") or work.get("prerequisite_status")
+    if not isinstance(packet, dict):
+        raise BuildNextError("missing pipeline-native prerequisite evidence for selected slice")
+    if packet.get("read_only") is not True:
+        raise BuildNextError("pipeline-native prerequisite evidence is not read-only")
+    if packet.get("source") not in {"ppe_native_read_only", "pipeline_native"}:
+        raise BuildNextError("prerequisite evidence is not pipeline-native")
+    return packet
+
+
+def _status_by_slice(packet: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    statuses = packet.get("statuses")
+    if isinstance(statuses, dict):
+        return {
+            str(slice_id): status
+            for slice_id, status in statuses.items()
+            if isinstance(status, Mapping)
+        }
+    if isinstance(statuses, list):
+        return {
+            str(status.get("slice_id") or status.get("sliceId") or ""): status
+            for status in statuses
+            if isinstance(status, Mapping)
+        }
+    return {}
+
+
+def _validate_native_prerequisites(
+    work: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    native_slice: NativeSlicePacket,
+) -> Mapping[str, Any]:
+    raw_slices = [item for item in plan.get("slices") or [] if isinstance(item, dict)]
+    required = [
+        str(item.get("sliceId") or "")
+        for item in raw_slices[: native_slice.sequence_index]
+        if str(item.get("sliceId") or "").strip() and not _is_smoke_or_closeout_slice(item)
+    ]
+    if not required:
+        return {
+            "source": "not_required",
+            "required_slices": [],
+            "satisfied_slices": [],
+            "non_blocking_slices": [],
+        }
+    packet = _prerequisite_packet(work)
+    statuses = _status_by_slice(packet)
+    satisfied: list[str] = []
+    non_blocking: list[str] = []
+    for slice_id in required:
+        status = statuses.get(slice_id)
+        if status is None:
+            raise BuildNextError(
+                f"missing pipeline-native prerequisite evidence for unmet slice {slice_id}"
+            )
+        state = str(status.get("status") or status.get("state") or "").strip().lower()
+        if state in {"complete", "completed"}:
+            satisfied.append(slice_id)
+            continue
+        if status.get("non_blocking") is True or status.get("nonBlocking") is True:
+            non_blocking.append(slice_id)
+            continue
+        raise BuildNextError(f"unmet prerequisite slice {slice_id} is not complete")
+    return {
+        "source": packet.get("source"),
+        "evidence": packet.get("evidence"),
+        "required_slices": required,
+        "satisfied_slices": satisfied,
+        "non_blocking_slices": non_blocking,
+    }
+
+
 def _plan_text(ppe_repo: Path, rel: str) -> tuple[dict[str, Any], str, str]:
     safe_rel = _safe_relative(rel, "phase plan trace")
     path = (ppe_repo / safe_rel).resolve()
@@ -514,6 +623,20 @@ def _plan_text(ppe_repo: Path, rel: str) -> tuple[dict[str, Any], str, str]:
 
 
 def _source_identity(config: BuildNextConfig, ppe_repo: Path) -> SourceIdentity:
+    remote_url = _git(ppe_repo, "remote", "get-url", config.source_remote)
+    repository = _normalize_github_repository(remote_url)
+    if repository is None:
+        if config.allow_test_local_source_remote:
+            repository = config.expected_source_repository
+        else:
+            raise BuildNextError(
+                f"PPE source remote {config.source_remote!r} is not a canonical GitHub URL"
+            )
+    if repository != config.expected_source_repository:
+        raise BuildNextError(
+            "PPE source remote resolves to "
+            f"{repository!r}, expected {config.expected_source_repository!r}"
+        )
     _git(ppe_repo, "fetch", "--no-tags", config.source_remote, config.source_ref)
     remote_ref = f"{config.source_remote}/{config.source_ref}"
     remote_commit = _git(ppe_repo, "rev-parse", remote_ref)
@@ -529,10 +652,10 @@ def _source_identity(config: BuildNextConfig, ppe_repo: Path) -> SourceIdentity:
         raise BuildNextError(
             f"PPE source HEAD {commit} does not match freshly fetched {remote_ref} {remote_commit}"
         )
-    remote_url = _git(ppe_repo, "remote", "get-url", config.source_remote)
     return SourceIdentity(
         remote=config.source_remote,
         remote_url=remote_url,
+        repository=repository,
         ref=config.source_ref,
         remote_ref=remote_ref,
         commit=commit,
@@ -547,6 +670,7 @@ def _evidence_identity(
     selected: Mapping[str, Any],
     plan_rel: str,
     native_slice: NativeSlicePacket,
+    prerequisite_evidence: Mapping[str, Any],
 ) -> dict[str, Any]:
     files = {
         "registry": "config/founder_pipeline_registry.json",
@@ -575,6 +699,7 @@ def _evidence_identity(
             "previous_slices": list(native_slice.previous_slices),
             "following_slices": list(native_slice.following_slices),
         },
+        "prerequisites": dict(prerequisite_evidence),
         "file_hashes": file_hashes,
         "selection_explanation": snapshot.get("recommended_next_action", {}).get(
             "selection_explanation"
@@ -595,6 +720,7 @@ def _instruction(
     forbidden_paths: Sequence[str],
     source_identity: SourceIdentity,
     evidence_identity: Mapping[str, Any],
+    prerequisite_evidence: Mapping[str, Any],
 ) -> str:
     return "\n".join(
         [
@@ -643,6 +769,9 @@ def _instruction(
             "Portfolio-selection evidence identity:",
             json.dumps(dict(evidence_identity), indent=2, sort_keys=True),
             "",
+            "Pipeline-native prerequisite evidence:",
+            json.dumps(dict(prerequisite_evidence), indent=2, sort_keys=True),
+            "",
             "Relevant canon/task packet:",
             json.dumps(
                 {
@@ -686,6 +815,7 @@ def _build_job(
     forbidden_paths: Sequence[str],
     source_identity: SourceIdentity,
     evidence_identity: Mapping[str, Any],
+    prerequisite_evidence: Mapping[str, Any],
     requested_by: str,
 ) -> dict[str, Any]:
     lane_id = _safe_id(native_slice.slice_id, fallback="lane")
@@ -715,6 +845,7 @@ def _build_job(
                 "previous_slices": list(native_slice.previous_slices),
                 "following_slices": list(native_slice.following_slices),
             },
+            "prerequisites": dict(prerequisite_evidence),
             "portfolio_selection_evidence": dict(evidence_identity),
             "authority": {
                 "publication_enabled": False,
@@ -745,6 +876,7 @@ def _build_job(
                         forbidden_paths=forbidden_paths,
                         source_identity=source_identity,
                         evidence_identity=evidence_identity,
+                        prerequisite_evidence=prerequisite_evidence,
                     ),
                 }
             ],
@@ -815,12 +947,19 @@ def _prepare_feed_checkout(config: BuildNextConfig) -> Path:
     return root
 
 
-def _submit_feed_job(config: BuildNextConfig, job: Mapping[str, Any]) -> tuple[str | None, str]:
+@dataclass(frozen=True)
+class FeedSubmission:
+    feed_commit: str | None
+    feed_path: str
+    created: bool
+
+
+def _submit_feed_job(config: BuildNextConfig, job: Mapping[str, Any]) -> FeedSubmission:
     job_id = str(job["job_id"])
     text = yaml.safe_dump(dict(job), sort_keys=False, allow_unicode=True)
     parse_host_job(text)
     if not config.submit:
-        return None, f"{config.jobs_path}/{job_id}.yaml"
+        return FeedSubmission(None, f"{config.jobs_path}/{job_id}.yaml", False)
     lock_root = (
         config.checkout_root
         or Path(tempfile.gettempdir()) / "msos-autobuilder-build-next-feed"
@@ -836,7 +975,16 @@ def _submit_feed_job(config: BuildNextConfig, job: Mapping[str, Any]) -> tuple[s
                 raise BuildNextError(
                     f"approved job {job_id!r} already exists with different content"
                 )
-            return _git(checkout, "rev-parse", "HEAD"), relative.as_posix()
+            existing_commit = _git(
+                checkout,
+                "log",
+                "-n",
+                "1",
+                "--format=%H",
+                "--",
+                relative.as_posix(),
+            )
+            return FeedSubmission(existing_commit, relative.as_posix(), False)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(text, encoding="utf-8", newline="\n")
         _git(checkout, "add", "--", relative.as_posix())
@@ -845,11 +993,20 @@ def _submit_feed_job(config: BuildNextConfig, job: Mapping[str, Any]) -> tuple[s
             accepted=(0, 1),
         ).returncode
         if changed == 0:
-            return _git(checkout, "rev-parse", "HEAD"), relative.as_posix()
+            existing_commit = _git(
+                checkout,
+                "log",
+                "-n",
+                "1",
+                "--format=%H",
+                "--",
+                relative.as_posix(),
+            )
+            return FeedSubmission(existing_commit, relative.as_posix(), False)
         _git(checkout, "commit", "-m", f"Queue founder build next job {job_id}")
         commit = _git(checkout, "rev-parse", "HEAD")
         _git(checkout, "push", "origin", f"HEAD:{config.jobs_branch}")
-        return commit, relative.as_posix()
+        return FeedSubmission(commit, relative.as_posix(), True)
 
 
 def _blocked_receipt(message: str, evidence: Mapping[str, Any] | None = None) -> BuildNextReceipt:
@@ -920,6 +1077,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
         trace = str(work.get("trace") or rec.get("trace") or "")
         plan, plan_rel, plan_raw = _plan_text(ppe_repo, trace)
         native_slice = _select_native_slice(plan)
+        prerequisite_evidence = _validate_native_prerequisites(work, plan, native_slice)
         forbidden_paths = FORBIDDEN_AUTHORITY_PATHS
         source_identity = _source_identity(config, ppe_repo)
         evidence_identity = _evidence_identity(
@@ -929,6 +1087,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             selected={"pipeline_id": pipeline_id, "work_item_id": work_item_id, "trace": plan_rel},
             plan_rel=plan_rel,
             native_slice=native_slice,
+            prerequisite_evidence=prerequisite_evidence,
         )
         job_id = _job_id(pipeline_id, work_item_id, native_slice, source_identity.commit)
         state = _job_state(config, job_id)
@@ -957,9 +1116,10 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             forbidden_paths=forbidden_paths,
             source_identity=source_identity,
             evidence_identity=evidence_identity,
+            prerequisite_evidence=prerequisite_evidence,
             requested_by=config.requested_by,
         )
-        feed_commit, feed_path = _submit_feed_job(config, job)
+        submission = _submit_feed_job(config, job)
         if not config.submit:
             return BuildNextReceipt(
                 status="UNFILLED",
@@ -968,7 +1128,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                 job_id=job_id,
                 repository="DanielTabakman/Probability-prediction-engine",
                 source_commit=source_identity.commit,
-                feed_path=feed_path,
+                feed_path=submission.feed_path,
                 feed_commit=None,
                 message=(
                     "Dry run constructed one immutable approved build-next job; "
@@ -985,11 +1145,18 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             job_id=job_id,
             repository="DanielTabakman/Probability-prediction-engine",
             source_commit=source_identity.commit,
-            feed_path=feed_path,
-            feed_commit=feed_commit,
-            message="Submitted one immutable approved build-next job.",
+            feed_path=submission.feed_path,
+            feed_commit=submission.feed_commit,
+            message=(
+                "Submitted one immutable approved build-next job."
+                if submission.created
+                else (
+                    "Identical immutable approved build-next job already exists; "
+                    "no duplicate was submitted."
+                )
+            ),
             evidence=evidence_identity,
-            submitted=True,
+            submitted=submission.created,
         )
     except BuildNextError as exc:
         return _blocked_receipt(str(exc))

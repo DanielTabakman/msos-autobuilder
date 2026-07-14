@@ -3,7 +3,7 @@ release_id: build-next-installed-runtime-v1
 approved: true
 repository: DanielTabakman/msos-autobuilder
 repo_url: https://github.com/DanielTabakman/msos-autobuilder.git
-commit: 4884d42ae7a7daf7dcf2831c04a05ccb59fcf7e5
+commit: self
 required_status_contexts:
   - test
   - windows-test

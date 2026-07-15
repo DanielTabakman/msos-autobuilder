@@ -1,0 +1,164 @@
+version: 1
+job_id: build-next-ppe-issue55_generic_gate_witness_v2-Issue55-GenericGate-WitnessV2-ec1789cd9540
+approved: true
+publication_enabled: false
+requested_by: 'issue #55 installed generic-gate witness v2'
+submitted_at: '2026-07-15T22:24:58.639676+00:00'
+approved_at: '2026-07-15T22:24:58.639676+00:00'
+expected_source_head: ec1789cd9540b1baf386c766e2b84feb6563257c
+founder_build_next:
+  version: 1
+  pipeline_id: ppe
+  work_item_id: issue55_generic_gate_witness_v2
+  repository: DanielTabakman/Probability-prediction-engine
+  registered_adapter: ppe_operator
+  source:
+    remote: origin
+    remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+    repository: DanielTabakman/Probability-prediction-engine
+    ref: main
+    remote_ref: origin/main
+    commit: ec1789cd9540b1baf386c766e2b84feb6563257c
+  phase_plan: issue-55-installed-generic-gate-witness-v2
+  native_slice:
+    slice_id: Issue55-GenericGate-WitnessV2
+    build_branch: build/auto/issue55-generic-gate-witness-v2
+    layer_preset: PPE_CORE
+    worker_mode: local-agent
+    declared_plane: PRODUCT-PLANE
+    touch_set: &id001
+    - docs/autobuilder_generic_gate_witness_issue55_v2.txt
+    sequence_index: 0
+    total_slices: 1
+    previous_slices: []
+    following_slices: []
+  prerequisites:
+    source: issue55_runtime_acceptance_witness
+  portfolio_selection_evidence:
+    source: issue55_runtime_acceptance_witness
+  authority:
+    publication_enabled: false
+    merge_enabled: false
+    product_main_write_enabled: false
+candidate_validation:
+  version: 1
+  pipeline_id: ppe
+  adapter: ppe_operator
+  target_repository: DanielTabakman/Probability-prediction-engine
+  source_commit: ec1789cd9540b1baf386c766e2b84feb6563257c
+  job_id: build-next-ppe-issue55_generic_gate_witness_v2-Issue55-GenericGate-WitnessV2-ec1789cd9540
+  work_item_id: issue55_generic_gate_witness_v2
+  native_slice_id: Issue55-GenericGate-WitnessV2
+  allowed_changed_paths:
+  - docs/autobuilder_generic_gate_witness_issue55_v2.txt
+  dependency_policy:
+    version: 1
+    adapter: ppe_operator
+    profile_id: ppe-ci-pytest-v1
+    source: accepted_ppe_ci_bootstrap
+    source_commit: ec1789cd9540b1baf386c766e2b84feb6563257c
+    dependency_source_path: requirements.txt
+    dependency_source_sha256: 47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394
+    network_allowed: true
+    candidate_environment_required: true
+    strategy: candidate_local_venv_requirements_test_tooling_editable_install
+    test_tooling:
+    - pytest
+    - pytest-xdist
+    - ruff
+  bootstrap:
+  - name: upgrade-pip
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - --upgrade
+    - pip
+    cwd: .
+    timeout_seconds: 600
+    required: true
+  - name: install-requirements
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - -r
+    - requirements.txt
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  - name: install-test-tooling
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - pytest
+    - pytest-xdist
+    - ruff
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  - name: install-candidate-package
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - -e
+    - .
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  checks:
+  - name: repository-pytest
+    argv:
+    - python
+    - -m
+    - pytest
+    - -q
+    cwd: .
+    timeout_seconds: 1800
+    required: true
+  publication_enabled: false
+  merge_enabled: false
+  product_main_write_enabled: false
+  contract_sha256: 91d840b58989f68f6f9243228fa29d0a80ea7884557c820fd0b188d9c78ccc0b
+manifest:
+  version: 1
+  publication_enabled: false
+  lanes:
+  - task_id: Issue55-GenericGate-WitnessV2
+    lane_id: Issue55-GenericGate-WitnessV2
+    chapter_id: ISSUE55_GENERIC_GATE_WITNESS_V2
+    branch: build/auto/issue55-generic-gate-witness-v2
+    layer: PPE_CORE
+    worker_mode: local-agent
+    preferred_cost_class: standard
+    allowed_paths: *id001
+    forbidden_paths:
+    - .git/**
+    - .github/workflows/**
+    - artifacts/**
+    - runtime/**
+    - state/**
+    - queue/**
+    - config/founder_pipeline_registry.json
+    - docs/SOP/**
+    allow_changes: true
+    instruction: 'Implementation thread. THREAD_ROLE: codex_build.
+
+
+      Create the installed issue #55 generic-gate passing witness v2 only.
+
+
+      In the PPE repository, add exactly one new text file at docs/autobuilder_generic_gate_witness_issue55_v2.txt.
+      The file should contain one short line stating that issue #55 installed generic
+      candidate validation v2 ran after msos-autobuilder commit 4d1ab2f27f05c9984b1b5902895312ee7805ac75.
+
+
+      Do not modify any other file. Do not write product main. Do not commit, push,
+      publish, open a pull request, mark anything ready, or begin issue #50. Return
+      concise evidence of the changed path.'

@@ -1,0 +1,7 @@
+diff --git a/docs/autobuilder_generic_gate_witness_issue55_v2.txt b/docs/autobuilder_generic_gate_witness_issue55_v2.txt
+new file mode 100644
+index 00000000..092e425f
+--- /dev/null
++++ b/docs/autobuilder_generic_gate_witness_issue55_v2.txt
+@@ -0,0 +1 @@
++Issue #55 installed generic candidate validation v2 ran after msos-autobuilder commit 4d1ab2f27f05c9984b1b5902895312ee7805ac75.

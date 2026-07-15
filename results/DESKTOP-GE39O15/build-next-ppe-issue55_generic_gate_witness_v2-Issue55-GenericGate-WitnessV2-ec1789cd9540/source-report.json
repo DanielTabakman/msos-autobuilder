@@ -1,0 +1,42 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "docs/autobuilder_generic_gate_witness_issue55_v2.txt"
+        ],
+        "metadata": {
+          "output_tail": "d 'Get-Content -LiteralPath docs/autobuilder_generic_gate_witness_issue55_v2.txt' in C:\\Users\\USER\\.msos-autobuilder\\workspaces\\Issue55-GenericGate-WitnessV2\n succeeded in 682ms:\nIssue #55 installed generic candidate validation v2 ran after msos-autobuilder commit 4d1ab2f27f05c9984b1b5902895312ee7805ac75.\n\n succeeded in 841ms:\n?? docs/autobuilder_generic_gate_witness_issue55_v2.txt\n\ndiff --git a/docs/autobuilder_generic_gate_witness_issue55_v2.txt b/docs/autobuilder_generic_gate_witness_issue55_v2.txt\nnew file mode 100644\nindex 0000000000000000000000000000000000000000..092e425fad94dbe3170ec319c9bcf5d5800f3cd5\n--- /dev/null\n+++ b/docs/autobuilder_generic_gate_witness_issue55_v2.txt\n@@ -0,0 +1 @@\n+Issue #55 installed generic candidate validation v2 ran after msos-autobuilder commit 4d1ab2f27f05c9984b1b5902895312ee7805ac75.\n\ncodex\nCreated exactly one new file:\n\n`docs/autobuilder_generic_gate_witness_issue55_v2.txt`\n\nContent verified:\n```text\nIssue #55 installed generic candidate validation v2 ran after msos-autobuilder commit 4d1ab2f27f05c9984b1b5902895312ee7805ac75.\n```\n\n`git status --short` shows only:\n```text\n?? docs/autobuilder_generic_gate_witness_issue55_v2.txt\n```\ndiff --git a/docs/autobuilder_generic_gate_witness_issue55_v2.txt b/docs/autobuilder_generic_gate_witness_issue55_v2.txt\nnew file mode 100644\nindex 0000000000000000000000000000000000000000..092e425fad94dbe3170ec319c9bcf5d5800f3cd5\n--- /dev/null\n+++ b/docs/autobuilder_generic_gate_witness_issue55_v2.txt\n@@ -0,0 +1 @@\n+Issue #55 installed generic candidate validation v2 ran after msos-autobuilder commit 4d1ab2f27f05c9984b1b5902895312ee7805ac75.\n\ntokens used\n11,904\nCreated exactly one new file:\n\n`docs/autobuilder_generic_gate_witness_issue55_v2.txt`\n\nContent verified:\n```text\nIssue #55 installed generic candidate validation v2 ran after msos-autobuilder commit 4d1ab2f27f05c9984b1b5902895312ee7805ac75.\n```\n\n`git status --short` shows only:\n```text\n?? docs/autobuilder_generic_gate_witness_issue55_v2.txt\n```",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder\\workspaces\\Issue55-GenericGate-WitnessV2"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 1 changed path(s)",
+        "task_id": "Issue55-GenericGate-WitnessV2"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "ec1789cd9540b1baf386c766e2b84feb6563257c",
+    "status": "completed"
+  },
+  "completed_at": "2026-07-15T22:26:12.624630+00:00",
+  "job_id": "build-next-ppe-issue55_generic_gate_witness_v2-Issue55-GenericGate-WitnessV2-ec1789cd9540",
+  "job_sha256": "3305214fc2ece6d5582d5ef6c24668871f751de1d45be06a943a2ff594ce6f93",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "lane_id": "Issue55-GenericGate-WitnessV2",
+      "patch_file": null,
+      "patch_sha256": null,
+      "task_id": "Issue55-GenericGate-WitnessV2"
+    }
+  ],
+  "publication_enabled": false,
+  "requested_by": "issue #55 installed generic-gate witness v2",
+  "source": "C:\\Users\\USER\\.msos-autobuilder\\queue\\pending\\build-next-ppe-issue55_generic_gate_witness_v2-Issue55-GenericGate-WitnessV2-ec1789cd9540.yaml",
+  "version": 1
+}

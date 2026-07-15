@@ -1,0 +1,9 @@
+{
+  "canonical_patch_sha256_by_task": {
+    "Issue55-GenericGate-WitnessV2": "d3e6fc6cb014b00b867e84350cd3266e27850a6e4676dbd3829e100a93cff45b"
+  },
+  "corrected_report_sha256": "ace67baf3f9beb2ca2e0a46646a64024765a6ac2c1fb926845e27f2f2193660b",
+  "publication_enabled": false,
+  "source_report_sha256": "40b8c1803875ecec592b2f778384c3d7e759789c323217f3393137ef2730431a",
+  "version": 1
+}

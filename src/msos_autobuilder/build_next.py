@@ -26,6 +26,7 @@ import yaml
 
 from .codex_shadow import load_codex_host_config
 from .persistent_host import HostPaths, load_persistent_host_config, parse_host_job
+from .validation_contract import build_ppe_validation_contract
 
 
 class BuildNextError(RuntimeError):
@@ -819,6 +820,15 @@ def _build_job(
     requested_by: str,
 ) -> dict[str, Any]:
     lane_id = _safe_id(native_slice.slice_id, fallback="lane")
+    candidate_validation = build_ppe_validation_contract(
+        pipeline_id=pipeline_id,
+        job_id=job_id,
+        work_item_id=str(work.get("work_item_id") or ""),
+        native_slice_id=native_slice.slice_id,
+        source_commit=source_identity.commit,
+        allowed_changed_paths=native_slice.touch_set,
+        target_repository="DanielTabakman/Probability-prediction-engine",
+    )
     return {
         "version": 1,
         "job_id": job_id,
@@ -853,6 +863,7 @@ def _build_job(
                 "product_main_write_enabled": False,
             },
         },
+        "candidate_validation": candidate_validation,
         "manifest": {
             "version": 1,
             "publication_enabled": False,

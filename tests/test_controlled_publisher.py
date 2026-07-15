@@ -149,10 +149,23 @@ def make_fixture(tmp_path: Path, *, overlap: bool = False) -> tuple[Path, Path, 
     source_path = job_dir / "report.json"
     write_json(source_path, source_report)
     source_hash = sha256(source_path)
+    original_report = {**source_report, "patches": [{**source_report["patches"][0], "patch_sha256": "worker-hash"}]}
+    write_json(job_dir / "source-report.json", original_report)
+    write_json(
+        job_dir / "result-integrity.json",
+        {
+            "version": 1,
+            "source_report_sha256": sha256(job_dir / "source-report.json"),
+            "corrected_report_sha256": source_hash,
+            "canonical_patch_sha256_by_task": {job_id: patch_hash},
+            "publication_enabled": False,
+        },
+    )
     gate_report = {
         "version": 1,
         "job_id": job_id,
         "status": "passed",
+        "state": "candidate_passed",
         "started_at": "2026-07-13T00:00:00+00:00",
         "finished_at": "2026-07-13T00:00:01+00:00",
         "publication_enabled": False,
@@ -298,3 +311,30 @@ def test_config_rejects_merge_or_main_write_authority(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="merge authority"):
         load_publisher_config(config_path)
+
+
+def test_controlled_publisher_rejects_source_report_only_evidence(tmp_path: Path) -> None:
+    config_path, product_bare, evidence_bare, job_id = make_fixture(tmp_path)
+    edit = tmp_path / "evidence-edit"
+    git(None, "clone", "--branch", "results", str(evidence_bare), str(edit))
+    job_dir = edit / "results" / "MACHINE" / job_id
+    source = json.loads((job_dir / "source-report.json").read_text(encoding="utf-8"))
+    write_json(job_dir / "report.json", source)
+    report_hash = sha256(job_dir / "report.json")
+    gate = json.loads((job_dir / "gate-report.json").read_text(encoding="utf-8"))
+    gate["source_report_sha256"] = report_hash
+    write_json(job_dir / "gate-report.json", gate)
+    integrity = json.loads((job_dir / "result-integrity.json").read_text(encoding="utf-8"))
+    integrity["corrected_report_sha256"] = report_hash
+    integrity["source_report_sha256"] = report_hash
+    write_json(job_dir / "result-integrity.json", integrity)
+    git(edit, "add", ".")
+    git(edit, "commit", "-m", "source report only")
+    git(edit, "push", "origin", "HEAD:results")
+
+    publisher = ControlledPublisher(
+        load_publisher_config(config_path),
+        github_client=FakeGitHubClient(product_bare),
+    )
+    with pytest.raises(PublisherError, match="corrected canonical report"):
+        publisher.run_once()

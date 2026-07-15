@@ -115,6 +115,18 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     _atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
+def _sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    return _sha256_bytes(path.read_bytes())
+
+
+def _canonical_patch_bytes(path: Path) -> bytes:
+    return path.read_bytes().replace(b"\r\n", b"\n")
+
+
 def _load_workspace_root(host_root: Path) -> Path:
     host_config = host_root / "host.yaml"
     if not host_config.exists():
@@ -215,8 +227,10 @@ def reconstruct_job(
     destination.mkdir(parents=True)
     shutil.copy2(job_path, destination / "job.yaml")
     shutil.copy2(report_path, destination / "source-report.json")
+    source_report_sha256 = _sha256_file(destination / "source-report.json")
 
     completed_patches: list[dict[str, Any]] = []
+    canonical_patch_hashes: dict[str, str] = {}
     for raw_entry in patch_entries:
         if not isinstance(raw_entry, dict):
             raise ResultsRelayError("report patch entries must be mappings")
@@ -245,8 +259,10 @@ def reconstruct_job(
         if patch_text:
             patch_path = destination / "patches" / patch_name
             _atomic_write_text(patch_path, patch_text)
+            canonical_patch_sha256 = _sha256_bytes(_canonical_patch_bytes(patch_path))
             entry["patch_file"] = f"patches/{patch_name}"
-            entry["patch_sha256"] = hashlib.sha256(patch_text.encode("utf-8")).hexdigest()
+            entry["patch_sha256"] = canonical_patch_sha256
+            canonical_patch_hashes[task_id] = canonical_patch_sha256
         else:
             entry["patch_file"] = None
             entry["patch_sha256"] = None
@@ -260,9 +276,21 @@ def reconstruct_job(
         "machine_id": machine_id,
         "relayed_at": _utc_now(),
         "complete_patch_reconstruction": True,
+        "source_report_role": "original-worker-report-noncanonical-for-patch-identity",
+        "canonical_report_role": "relay-corrected-canonical-downstream-report",
+        "source_report_sha256": source_report_sha256,
+        "canonical_patch_sha256_by_task": canonical_patch_hashes,
         "publication_enabled": False,
     }
     _atomic_write_json(destination / "report.json", report)
+    integrity = {
+        "version": 1,
+        "source_report_sha256": source_report_sha256,
+        "corrected_report_sha256": _sha256_file(destination / "report.json"),
+        "canonical_patch_sha256_by_task": canonical_patch_hashes,
+        "publication_enabled": False,
+    }
+    _atomic_write_json(destination / "result-integrity.json", integrity)
 
 
 class GitResultsSink:

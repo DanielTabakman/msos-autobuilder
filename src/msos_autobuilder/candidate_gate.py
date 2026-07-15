@@ -25,6 +25,12 @@ from typing import Any
 
 import yaml
 
+from .validation_contract import (
+    ValidationContractError,
+    contract_to_plan_commands,
+    load_validation_contract,
+)
+
 
 class CandidateGateError(RuntimeError):
     """Raised when candidate input or execution violates the gate contract."""
@@ -36,12 +42,16 @@ class GateCheck:
     argv: tuple[str, ...]
     cwd: str = "."
     timeout_seconds: int = 600
+    required: bool = True
+    phase: str = "check"
 
 
 @dataclass(frozen=True)
 class GatePlan:
     checks: tuple[GateCheck, ...]
     policy_blocks: tuple[str, ...] = ()
+    source: str = "configured"
+    contract_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -208,6 +218,8 @@ def load_candidate_gate_config(path: str | Path) -> CandidateGateConfig:
                     argv=argv,
                     cwd=_safe_relative_cwd(check.get("cwd", ".")),
                     timeout_seconds=timeout,
+                    required=bool(check.get("required", True)),
+                    phase=str(check.get("phase") or "check"),
                 )
             )
         blocks_raw = plan_data.get("policy_blocks", [])
@@ -268,7 +280,10 @@ def run_check(candidate: Path, check: GateCheck) -> dict[str, Any]:
             "name": check.name,
             "argv": list(check.argv),
             "cwd": check.cwd,
+            "required": check.required,
+            "phase": check.phase,
             "passed": False,
+            "skipped": False,
             "returncode": None,
             "timed_out": False,
             "stdout": "",
@@ -293,9 +308,12 @@ def run_check(candidate: Path, check: GateCheck) -> dict[str, Any]:
             "name": check.name,
             "argv": list(check.argv),
             "cwd": check.cwd,
+            "required": check.required,
+            "phase": check.phase,
             "started_at": started,
             "finished_at": _utc_now(),
             "passed": proc.returncode == 0,
+            "skipped": False,
             "returncode": proc.returncode,
             "timed_out": False,
             "stdout": _bounded(proc.stdout),
@@ -306,9 +324,12 @@ def run_check(candidate: Path, check: GateCheck) -> dict[str, Any]:
             "name": check.name,
             "argv": list(check.argv),
             "cwd": check.cwd,
+            "required": check.required,
+            "phase": check.phase,
             "started_at": started,
             "finished_at": _utc_now(),
             "passed": False,
+            "skipped": False,
             "returncode": None,
             "timed_out": True,
             "stdout": _bounded(exc.stdout if isinstance(exc.stdout, str) else ""),
@@ -319,9 +340,12 @@ def run_check(candidate: Path, check: GateCheck) -> dict[str, Any]:
             "name": check.name,
             "argv": list(check.argv),
             "cwd": check.cwd,
+            "required": check.required,
+            "phase": check.phase,
             "started_at": started,
             "finished_at": _utc_now(),
             "passed": False,
+            "skipped": False,
             "returncode": None,
             "timed_out": False,
             "stdout": "",
@@ -464,7 +488,83 @@ class CandidateGate:
         relay = _mapping(report.get("relay"), "relay evidence")
         if relay.get("complete_patch_reconstruction") is not True:
             raise CandidateGateError("relayed report does not contain complete patches")
+        integrity_path = job_dir / "result-integrity.json"
+        if integrity_path.exists():
+            integrity = _mapping(
+                json.loads(integrity_path.read_text(encoding="utf-8")),
+                "result integrity",
+            )
+            if integrity.get("corrected_report_sha256") != source_sha:
+                raise CandidateGateError(
+                    "corrected report SHA-256 does not match integrity evidence"
+                )
         return report, source_sha
+
+    def _plan_from_job_contract(
+        self,
+        job_dir: Path,
+        report: Mapping[str, Any],
+        source_head: str,
+    ) -> GatePlan:
+        job_path = job_dir / "job.yaml"
+        if not job_path.exists():
+            raise CandidateGateError("generic build-next result is missing job.yaml")
+        job = _mapping(yaml.safe_load(job_path.read_text(encoding="utf-8")), "job.yaml")
+        contract = load_validation_contract(job.get("candidate_validation"))
+        job_id = str(report.get("job_id") or "").strip()
+        if contract.job_id != job_id:
+            raise CandidateGateError("candidate_validation job_id does not match relayed report")
+        if contract.source_commit.lower() != source_head.lower():
+            raise CandidateGateError("candidate_validation source_commit does not match report")
+        changed: set[str] = set()
+        for raw_entry in report.get("patches") or []:
+            entry = _mapping(raw_entry, "patch entry")
+            paths = entry.get("changed_paths")
+            if isinstance(paths, list):
+                changed.update(str(path).replace("\\", "/") for path in paths)
+        allowed = set(contract.allowed_changed_paths)
+        if not changed or not changed <= allowed:
+            raise CandidateGateError("candidate changed paths exceed candidate_validation authority")
+        commands = contract_to_plan_commands(contract)
+        return GatePlan(
+            checks=tuple(
+                GateCheck(
+                    name=command.name,
+                    argv=command.argv,
+                    cwd=command.cwd,
+                    timeout_seconds=command.timeout_seconds,
+                    required=command.required,
+                    phase=command.phase,
+                )
+                for command in commands
+            ),
+            source="candidate_validation",
+            contract_sha256=contract.contract_sha256,
+        )
+
+    def _unvalidated_report(
+        self,
+        job_id: str,
+        source_sha: str,
+        message: str,
+        *,
+        started: str,
+    ) -> dict[str, Any]:
+        return {
+            "version": 1,
+            "job_id": job_id,
+            "status": "unvalidated",
+            "state": "awaiting_validation",
+            "started_at": started,
+            "finished_at": _utc_now(),
+            "publication_enabled": False,
+            "product_write_performed": False,
+            "workspace_removed": True,
+            "source_report_sha256": source_sha,
+            "checks": [],
+            "policy_blocks": [],
+            "errors": [{"type": "CandidateGateError", "message": message}],
+        }
 
     def _apply_patches(
         self,
@@ -535,12 +635,15 @@ class CandidateGate:
             "version": 1,
             "job_id": job_id,
             "status": "failed",
+            "state": "candidate_failed",
             "started_at": started,
             "finished_at": None,
             "publication_enabled": False,
             "product_write_performed": False,
             "checks": [],
             "policy_blocks": list(plan.policy_blocks),
+            "plan_source": plan.source,
+            "validation_contract_sha256": plan.contract_sha256,
             "errors": [],
         }
         source_sha = ""
@@ -562,8 +665,15 @@ class CandidateGate:
             head_after = _run_git(candidate, "rev-parse", "HEAD").stdout.strip()
             if head_after != source_head:
                 raise CandidateGateError("candidate checks created a product commit")
-            passed = all(check.get("passed") is True for check in checks)
+            passed = all(
+                check.get("passed") is True
+                for check in checks
+                if check.get("required", True) is True
+            )
             report["status"] = "passed" if passed and not plan.policy_blocks else "failed"
+            report["state"] = (
+                "candidate_passed" if report["status"] == "passed" else "candidate_failed"
+            )
         except (CandidateGateError, json.JSONDecodeError, OSError, ValueError) as exc:
             report["errors"].append({"type": type(exc).__name__, "message": str(exc)})
         finally:
@@ -573,6 +683,28 @@ class CandidateGate:
             report["finished_at"] = _utc_now()
         return report, source_sha
 
+    def process_generic_job(self, job_dir: Path) -> tuple[dict[str, Any], str]:
+        job_id = _safe_segment(job_dir.name, fallback="job")
+        started = _utc_now()
+        try:
+            source_report, source_sha = self._load_input(job_dir)
+            codex_report = _mapping(source_report.get("codex_report"), "codex_report")
+            source_head = str(codex_report.get("source_head") or "").strip()
+            if not re.fullmatch(r"[0-9a-fA-F]{40}", source_head):
+                raise CandidateGateError("codex report is missing a full source_head SHA")
+            plan = self._plan_from_job_contract(job_dir, source_report, source_head)
+        except (
+            CandidateGateError,
+            ValidationContractError,
+            json.JSONDecodeError,
+            OSError,
+            ValueError,
+        ) as exc:
+            report_path = job_dir / "report.json"
+            source_sha = _sha256_file(report_path) if report_path.exists() else ""
+            return self._unvalidated_report(job_id, source_sha, str(exc), started=started), source_sha
+        return self.process_job(job_dir, plan)
+
     def run_once(self) -> tuple[str, ...]:
         self.state.mkdir(parents=True, exist_ok=True)
         self.workspace_root.mkdir(parents=True, exist_ok=True)
@@ -581,8 +713,6 @@ class CandidateGate:
         processed: list[str] = []
         for job_dir in self.results.job_dirs():
             job_id = _safe_segment(job_dir.name, fallback="job")
-            if job_id not in self.config.plans:
-                continue
             report_path = job_dir / "report.json"
             if not report_path.exists():
                 continue
@@ -592,7 +722,12 @@ class CandidateGate:
                 if ledger_entry["source_report_sha256"] != source_sha:
                     raise CandidateGateError(f"relayed result changed after gate processing: {job_id}")
                 continue
-            gate_report, processed_sha = self.process_job(job_dir, self.config.plans[job_id])
+            if job_id in self.config.plans:
+                gate_report, processed_sha = self.process_job(job_dir, self.config.plans[job_id])
+            elif job_id.startswith("build-next-"):
+                gate_report, processed_sha = self.process_generic_job(job_dir)
+            else:
+                continue
             commit = self.results.publish_report(job_dir, gate_report)
             ledger[job_id] = {
                 "source_report_sha256": processed_sha or source_sha,

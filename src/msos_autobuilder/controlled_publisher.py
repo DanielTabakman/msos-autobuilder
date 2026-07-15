@@ -544,6 +544,8 @@ class ControlledPublisher:
 
         if gate_report.get("status") != "passed":
             raise PublisherError("only passed gate reports may be published")
+        if gate_report.get("state") not in {None, "candidate_passed"}:
+            raise PublisherError("gate report is not in candidate_passed state")
         if gate_report.get("publication_enabled", False) is not False:
             raise PublisherError("gate report publication must have remained disabled")
         if gate_report.get("product_write_performed", False) is not False:
@@ -569,6 +571,20 @@ class ControlledPublisher:
             raise PublisherError("source report lacks complete patch reconstruction")
         if gate_report.get("source_report_sha256") != source_sha:
             raise PublisherError("source report SHA-256 does not match the gate evidence")
+        integrity_path = job_dir / "result-integrity.json"
+        if not integrity_path.is_file():
+            raise PublisherError("publication evidence is missing result-integrity.json")
+        integrity = _mapping(
+            json.loads(integrity_path.read_text(encoding="utf-8")),
+            "result integrity",
+        )
+        if integrity.get("corrected_report_sha256") != source_sha:
+            raise PublisherError("corrected report SHA-256 does not match integrity evidence")
+        source_report_hash = integrity.get("source_report_sha256") or relay.get("source_report_sha256")
+        if source_report_hash and source_report_hash == source_sha:
+            raise PublisherError(
+                "publisher requires the corrected canonical report, not source-report-only evidence"
+            )
 
         gate_paths = gate_report.get("changed_paths")
         if not isinstance(gate_paths, list) or not all(isinstance(item, str) for item in gate_paths):

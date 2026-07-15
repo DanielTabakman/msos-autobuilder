@@ -11,6 +11,8 @@ It has no authority to write product `main`, force-push, mark a PR ready, add an
 A configured job is publishable only when the `results` branch contains:
 
 - a completed relayed `report.json` with `publication_enabled: false`;
+- `result-integrity.json` proving the corrected canonical `report.json` hash and the preserved
+  original `source-report.json` hash are distinct evidence roles;
 - complete reconstructed patches with matching SHA-256 values and changed-path lists;
 - a `gate-report.json` with `status: passed`;
 - every gate check passed;
@@ -19,7 +21,8 @@ A configured job is publishable only when the `results` branch contains:
 - `workspace_removed: true`;
 - a `source_report_sha256` matching the relayed report bytes.
 
-Any mutation, missing field, failed check, path overlap, or hash mismatch fails closed.
+Any mutation, missing field, failed check, unvalidated candidate state, path overlap, source-report-only
+evidence, or hash mismatch fails closed.
 
 ## Product-main drift protection
 

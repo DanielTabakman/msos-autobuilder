@@ -14,6 +14,7 @@ from msos_autobuilder.candidate_gate import (
     CandidateGateError,
     load_candidate_gate_config,
 )
+from msos_autobuilder.validation_contract import stable_contract_sha256
 
 
 def _git(path: Path | None, *args: str, check: bool = True) -> str:
@@ -64,6 +65,7 @@ def _results_remote(
     changed_paths: tuple[str, ...],
     patch_sha: str | None = None,
     job_id: str = "job-1",
+    job_yaml: str | None = None,
 ) -> Path:
     seed = root / "results-seed"
     seed.mkdir()
@@ -106,12 +108,55 @@ def _results_remote(
         },
     }
     (job / "report.json").write_text(json.dumps(report), encoding="utf-8")
-    (job / "job.yaml").write_text(f"version: 1\njob_id: {job_id}\n", encoding="utf-8")
+    (job / "job.yaml").write_text(job_yaml or f"version: 1\njob_id: {job_id}\n", encoding="utf-8")
     _git(seed, "add", ".")
     _git(seed, "commit", "-qm", "seed result")
     remote = root / "results.git"
     _git(None, "clone", "-q", "--bare", str(seed), str(remote))
     return remote
+
+
+def _generic_contract(
+    *,
+    job_id: str,
+    source_head: str,
+    changed_paths: tuple[str, ...],
+    check_code: str,
+) -> dict:
+    contract = {
+        "version": 1,
+        "pipeline_id": "ppe",
+        "adapter": "ppe_operator",
+        "target_repository": "DanielTabakman/Probability-prediction-engine",
+        "source_commit": source_head,
+        "job_id": job_id,
+        "work_item_id": "fixture-work",
+        "native_slice_id": "Fixture-Slice002",
+        "allowed_changed_paths": list(changed_paths),
+        "bootstrap": [
+            {
+                "name": "bootstrap",
+                "argv": [sys.executable, "-c", "pass"],
+                "cwd": ".",
+                "timeout_seconds": 30,
+                "required": True,
+            }
+        ],
+        "checks": [
+            {
+                "name": "fixture-check",
+                "argv": [sys.executable, "-c", check_code],
+                "cwd": ".",
+                "timeout_seconds": 30,
+                "required": True,
+            }
+        ],
+        "publication_enabled": False,
+        "merge_enabled": False,
+        "product_main_write_enabled": False,
+    }
+    contract["contract_sha256"] = stable_contract_sha256(contract)
+    return contract
 
 
 def _write_config(
@@ -146,6 +191,23 @@ def _write_config(
                 "policy_blocks": list(policy_blocks),
             }
         },
+    }
+    path = root / "candidate-gate.yaml"
+    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def _write_generic_config(root: Path, *, host_root: Path, source: Path, remote: Path) -> Path:
+    config = {
+        "version": 1,
+        "publication_enabled": False,
+        "host_root": str(host_root),
+        "source_repo": str(source),
+        "results_repo_url": str(remote),
+        "results_branch": "results",
+        "machine_id": "test-host",
+        "poll_seconds": 1,
+        "plans": {},
     }
     path = root / "candidate-gate.yaml"
     path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
@@ -291,3 +353,81 @@ def test_candidate_gate_rejects_default_branch_and_mutated_result(tmp_path: Path
 
     with pytest.raises(CandidateGateError, match="changed after gate processing"):
         gate.run_once()
+
+
+def test_candidate_gate_discovers_generic_build_next_contract(tmp_path: Path) -> None:
+    source = _init_repo(tmp_path / "source")
+    source_head = _git(source, "rev-parse", "HEAD")
+    patch, changed_paths = _candidate_patch(source)
+    job_id = "build-next-ppe-fixture-work-Fixture-Slice002-abcdef123456"
+    contract = _generic_contract(
+        job_id=job_id,
+        source_head=source_head,
+        changed_paths=changed_paths,
+        check_code=(
+            "from pathlib import Path; "
+            "assert Path('app.txt').read_text() == 'candidate\\n'; "
+            "assert Path('new.txt').read_text() == 'new\\n'"
+        ),
+    )
+    remote = _results_remote(
+        tmp_path,
+        source_head=source_head,
+        patch=patch,
+        changed_paths=changed_paths,
+        job_id=job_id,
+        job_yaml=yaml.safe_dump(
+            {
+                "version": 1,
+                "job_id": job_id,
+                "publication_enabled": False,
+                "candidate_validation": contract,
+            },
+            sort_keys=False,
+        ),
+    )
+    config_path = _write_generic_config(
+        tmp_path,
+        host_root=tmp_path / "host",
+        source=source,
+        remote=remote,
+    )
+
+    assert CandidateGate(load_candidate_gate_config(config_path)).run_once() == (job_id,)
+    report = _read_gate_report(tmp_path, remote, job_id=job_id)
+    assert report["status"] == "passed"
+    assert report["state"] == "candidate_passed"
+    assert report["plan_source"] == "candidate_validation"
+    assert [check["phase"] for check in report["checks"]] == ["bootstrap", "check"]
+    assert all(check["required"] is True for check in report["checks"])
+
+
+def test_generic_build_next_without_valid_contract_is_unvalidated(tmp_path: Path) -> None:
+    source = _init_repo(tmp_path / "source")
+    source_head = _git(source, "rev-parse", "HEAD")
+    patch, changed_paths = _candidate_patch(source)
+    job_id = "build-next-ppe-fixture-work-Fixture-Slice002-abcdef123456"
+    remote = _results_remote(
+        tmp_path,
+        source_head=source_head,
+        patch=patch,
+        changed_paths=changed_paths,
+        job_id=job_id,
+        job_yaml=yaml.safe_dump(
+            {"version": 1, "job_id": job_id, "publication_enabled": False},
+            sort_keys=False,
+        ),
+    )
+    config_path = _write_generic_config(
+        tmp_path,
+        host_root=tmp_path / "host",
+        source=source,
+        remote=remote,
+    )
+
+    assert CandidateGate(load_candidate_gate_config(config_path)).run_once() == (job_id,)
+    report = _read_gate_report(tmp_path, remote, job_id=job_id)
+    assert report["status"] == "unvalidated"
+    assert report["state"] == "awaiting_validation"
+    assert report["checks"] == []
+    assert "candidate_validation" in report["errors"][0]["message"]

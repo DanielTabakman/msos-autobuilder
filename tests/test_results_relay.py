@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -133,10 +134,22 @@ def test_results_relay_reconstructs_and_pushes_complete_patch(tmp_path: Path) ->
     _git(None, "clone", "-q", "--branch", "results", str(remote), str(review))
     result_root = review / "results" / "test-host" / "job-1"
     relayed_report = json.loads((result_root / "report.json").read_text(encoding="utf-8"))
+    source_report = json.loads((result_root / "source-report.json").read_text(encoding="utf-8"))
+    integrity = json.loads((result_root / "result-integrity.json").read_text(encoding="utf-8"))
     patch = (result_root / "patches" / "task-a.patch").read_text(encoding="utf-8")
 
     assert relayed_report["relay"]["complete_patch_reconstruction"] is True
+    assert relayed_report["relay"]["source_report_role"].startswith("original-worker")
+    assert relayed_report["relay"]["canonical_report_role"].startswith("relay-corrected")
     assert relayed_report["patches"][0]["complete_patch"] is True
+    assert source_report["patches"][0]["patch_sha256"] == "old-incomplete-hash"
+    assert relayed_report["patches"][0]["patch_sha256"] != "old-incomplete-hash"
+    assert integrity["source_report_sha256"] == hashlib.sha256(
+        (result_root / "source-report.json").read_bytes()
+    ).hexdigest()
+    assert integrity["corrected_report_sha256"] == hashlib.sha256(
+        (result_root / "report.json").read_bytes()
+    ).hexdigest()
     assert relayed_report["patches"][0]["changed_paths"] == ["README.md", "new-contract.py"]
     assert "diff --git a/new-contract.py b/new-contract.py" in patch
     assert (result_root / "source-report.json").exists()

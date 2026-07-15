@@ -317,6 +317,8 @@ def test_controlled_publisher_rejects_source_report_only_evidence(tmp_path: Path
     config_path, product_bare, evidence_bare, job_id = make_fixture(tmp_path)
     edit = tmp_path / "evidence-edit"
     git(None, "clone", "--branch", "results", str(evidence_bare), str(edit))
+    git(edit, "config", "user.name", "Fixture")
+    git(edit, "config", "user.email", "fixture@example.invalid")
     job_dir = edit / "results" / "MACHINE" / job_id
     source = json.loads((job_dir / "source-report.json").read_text(encoding="utf-8"))
     write_json(job_dir / "report.json", source)

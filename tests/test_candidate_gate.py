@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -41,7 +42,24 @@ def _init_repo(path: Path) -> Path:
     _git(path, "config", "user.email", "test@example.com")
     _git(path, "config", "user.name", "Test")
     (path / "app.txt").write_bytes(b"base\n")
+    (path / "pyproject.toml").write_text(
+        "[build-system]\n"
+        'requires = ["setuptools>=68"]\n'
+        'build-backend = "setuptools.build_meta"\n'
+        "\n"
+        "[project]\n"
+        'name = "candidate-fixture"\n'
+        'version = "0.0.0"\n',
+        encoding="utf-8",
+    )
+    (path / "fixture_check.py").write_text(
+        "from pathlib import Path\n"
+        "assert Path('app.txt').read_text() == 'candidate\\n'\n"
+        "assert Path('new.txt').read_text() == 'new\\n'\n",
+        encoding="utf-8",
+    )
     _git(path, "add", "app.txt")
+    _git(path, "add", "pyproject.toml", "fixture_check.py")
     _git(path, "commit", "-qm", "initial source")
     return path
 
@@ -79,6 +97,28 @@ def _results_remote(
     patch_path = patches / "task-a.patch"
     patch_path.write_bytes(patch.encode("utf-8"))
     digest = patch_sha or hashlib.sha256(patch_path.read_bytes()).hexdigest()
+    source_report = {
+        "version": 1,
+        "job_id": job_id,
+        "outcome": "completed",
+        "publication_enabled": False,
+        "codex_report": {
+            "source_head": source_head,
+            "publication_enabled": False,
+            "evidence": [{"task_id": "task-a", "changed_paths": list(changed_paths)}],
+        },
+        "patches": [
+            {
+                "task_id": "task-a",
+                "lane_id": "lane-a",
+                "allow_changes": True,
+                "complete_patch": False,
+                "patch_file": "patches/task-a.patch",
+                "patch_sha256": "worker-noncanonical-hash",
+                "changed_paths": list(changed_paths),
+            }
+        ],
+    }
     report = {
         "version": 1,
         "job_id": job_id,
@@ -104,10 +144,28 @@ def _results_remote(
             "version": 1,
             "machine_id": "test-host",
             "complete_patch_reconstruction": True,
+            "source_report_role": "original-worker-report-noncanonical-for-patch-identity",
+            "canonical_report_role": "relay-corrected-canonical-downstream-report",
             "publication_enabled": False,
         },
     }
+    source_path = job / "source-report.json"
+    source_path.write_text(json.dumps(source_report), encoding="utf-8")
     (job / "report.json").write_text(json.dumps(report), encoding="utf-8")
+    (job / "result-integrity.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "source_report_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+                "corrected_report_sha256": hashlib.sha256(
+                    (job / "report.json").read_bytes()
+                ).hexdigest(),
+                "canonical_patch_sha256_by_task": {"task-a": digest},
+                "publication_enabled": False,
+            }
+        ),
+        encoding="utf-8",
+    )
     (job / "job.yaml").write_text(job_yaml or f"version: 1\njob_id: {job_id}\n", encoding="utf-8")
     _git(seed, "add", ".")
     _git(seed, "commit", "-qm", "seed result")
@@ -121,7 +179,7 @@ def _generic_contract(
     job_id: str,
     source_head: str,
     changed_paths: tuple[str, ...],
-    check_code: str,
+    check_module: str = "fixture_check",
 ) -> dict:
     contract = {
         "version": 1,
@@ -133,19 +191,25 @@ def _generic_contract(
         "work_item_id": "fixture-work",
         "native_slice_id": "Fixture-Slice002",
         "allowed_changed_paths": list(changed_paths),
+        "dependency_policy": {
+            "version": 1,
+            "source": "target_repository_package_metadata",
+            "network_allowed": True,
+            "strategy": "candidate_local_venv_python_editable_install",
+        },
         "bootstrap": [
             {
-                "name": "bootstrap",
-                "argv": [sys.executable, "-c", "pass"],
+                "name": "install-candidate-package",
+                "argv": ["python", "-m", "pip", "install", "-e", "."],
                 "cwd": ".",
-                "timeout_seconds": 30,
+                "timeout_seconds": 120,
                 "required": True,
             }
         ],
         "checks": [
             {
                 "name": "fixture-check",
-                "argv": [sys.executable, "-c", check_code],
+                "argv": ["python", "-m", check_module],
                 "cwd": ".",
                 "timeout_seconds": 30,
                 "required": True,
@@ -157,6 +221,35 @@ def _generic_contract(
     }
     contract["contract_sha256"] = stable_contract_sha256(contract)
     return contract
+
+
+def _generic_job_yaml(job_id: str, source_head: str, changed_paths: tuple[str, ...], contract: dict) -> str:
+    return yaml.safe_dump(
+        {
+            "version": 1,
+            "job_id": job_id,
+            "publication_enabled": False,
+            "founder_build_next": {
+                "version": 1,
+                "pipeline_id": "ppe",
+                "work_item_id": "fixture-work",
+                "repository": "DanielTabakman/Probability-prediction-engine",
+                "registered_adapter": "ppe_operator",
+                "source": {"commit": source_head},
+                "native_slice": {
+                    "slice_id": "Fixture-Slice002",
+                    "touch_set": list(changed_paths),
+                },
+                "authority": {
+                    "publication_enabled": False,
+                    "merge_enabled": False,
+                    "product_main_write_enabled": False,
+                },
+            },
+            "candidate_validation": contract,
+        },
+        sort_keys=False,
+    )
 
 
 def _write_config(
@@ -214,11 +307,44 @@ def _write_generic_config(root: Path, *, host_root: Path, source: Path, remote: 
     return path
 
 
+def _pip_freeze() -> str:
+    return subprocess.check_output(
+        [sys.executable, "-m", "pip", "freeze"],
+        text=True,
+        encoding="utf-8",
+    )
+
+
 def _read_gate_report(root: Path, remote: Path, job_id: str = "job-1") -> dict:
-    review = root / f"review-{job_id}"
-    _git(None, "clone", "-q", "--branch", "results", str(remote), str(review))
+    review = root / "r"
+    if review.exists():
+        shutil.rmtree(review)
+    _git(
+        None,
+        "-c",
+        "core.longpaths=true",
+        "clone",
+        "-q",
+        "--branch",
+        "results",
+        str(remote),
+        str(review),
+    )
     report_path = review / "results" / "test-host" / job_id / "gate-report.json"
     return json.loads(report_path.read_text(encoding="utf-8"))
+
+
+def _edit_results_remote(root: Path, remote: Path, edit) -> None:
+    checkout = root / "edit"
+    if checkout.exists():
+        shutil.rmtree(checkout)
+    _git(None, "-c", "core.longpaths=true", "clone", "-q", "--branch", "results", str(remote), str(checkout))
+    _git(checkout, "config", "user.email", "test@example.com")
+    _git(checkout, "config", "user.name", "Test")
+    edit(checkout)
+    _git(checkout, "add", ".")
+    _git(checkout, "commit", "-qm", "mutate result")
+    _git(checkout, "push", "-q", "origin", "HEAD:results")
 
 
 def test_candidate_gate_applies_complete_patch_and_runs_checks(tmp_path: Path) -> None:
@@ -356,6 +482,7 @@ def test_candidate_gate_rejects_default_branch_and_mutated_result(tmp_path: Path
 
 
 def test_candidate_gate_discovers_generic_build_next_contract(tmp_path: Path) -> None:
+    packages_before = _pip_freeze()
     source = _init_repo(tmp_path / "source")
     source_head = _git(source, "rev-parse", "HEAD")
     patch, changed_paths = _candidate_patch(source)
@@ -364,11 +491,6 @@ def test_candidate_gate_discovers_generic_build_next_contract(tmp_path: Path) ->
         job_id=job_id,
         source_head=source_head,
         changed_paths=changed_paths,
-        check_code=(
-            "from pathlib import Path; "
-            "assert Path('app.txt').read_text() == 'candidate\\n'; "
-            "assert Path('new.txt').read_text() == 'new\\n'"
-        ),
     )
     remote = _results_remote(
         tmp_path,
@@ -376,15 +498,7 @@ def test_candidate_gate_discovers_generic_build_next_contract(tmp_path: Path) ->
         patch=patch,
         changed_paths=changed_paths,
         job_id=job_id,
-        job_yaml=yaml.safe_dump(
-            {
-                "version": 1,
-                "job_id": job_id,
-                "publication_enabled": False,
-                "candidate_validation": contract,
-            },
-            sort_keys=False,
-        ),
+        job_yaml=_generic_job_yaml(job_id, source_head, changed_paths, contract),
     )
     config_path = _write_generic_config(
         tmp_path,
@@ -398,8 +512,12 @@ def test_candidate_gate_discovers_generic_build_next_contract(tmp_path: Path) ->
     assert report["status"] == "passed"
     assert report["state"] == "candidate_passed"
     assert report["plan_source"] == "candidate_validation"
-    assert [check["phase"] for check in report["checks"]] == ["bootstrap", "check"]
-    assert all(check["required"] is True for check in report["checks"])
+    assert [check["phase"] for check in report["bootstrap"]] == ["bootstrap"]
+    assert [check["phase"] for check in report["checks"]] == ["check"]
+    assert report["candidate_environment"]["python"]
+    assert report["candidate_environment_removed"] is True
+    assert all(check["required"] is True for check in [*report["bootstrap"], *report["checks"]])
+    assert _pip_freeze() == packages_before
 
 
 def test_generic_build_next_without_valid_contract_is_unvalidated(tmp_path: Path) -> None:
@@ -414,7 +532,28 @@ def test_generic_build_next_without_valid_contract_is_unvalidated(tmp_path: Path
         changed_paths=changed_paths,
         job_id=job_id,
         job_yaml=yaml.safe_dump(
-            {"version": 1, "job_id": job_id, "publication_enabled": False},
+            {
+                "version": 1,
+                "job_id": job_id,
+                "publication_enabled": False,
+                "founder_build_next": {
+                    "version": 1,
+                    "pipeline_id": "ppe",
+                    "work_item_id": "fixture-work",
+                    "repository": "DanielTabakman/Probability-prediction-engine",
+                    "registered_adapter": "ppe_operator",
+                    "source": {"commit": source_head},
+                    "native_slice": {
+                        "slice_id": "Fixture-Slice002",
+                        "touch_set": list(changed_paths),
+                    },
+                    "authority": {
+                        "publication_enabled": False,
+                        "merge_enabled": False,
+                        "product_main_write_enabled": False,
+                    },
+                },
+            },
             sort_keys=False,
         ),
     )
@@ -431,3 +570,156 @@ def test_generic_build_next_without_valid_contract_is_unvalidated(tmp_path: Path
     assert report["state"] == "awaiting_validation"
     assert report["checks"] == []
     assert "candidate_validation" in report["errors"][0]["message"]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("missing-integrity", "result-integrity"),
+        ("changed-source", "source report SHA-256"),
+        ("changed-report", "corrected report SHA-256"),
+        ("changed-patch", "canonical patch bytes"),
+        ("task-map-mismatch", "task map"),
+        ("source-report-only", "distinct"),
+    ],
+)
+def test_generic_build_next_requires_canonical_integrity(
+    tmp_path: Path,
+    mutation: str,
+    message: str,
+) -> None:
+    source = _init_repo(tmp_path / "source")
+    source_head = _git(source, "rev-parse", "HEAD")
+    patch, changed_paths = _candidate_patch(source)
+    job_id = "build-next-ppe-fixture-work-Fixture-Slice002-abcdef123456"
+    contract = _generic_contract(
+        job_id=job_id,
+        source_head=source_head,
+        changed_paths=changed_paths,
+    )
+    remote = _results_remote(
+        tmp_path,
+        source_head=source_head,
+        patch=patch,
+        changed_paths=changed_paths,
+        job_id=job_id,
+        job_yaml=_generic_job_yaml(job_id, source_head, changed_paths, contract),
+    )
+
+    def mutate(checkout: Path) -> None:
+        job_dir = checkout / "results" / "test-host" / job_id
+        if mutation == "missing-integrity":
+            (job_dir / "result-integrity.json").unlink()
+        elif mutation == "changed-source":
+            (job_dir / "source-report.json").write_text("{}", encoding="utf-8")
+        elif mutation == "changed-report":
+            payload = json.loads((job_dir / "report.json").read_text(encoding="utf-8"))
+            payload["tampered"] = True
+            (job_dir / "report.json").write_text(json.dumps(payload), encoding="utf-8")
+        elif mutation == "changed-patch":
+            (job_dir / "patches" / "task-a.patch").write_text("tampered\n", encoding="utf-8")
+        elif mutation == "task-map-mismatch":
+            integrity = json.loads((job_dir / "result-integrity.json").read_text(encoding="utf-8"))
+            integrity["canonical_patch_sha256_by_task"]["extra-task"] = "0" * 64
+            (job_dir / "result-integrity.json").write_text(json.dumps(integrity), encoding="utf-8")
+        elif mutation == "source-report-only":
+            report_bytes = (job_dir / "report.json").read_bytes()
+            (job_dir / "source-report.json").write_bytes(report_bytes)
+            digest = hashlib.sha256(report_bytes).hexdigest()
+            integrity = json.loads((job_dir / "result-integrity.json").read_text(encoding="utf-8"))
+            integrity["corrected_report_sha256"] = digest
+            integrity["source_report_sha256"] = digest
+            (job_dir / "result-integrity.json").write_text(json.dumps(integrity), encoding="utf-8")
+
+    _edit_results_remote(tmp_path, remote, mutate)
+    config_path = _write_generic_config(
+        tmp_path,
+        host_root=tmp_path / "host",
+        source=source,
+        remote=remote,
+    )
+
+    assert CandidateGate(load_candidate_gate_config(config_path)).run_once() == (job_id,)
+    report = _read_gate_report(tmp_path, remote, job_id=job_id)
+    assert report["status"] == "unvalidated"
+    assert message in report["errors"][0]["message"]
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "job_id",
+        "pipeline_id",
+        "work_item_id",
+        "native_slice_id",
+        "adapter",
+        "target_repository",
+        "source_commit",
+        "allowed_changed_paths",
+        "publication_enabled",
+        "merge_enabled",
+        "product_main_write_enabled",
+    ],
+)
+def test_generic_contract_identity_must_match_job_and_report(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    source = _init_repo(tmp_path / "source")
+    source_head = _git(source, "rev-parse", "HEAD")
+    patch, changed_paths = _candidate_patch(source)
+    job_id = "build-next-ppe-fixture-work-Fixture-Slice002-abcdef123456"
+    contract = _generic_contract(
+        job_id=job_id,
+        source_head=source_head,
+        changed_paths=changed_paths,
+    )
+    remote = _results_remote(
+        tmp_path,
+        source_head=source_head,
+        patch=patch,
+        changed_paths=changed_paths,
+        job_id=job_id,
+        job_yaml=_generic_job_yaml(job_id, source_head, changed_paths, contract),
+    )
+
+    def mutate(checkout: Path) -> None:
+        job_path = checkout / "results" / "test-host" / job_id / "job.yaml"
+        job = yaml.safe_load(job_path.read_text(encoding="utf-8"))
+        founder = job["founder_build_next"]
+        if field == "job_id":
+            job["job_id"] = "other-job"
+        elif field == "pipeline_id":
+            founder["pipeline_id"] = "other"
+        elif field == "work_item_id":
+            founder["work_item_id"] = "other-work"
+        elif field == "native_slice_id":
+            founder["native_slice"]["slice_id"] = "Other-Slice"
+        elif field == "adapter":
+            founder["registered_adapter"] = "other_adapter"
+        elif field == "target_repository":
+            founder["repository"] = "Owner/Other"
+        elif field == "source_commit":
+            founder["source"]["commit"] = "f" * 40
+        elif field == "allowed_changed_paths":
+            founder["native_slice"]["touch_set"] = ["app.txt"]
+        elif field == "publication_enabled":
+            founder["authority"]["publication_enabled"] = True
+        elif field == "merge_enabled":
+            founder["authority"]["merge_enabled"] = True
+        elif field == "product_main_write_enabled":
+            founder["authority"]["product_main_write_enabled"] = True
+        job_path.write_text(yaml.safe_dump(job, sort_keys=False), encoding="utf-8")
+
+    _edit_results_remote(tmp_path, remote, mutate)
+    config_path = _write_generic_config(
+        tmp_path,
+        host_root=tmp_path / "host",
+        source=source,
+        remote=remote,
+    )
+
+    assert CandidateGate(load_candidate_gate_config(config_path)).run_once() == (job_id,)
+    report = _read_gate_report(tmp_path, remote, job_id=job_id)
+    assert report["status"] == "unvalidated"
+    assert field in report["errors"][0]["message"]

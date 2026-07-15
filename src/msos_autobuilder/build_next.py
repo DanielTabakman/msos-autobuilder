@@ -841,6 +841,7 @@ def _build_job(
             "pipeline_id": pipeline_id,
             "work_item_id": work.get("work_item_id"),
             "repository": "DanielTabakman/Probability-prediction-engine",
+            "registered_adapter": "ppe_operator",
             "source": asdict(source_identity),
             "phase_plan": plan_rel,
             "native_slice": {

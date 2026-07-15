@@ -7,7 +7,6 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import Any
 
 
@@ -37,6 +36,7 @@ class CandidateValidationContract:
     work_item_id: str
     native_slice_id: str
     allowed_changed_paths: tuple[str, ...]
+    dependency_policy: dict[str, Any]
     bootstrap: tuple[ValidationCommand, ...]
     checks: tuple[ValidationCommand, ...]
     publication_enabled: bool
@@ -57,10 +57,61 @@ def stable_contract_sha256(payload: Mapping[str, Any]) -> str:
 
 def _safe_relative(value: Any, label: str) -> str:
     text = str(value or "").strip().replace("\\", "/")
-    path = Path(text)
-    if not text or path.is_absolute() or ".." in path.parts:
+    parts = tuple(part for part in text.split("/") if part)
+    if (
+        not text
+        or text.startswith(("/", "//"))
+        or re.match(r"^[A-Za-z]:", text)
+        or any(part == ".." for part in parts)
+    ):
         raise ValidationContractError(f"{label} must be a safe relative path")
-    return path.as_posix()
+    return text
+
+
+def _identity(value: Any, label: str) -> str:
+    text = str(value or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,191}", text):
+        raise ValidationContractError(f"{label} must be a non-empty safe identifier")
+    return text
+
+
+def _repository(value: Any) -> str:
+    text = str(value or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", text):
+        raise ValidationContractError("candidate_validation target_repository is invalid")
+    return text
+
+
+def _dependency_policy(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ValidationContractError("candidate_validation dependency_policy must be a mapping")
+    expected = {
+        "version": 1,
+        "source": "target_repository_package_metadata",
+        "network_allowed": True,
+        "strategy": "candidate_local_venv_python_editable_install",
+    }
+    if raw != expected:
+        raise ValidationContractError("candidate_validation dependency_policy is unsupported")
+    return dict(raw)
+
+
+def _reject_shell_argv(argv: tuple[str, ...], label: str) -> None:
+    executable = argv[0].strip().lower().replace("\\", "/").rsplit("/", 1)[-1]
+    if executable.endswith(".exe"):
+        executable = executable[:-4]
+    if executable in {"sh", "bash"} and len(argv) > 1 and argv[1].lower() == "-c":
+        raise ValidationContractError(f"{label} may not invoke a shell command string")
+    if executable == "cmd" and len(argv) > 1 and argv[1].lower() in {"/c", "/k"}:
+        raise ValidationContractError(f"{label} may not invoke a shell command string")
+    if executable in {"powershell", "pwsh"} and any(
+        arg.lower() in {"-command", "-encodedcommand"} for arg in argv[1:]
+    ):
+        raise ValidationContractError(f"{label} may not invoke a shell command string")
+    if executable not in {"python", "python3", "py"}:
+        raise ValidationContractError(f"{label} must run through the candidate Python interpreter")
+    if "-c" in argv:
+        raise ValidationContractError(f"{label} may not use Python command strings")
 
 
 def _command(raw: Mapping[str, Any], *, phase: str, label: str) -> ValidationCommand:
@@ -73,6 +124,7 @@ def _command(raw: Mapping[str, Any], *, phase: str, label: str) -> ValidationCom
         raise ValidationContractError(f"{label} argv contains an empty value")
     if any(item in {"&&", "||", ";", "|"} for item in argv):
         raise ValidationContractError(f"{label} argv contains shell control syntax")
+    _reject_shell_argv(argv, label)
     timeout = int(raw.get("timeout_seconds", 600))
     if timeout <= 0:
         raise ValidationContractError(f"{label} timeout_seconds must be positive")
@@ -97,6 +149,8 @@ def _commands(raw: Any, *, phase: str) -> tuple[ValidationCommand, ...]:
         if not isinstance(item, dict):
             raise ValidationContractError(f"{phase}[{index}] must be a mapping")
         commands.append(_command(item, phase=phase, label=f"{phase}[{index}]"))
+    if phase == "bootstrap" and any(not command.required for command in commands):
+        raise ValidationContractError("candidate_validation bootstrap steps must be required")
     return tuple(commands)
 
 
@@ -117,10 +171,19 @@ def load_validation_contract(raw: Any) -> CandidateValidationContract:
     allowed_raw = raw.get("allowed_changed_paths")
     if not isinstance(allowed_raw, list) or not allowed_raw:
         raise ValidationContractError("candidate_validation allowed_changed_paths is required")
-    allowed = tuple(sorted(_safe_relative(item, "allowed_changed_paths") for item in allowed_raw))
+    allowed = tuple(_safe_relative(item, "allowed_changed_paths") for item in allowed_raw)
+    if len(set(allowed)) != len(allowed):
+        raise ValidationContractError(
+            "candidate_validation allowed_changed_paths contains duplicates"
+        )
+    allowed = tuple(sorted(allowed))
     checks = _commands(raw.get("checks"), phase="check")
-    if not checks:
-        raise ValidationContractError("candidate_validation requires at least one check")
+    if not checks or not any(check.required for check in checks):
+        raise ValidationContractError("candidate_validation requires at least one required check")
+    bootstrap = _commands(raw.get("bootstrap", []), phase="bootstrap")
+    if not bootstrap:
+        raise ValidationContractError("candidate_validation requires required bootstrap")
+    dependency_policy = _dependency_policy(raw.get("dependency_policy"))
     publication_enabled = bool(raw.get("publication_enabled", False))
     merge_enabled = bool(raw.get("merge_enabled", False))
     product_main_write_enabled = bool(raw.get("product_main_write_enabled", False))
@@ -129,15 +192,19 @@ def load_validation_contract(raw: Any) -> CandidateValidationContract:
     return CandidateValidationContract(
         version=1,
         contract_sha256=declared,
-        pipeline_id=str(raw.get("pipeline_id") or "").strip(),
-        adapter=str(raw.get("adapter") or "").strip(),
-        target_repository=str(raw.get("target_repository") or "").strip(),
+        pipeline_id=_identity(raw.get("pipeline_id"), "candidate_validation pipeline_id"),
+        adapter=_identity(raw.get("adapter"), "candidate_validation adapter"),
+        target_repository=_repository(raw.get("target_repository")),
         source_commit=source_commit,
-        job_id=str(raw.get("job_id") or "").strip(),
-        work_item_id=str(raw.get("work_item_id") or "").strip(),
-        native_slice_id=str(raw.get("native_slice_id") or "").strip(),
+        job_id=_identity(raw.get("job_id"), "candidate_validation job_id"),
+        work_item_id=_identity(raw.get("work_item_id"), "candidate_validation work_item_id"),
+        native_slice_id=_identity(
+            raw.get("native_slice_id"),
+            "candidate_validation native_slice_id",
+        ),
         allowed_changed_paths=allowed,
-        bootstrap=_commands(raw.get("bootstrap", []), phase="bootstrap"),
+        dependency_policy=dependency_policy,
+        bootstrap=bootstrap,
         checks=checks,
         publication_enabled=False,
         merge_enabled=False,
@@ -180,7 +247,7 @@ def build_ppe_validation_contract(
             "version": 1,
             "source": "target_repository_package_metadata",
             "network_allowed": True,
-            "strategy": "python_editable_install_from_candidate",
+            "strategy": "candidate_local_venv_python_editable_install",
         },
         "bootstrap": [
             {
@@ -200,11 +267,9 @@ def build_ppe_validation_contract(
                 "required": True,
             }
         ],
-        "working_directory": ".",
         "publication_enabled": False,
         "merge_enabled": False,
         "product_main_write_enabled": False,
-        "required_semantics": "all required bootstrap and check commands must pass",
     }
     payload["contract_sha256"] = stable_contract_sha256(payload)
     return payload

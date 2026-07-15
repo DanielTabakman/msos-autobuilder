@@ -22,7 +22,8 @@ $ManagedTaskNames = @(
     "MSOS Autobuilder Result Relay",
     "MSOS Autobuilder Candidate Gate",
     "MSOS Autobuilder Revision Loop",
-    "MSOS Autobuilder Controlled Publisher"
+    "MSOS Autobuilder Controlled Publisher",
+    "MSOS Autobuilder Capacity-One Refill"
 )
 
 $BootstrapFileMap = @(

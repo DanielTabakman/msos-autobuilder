@@ -201,6 +201,8 @@ managed_tasks:
     task_name: 'MSOS Autobuilder Revision Loop'
   - service: publisher
     task_name: 'MSOS Autobuilder Controlled Publisher'
+  - service: refill
+    task_name: 'MSOS Autobuilder Capacity-One Refill'
 "@
 $SupervisorConfigPath = Join-Path $BootstrapRoot "supervisor.yaml"
 Write-Utf8NoBom -Path $SupervisorConfigPath -Value $SupervisorYaml
@@ -213,6 +215,7 @@ $Services = @{
         gate = @{ argv = @("-m", "msos_autobuilder.candidate_gate_revisions", "--config", "{runtime_config}"); config_template = (Join-Path $TemplatesRoot "candidate-gate.yaml"); log_file = "{host_root}/logs/candidate-gate.log" }
         revision = @{ argv = @("-m", "msos_autobuilder.revision_loop", "--config", "{host_root}/revision-loop.yaml"); log_file = "{host_root}/logs/revision-loop.log" }
         publisher = @{ argv = @("-m", "msos_autobuilder.controlled_publisher", "--config", "{runtime_config}"); config_template = (Join-Path $TemplatesRoot "controlled-publisher.yaml"); log_file = "{host_root}/logs/controlled-publisher.log" }
+        refill = @{ argv = @("-m", "msos_autobuilder", "refill-run", "--service-config", "{host_root}/service.yaml", "--interval-seconds", "30"); log_file = "{host_root}/logs/capacity-one-refill.log" }
     }
 }
 Write-Utf8NoBom -Path (Join-Path $BootstrapRoot "managed-services.json") -Value (($Services | ConvertTo-Json -Depth 20) + [Environment]::NewLine)
@@ -224,7 +227,8 @@ $ManagedTasks = @(
     @{ task = "MSOS Autobuilder Result Relay"; service = "relay" },
     @{ task = "MSOS Autobuilder Candidate Gate"; service = "gate" },
     @{ task = "MSOS Autobuilder Revision Loop"; service = "revision" },
-    @{ task = "MSOS Autobuilder Controlled Publisher"; service = "publisher" }
+    @{ task = "MSOS Autobuilder Controlled Publisher"; service = "publisher" },
+    @{ task = "MSOS Autobuilder Capacity-One Refill"; service = "refill" }
 )
 foreach ($Managed in $ManagedTasks) {
     New-ManagedTask -TaskName $Managed.task -ServiceName $Managed.service -RunnerScript $Runner -PowerShellExe $PowerShellExe -UserId $UserId

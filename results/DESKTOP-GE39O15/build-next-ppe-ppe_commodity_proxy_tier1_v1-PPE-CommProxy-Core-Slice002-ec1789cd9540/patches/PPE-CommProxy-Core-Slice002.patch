@@ -1,0 +1,148 @@
+diff --git a/config/assets.yaml b/config/assets.yaml
+index a0a08bf2..0ac782ac 100644
+--- a/config/assets.yaml
++++ b/config/assets.yaml
+@@ -96,6 +96,23 @@ assets:
+     trust_notes:
+       - "Russell 2000 ETF; can be thinner than SPY/QQQ."
+ 
++  USO:
++    label: "USO ETF options"
++    asset_class: commodity_proxy
++    tier: extended
++    venue: equity
++    equity_symbol: USO
++    price_unit: USD
++    contract_multiplier: 100
++    data_source: yfinance
++    enabled: true
++    spread_width: 2
++    catalog:
++      group: commodity_proxy
++    trust_notes:
++      - "ETF options on the USO oil fund; not NYMEX CL futures or futures options."
++      - "USO roll and contango effects are not modeled in v1."
++
+   SOL:
+     label: "SOL options"
+     asset_class: crypto
+diff --git a/scripts/witness_asset_catalog.py b/scripts/witness_asset_catalog.py
+index 82576ad0..3c9ff626 100644
+--- a/scripts/witness_asset_catalog.py
++++ b/scripts/witness_asset_catalog.py
+@@ -21,6 +21,7 @@ if str(_REPO_ROOT) not in sys.path:
+     sys.path.insert(0, str(_REPO_ROOT))
+ 
+ from src.data.assets_registry import (  # noqa: E402
++    asset_class,
+     asset_venue,
+     get_asset,
+     is_asset_enabled,
+@@ -61,6 +62,24 @@ def witness_catalog_shape() -> tuple[bool, str, dict[str, Any]]:
+     return ok, err or "catalog shape ok", catalog
+ 
+ 
++def _validate_commodity_proxy_labels(asset_id: str, catalog_asset: dict[str, Any] | None) -> tuple[bool, str]:
++    """Commodity proxy rows must be honest ETF-options labels, not futures copy."""
++    if asset_class(asset_id) != "commodity_proxy":
++        return True, "not commodity_proxy"
++
++    entry = get_asset(asset_id)
++    label = str((catalog_asset or {}).get("label") or entry.get("label") or "")
++    notes = [str(n) for n in (catalog_asset or {}).get("trust_notes") or []]
++    if "etf options" not in label.lower() and not any("etf options" in n.lower() for n in notes):
++        return False, "commodity proxy label must say ETF options"
++
++    text = " ".join([label, *notes]).lower()
++    forbidden = ("comex futures", "nymex futures", "cme futures")
++    if any(term in text for term in forbidden):
++        return False, "commodity proxy label must not claim futures venue"
++    return True, "commodity proxy ETF label ok"
++
++
+ def run_witness(
+     asset_ids: list[str],
+     *,
+@@ -107,6 +126,18 @@ def run_witness(
+                 detail = "exposure-only asset catalog ok"
+         else:
+             ok, detail = witness_display_boundary_for_asset(aid, live=live, pre_enable=pre_enable)
++            if ok:
++                catalog_asset = None
++                for group in catalog.get("groups") or []:
++                    for row in group.get("assets") or []:
++                        if str(row.get("id") or "").upper() == aid:
++                            catalog_asset = row
++                            break
++                    if catalog_asset is not None:
++                        break
++                label_ok, label_detail = _validate_commodity_proxy_labels(aid, catalog_asset)
++                ok = ok and label_ok
++                detail = f"{detail}; {label_detail}" if label_detail != "not commodity_proxy" else detail
+         results.append(
+             {
+                 "asset_id": aid,
+diff --git a/src/viz/embed_display_boundary.py b/src/viz/embed_display_boundary.py
+index f0baf266..8f54db83 100644
+--- a/src/viz/embed_display_boundary.py
++++ b/src/viz/embed_display_boundary.py
+@@ -12,7 +12,9 @@ from typing import Any, Callable
+ from urllib.parse import parse_qs
+ 
+ from src.data.assets_registry import (
++    asset_class,
+     asset_venue,
++    catalog_group,
+     catalog_group_order,
+     default_asset_id,
+     get_asset,
+@@ -54,6 +56,7 @@ DISPLAY_SUMMARY_MAX_EXPIRIES = 5
+ CATALOG_PAYLOAD_KIND = "asset_catalog"
+ CATALOG_PAYLOAD_SCHEMA_VERSION = 1
+ EMBED_ONLY_FALLBACK_MODE = "streamlit_embed_only"
++COMMODITY_PROXY_CLASS = "commodity_proxy"
+ 
+ # MSOS Strategy Lab belief presets — illustrative lognormal shifts vs market reference (display only).
+ BELIEF_TUNING_BOUNDS: dict[str, dict[str, float]] = {
+@@ -215,6 +218,32 @@ def _parse_float(value: str | float | int | None) -> float | None:
+         return None
+ 
+ 
++def _display_asset_block(asset_id: str) -> dict[str, Any]:
++    aid = str(asset_id or default_asset_id()).strip().upper()
++    entry = get_asset(aid)
++    block: dict[str, Any] = dict(display_asset_meta(aid))
++    cls = asset_class(aid)
++    venue = asset_venue(aid)
++    block.update(
++        {
++            "asset_class": cls,
++            "venue": venue,
++            "catalog_group": catalog_group(aid),
++            "price_unit": str(entry.get("price_unit") or "USD"),
++        }
++    )
++    trust = entry.get("trust_notes")
++    block["trust_notes"] = [str(n) for n in trust] if isinstance(trust, list) else []
++
++    if cls == COMMODITY_PROXY_CLASS:
++        block["instrument_label"] = str(entry.get("label") or f"{aid} ETF options")
++        block["price_axis_label"] = f"{aid} ETF price at expiry"
++        block["proxy_label"] = "ETF options"
++        block["proxy_disclaimer"] = "Commodity ETF proxy, not CME/NYMEX/COMEX futures."
++
++    return block
++
++
+ def _chart_bounds_usd(forward: float, asset_id: str) -> tuple[float, float]:
+     aid = str(asset_id or default_asset_id()).strip().upper()
+     if asset_venue(aid) in ("equity", "bybit"):
+@@ -285,7 +314,7 @@ def build_distribution_display_payload(
+         else:
+             aid = str(export_rows[0]["asset"]).strip().upper() or default_asset_id()
+     export_rows = annotate_export_rows_trust(export_rows)
+-    asset_block = display_asset_meta(aid)
++    asset_block = _display_asset_block(aid)
+     summary = summary_panel_contract(export_rows)
+     series = []
+     for row in export_rows:

@@ -1,0 +1,57 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "config/assets.yaml",
+          "scripts/witness_asset_catalog.py",
+          "src/viz/embed_display_boundary.py"
+        ],
+        "metadata": {
+          "output_tail": "id)\n     summary = summary_panel_contract(export_rows)\n     series = []\n     for row in export_rows:\n\ntokens used\n83,064\nImplemented the bounded USO commodity proxy core slice in the three allowed files only.\n\nChanges:\n- Added enabled `USO` registry row in [config/assets.yaml](C:/Users/USER/.msos-autobuilder/workspaces/PPE-CommProxy-Core-Slice002/config/assets.yaml:99) as `asset_class: commodity_proxy`, `venue: equity`, yfinance-backed ETF options.\n- Updated display payload asset metadata in [src/viz/embed_display_boundary.py](C:/Users/USER/.msos-autobuilder/workspaces/PPE-CommProxy-Core-Slice002/src/viz/embed_display_boundary.py:221) so MSOS receives registry-derived `asset_class`, `venue`, `catalog_group`, `trust_notes`, and USO ETF proxy labels.\n- Added commodity-proxy label validation in [scripts/witness_asset_catalog.py](C:/Users/USER/.msos-autobuilder/workspaces/PPE-CommProxy-Core-Slice002/scripts/witness_asset_catalog.py:65) so witness checks fail if proxy copy stops saying ETF options or falsely claims a futures venue.\n\nValidation:\n- `python -m py_compile src/viz/embed_display_boundary.py scripts/witness_asset_catalog.py` passed.\n- Direct YAML registry check passed: `USO registry ok: USO ETF options commodity_proxy equity`.\n- Stubbed focused witness/display check passed: `USO witness/display ok: display boundary ok; commodity proxy ETF label ok USO ETF options USO ETF price at expiry`.\n- `git diff --check` passed, with only existing line-ending warnings.\n\nBlocked:\n- Normal pytest collection could not run because the available Python environment is missing dependencies such as `pandas` and `requests`.\n- Auto-ship could not complete because `.git` is read-only in this sandbox:\n  - `git switch -c build/auto/PPE-CommProxy-Core-Slice002-comm_proxy` failed creating refs.\n  - `git add ...` failed with `.git/index.lock: Permission denied`.\n\nCurrent dirty files are only:\n- `config/assets.yaml`\n- `src/viz/embed_display_boundary.py`\n- `scripts/witness_asset_catalog.py`",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder\\workspaces\\PPE-CommProxy-Core-Slice002"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 3 changed path(s)",
+        "task_id": "PPE-CommProxy-Core-Slice002"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "ec1789cd9540b1baf386c766e2b84feb6563257c",
+    "status": "completed"
+  },
+  "completed_at": "2026-07-15T17:50:43.282566+00:00",
+  "job_id": "build-next-ppe-ppe_commodity_proxy_tier1_v1-PPE-CommProxy-Core-Slice002-ec1789cd9540",
+  "job_sha256": "1031522b67f33374daa85d77df03033b796f44597151d03d83b8fd25080ae0fd",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "changed_paths": [
+        "config/assets.yaml",
+        "scripts/witness_asset_catalog.py",
+        "src/viz/embed_display_boundary.py"
+      ],
+      "complete_patch": true,
+      "lane_id": "PPE-CommProxy-Core-Slice002",
+      "patch_file": "patches/PPE-CommProxy-Core-Slice002.patch",
+      "patch_sha256": "9c5e185b3c64ab0cf09706823a0b38b7cf3db6d5149f2404d73e51b2bb76925d",
+      "task_id": "PPE-CommProxy-Core-Slice002"
+    }
+  ],
+  "publication_enabled": false,
+  "relay": {
+    "complete_patch_reconstruction": true,
+    "machine_id": "DESKTOP-GE39O15",
+    "publication_enabled": false,
+    "relayed_at": "2026-07-15T17:50:53.359597+00:00",
+    "version": 1
+  },
+  "requested_by": "founder build next",
+  "source": "C:\\Users\\USER\\.msos-autobuilder\\queue\\pending\\build-next-ppe-ppe_commodity_proxy_tier1_v1-PPE-CommProxy-Core-Slice002-ec1789cd9540.yaml",
+  "version": 1
+}

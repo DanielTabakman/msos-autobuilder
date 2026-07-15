@@ -1,0 +1,351 @@
+version: 1
+job_id: build-next-ppe-ppe_commodity_proxy_tier1_v1-PPE-CommProxy-Core-Slice002-ec1789cd9540
+approved: true
+publication_enabled: false
+requested_by: founder build next
+expected_source_head: ec1789cd9540b1baf386c766e2b84feb6563257c
+founder_build_next:
+  version: 1
+  pipeline_id: ppe
+  work_item_id: ppe_commodity_proxy_tier1_v1
+  repository: DanielTabakman/Probability-prediction-engine
+  source:
+    remote: origin
+    remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+    repository: DanielTabakman/Probability-prediction-engine
+    ref: main
+    remote_ref: origin/main
+    commit: ec1789cd9540b1baf386c766e2b84feb6563257c
+  phase_plan: docs/SOP/PHASE_PLANS/ppe_commodity_proxy_tier1_v1_relay.json
+  native_slice:
+    slice_id: PPE-CommProxy-Core-Slice002
+    build_branch: build/auto/PPE-CommProxy-Core-Slice002-comm_proxy
+    layer_preset: PPE_CORE
+    worker_mode: local-agent
+    declared_plane: PRODUCT-PLANE
+    touch_set:
+    - config/assets.yaml
+    - src/viz/embed_display_boundary.py
+    - scripts/witness_asset_catalog.py
+    sequence_index: 1
+    total_slices: 4
+    previous_slices:
+    - PPE-CommProxy-Control-Slice001
+    following_slices:
+    - PPE-CommProxy-Witness-Slice003
+    - PPE-CommProxy-Closeout-Slice004
+  prerequisites:
+    source: ppe_native_read_only
+    evidence: &id001
+      source_files:
+      - path: artifacts/orchestrator/ACTIVE_RUN.json
+        exists: false
+      - path: artifacts/orchestrator/OPERATOR_STATUS.md
+        exists: false
+      - path: artifacts/workflow_metrics/slices.jsonl
+        exists: false
+      - path: docs/SOP/ACTIVE_PHASE_MANIFEST.json
+        exists: true
+        sha256: d361cc7e4590bbd99f93e5d3e9307f51c43274614d2f861f86ee359545525d5d
+        git_commit: 0ff7a9c0530966ec2f4657257f01061643a74a10
+        git_committed_at: '2026-07-15T00:27:16-04:00'
+      - path: docs/SOP/PHASE_CHAPTER_BACKLOG.json
+        exists: true
+        sha256: 72af20545a134ef31479707f08eaeb81bc235ad386e250d9ef24469b42203247
+        git_commit: 301612b72b1d9d7db52c7c3b7140a8aa7798f48e
+        git_committed_at: '2026-07-15T12:51:54-04:00'
+      - path: docs/SOP/PHASE_PLANS/ppe_commodity_proxy_tier1_v1_relay.json
+        exists: true
+        sha256: 827612934aeb5387334bf2131c2b55571e163c479743bd8009b1c442978ed29d
+        git_commit: 301612b72b1d9d7db52c7c3b7140a8aa7798f48e
+        git_committed_at: '2026-07-15T12:51:54-04:00'
+      - path: docs/SOP/PHASE_QUEUE.json
+        exists: true
+        sha256: 700c13764f10d98213e7c13992b64a78ce0cb2db7dee7e675afe014a1b86e14d
+        git_commit: 301612b72b1d9d7db52c7c3b7140a8aa7798f48e
+        git_committed_at: '2026-07-15T12:51:54-04:00'
+      - path: docs/SOP/POST_PPE_COMMODITY_PROXY_TIER1_V1_SELECTION.md
+        exists: true
+        sha256: 0fe2224b13662a16ac44d795c041b4aeebb4f71836671ab6cf270281852a3812
+        git_commit: 301612b72b1d9d7db52c7c3b7140a8aa7798f48e
+        git_committed_at: '2026-07-15T12:51:54-04:00'
+      - path: docs/SOP/PPE_COMMODITY_PROXY_TIER1_V1_EVIDENCE_STATUS.md
+        exists: true
+        sha256: ceeebf5c8fd1d2697c7971e4967f7717f407e33aee734f5366c8fbe5ad670a41
+        git_commit: 301612b72b1d9d7db52c7c3b7140a8aa7798f48e
+        git_committed_at: '2026-07-15T12:51:54-04:00'
+      - path: docs/SOP/SPRINT_PPE_COMMODITY_PROXY_TIER1_V1.md
+        exists: true
+        sha256: d57f8f5524697c97888bb39c91155f7de318fa5f5f7da2978c917ff1e9e5f479
+        git_commit: 301612b72b1d9d7db52c7c3b7140a8aa7798f48e
+        git_committed_at: '2026-07-15T12:51:54-04:00'
+      identity: 67b559884ffc60a1fa7f2fe40aa0e94c2d837bd0b38f604673107e97af17c087
+    required_slices: &id002
+    - PPE-CommProxy-Control-Slice001
+    satisfied_slices: &id003
+    - PPE-CommProxy-Control-Slice001
+    non_blocking_slices: &id004 []
+  portfolio_selection_evidence:
+    version: 1
+    source:
+      remote: origin
+      remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      repository: DanielTabakman/Probability-prediction-engine
+      ref: main
+      remote_ref: origin/main
+      commit: ec1789cd9540b1baf386c766e2b84feb6563257c
+    selected:
+      pipeline_id: ppe
+      work_item_id: ppe_commodity_proxy_tier1_v1
+      trace: docs/SOP/PHASE_PLANS/ppe_commodity_proxy_tier1_v1_relay.json
+    native_slice:
+      slice_id: PPE-CommProxy-Core-Slice002
+      build_branch: build/auto/PPE-CommProxy-Core-Slice002-comm_proxy
+      layer_preset: PPE_CORE
+      worker_mode: local-agent
+      declared_plane: PRODUCT-PLANE
+      touch_set:
+      - config/assets.yaml
+      - src/viz/embed_display_boundary.py
+      - scripts/witness_asset_catalog.py
+      sequence_index: 1
+      total_slices: 4
+      previous_slices:
+      - PPE-CommProxy-Control-Slice001
+      following_slices:
+      - PPE-CommProxy-Witness-Slice003
+      - PPE-CommProxy-Closeout-Slice004
+    prerequisites:
+      source: ppe_native_read_only
+      evidence: *id001
+      required_slices: *id002
+      satisfied_slices: *id003
+      non_blocking_slices: *id004
+    file_hashes:
+      registry: 8833b0e7ab441e3b7f723aaa5e3db039a950b3972e032995d36b8d59ffb4abb1
+      phase_queue: 700c13764f10d98213e7c13992b64a78ce0cb2db7dee7e675afe014a1b86e14d
+      active_manifest: d361cc7e4590bbd99f93e5d3e9307f51c43274614d2f861f86ee359545525d5d
+      phase_plan: 827612934aeb5387334bf2131c2b55571e163c479743bd8009b1c442978ed29d
+    selection_explanation:
+      policy:
+      - explicit accepted founder priority
+      - accepted external deadline
+      - dependency-unblock value
+      - readiness and evidence freshness
+      - portfolio fairness
+      - age within priority class
+      - deterministic tie-breaker
+      winner:
+        pipeline_id: ppe
+        work_item_id: ppe_commodity_proxy_tier1_v1
+        founder_priority: high
+        deadline: null
+        dependency_unblock_value: 10
+        age_index: 70
+      rank_tuple:
+      - 1
+      - '9999-12-31T00:00:00+00:00'
+      - -10
+      - 1
+      - 0
+      - 70
+      - ppe
+      - ppe_commodity_proxy_tier1_v1
+      why: Selected the lowest deterministic rank among safe READY_TO_BUILD items;
+        blocked/stale pipelines are excluded.
+    identity_sha256: 05b02e72473dbfc86794ca46bbfe28c72a779aefb8276d17ee5c89bb82474bab
+  authority:
+    publication_enabled: false
+    merge_enabled: false
+    product_main_write_enabled: false
+manifest:
+  version: 1
+  publication_enabled: false
+  lanes:
+  - task_id: PPE-CommProxy-Core-Slice002
+    lane_id: PPE-CommProxy-Core-Slice002
+    chapter_id: PPE_COMMODITY_PROXY_TIER1_V1
+    branch: build/auto/PPE-CommProxy-Core-Slice002-comm_proxy
+    layer: PPE_CORE
+    worker_mode: local-agent
+    preferred_cost_class: standard
+    allowed_paths:
+    - config/assets.yaml
+    - src/viz/embed_display_boundary.py
+    - scripts/witness_asset_catalog.py
+    forbidden_paths:
+    - .git/**
+    - .github/workflows/**
+    - artifacts/**
+    - runtime/**
+    - state/**
+    - queue/**
+    - config/founder_pipeline_registry.json
+    - docs/SOP/PHASE_QUEUE.json
+    - docs/SOP/ACTIVE_PHASE_MANIFEST.json
+    - docs/SOP/FOUNDER_PIPELINE_COMMANDS_V1.md
+    - docs/SOP/PIPELINE_CREATION_SOP_V1.md
+    - docs/SOP/SCHEDULED_AUTOBUILDER_LANE_POLICY_V1.md
+    - docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md
+    - docs/SOP/SPRINT_*.md
+    - docs/SOP/*SELECTION*.md
+    - docs/SOP/POST_*_SELECTION*.md
+    - docs/SOP/*PRIORITY*.md
+    - docs/SOP/*FRONTIER*.md
+    - docs/SOP/*MANIFEST*.json
+    - artifacts/orchestrator/**
+    - artifacts/control_plane/**
+    - artifacts/relay/**
+    - artifacts/leases/**
+    allow_changes: true
+    instruction: "Implementation thread. THREAD_ROLE: codex_build.\n\nImplement only\
+      \ the bounded PPE/MSOS work item selected by the accepted founder portfolio\
+      \ registry.\nPipeline ID: ppe\nWork-item ID: ppe_commodity_proxy_tier1_v1\n\
+      Source repository: DanielTabakman/Probability-prediction-engine\nExact source\
+      \ commit: ec1789cd9540b1baf386c766e2b84feb6563257c\nCanonical source ref: origin/main\n\
+      Canonical source remote: https://github.com/DanielTabakman/Probability-prediction-engine.git\n\
+      Registered phase plan: docs/SOP/PHASE_PLANS/ppe_commodity_proxy_tier1_v1_relay.json\n\
+      Native sliceId: PPE-CommProxy-Core-Slice002\nNative buildBranch: build/auto/PPE-CommProxy-Core-Slice002-comm_proxy\n\
+      Native layerPreset: PPE_CORE\nNative workerMode: local-agent\nNative sequence:\
+      \ 2 of 4\n\nAuthority and publication boundary:\n- Do not write product main\
+      \ or merge.\n- Do not force-push, enable automerge, mark a PR ready, or publish\
+      \ directly.\n- Produce only workspace changes for the Autobuilder relay/gate/publisher\
+      \ path.\n- Preserve the controlled draft publisher as the only product publisher.\n\
+      - Treat sprint specs, selection records, queues, manifests, registries, leases,\
+      \ and operator state as read-only canon/evidence.\n- Do not perform smoke, closeout,\
+      \ selection, queue, or control-plane updates.\n\nAllowed paths:\n- config/assets.yaml\n\
+      - src/viz/embed_display_boundary.py\n- scripts/witness_asset_catalog.py\n\n\
+      Forbidden paths:\n- .git/**\n- .github/workflows/**\n- artifacts/**\n- runtime/**\n\
+      - state/**\n- queue/**\n- config/founder_pipeline_registry.json\n- docs/SOP/PHASE_QUEUE.json\n\
+      - docs/SOP/ACTIVE_PHASE_MANIFEST.json\n- docs/SOP/FOUNDER_PIPELINE_COMMANDS_V1.md\n\
+      - docs/SOP/PIPELINE_CREATION_SOP_V1.md\n- docs/SOP/SCHEDULED_AUTOBUILDER_LANE_POLICY_V1.md\n\
+      - docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md\n- docs/SOP/SPRINT_*.md\n\
+      - docs/SOP/*SELECTION*.md\n- docs/SOP/POST_*_SELECTION*.md\n- docs/SOP/*PRIORITY*.md\n\
+      - docs/SOP/*FRONTIER*.md\n- docs/SOP/*MANIFEST*.json\n- artifacts/orchestrator/**\n\
+      - artifacts/control_plane/**\n- artifacts/relay/**\n- artifacts/leases/**\n\n\
+      Acceptance criteria and validation requirements:\n- Implement only the selected\
+      \ native PPE implementation slice.\n- Preserve native PPE sequencing; do not\
+      \ execute later smoke or closeout slices.\n- Read sprint spec as canon: docs/SOP/SPRINT_PPE_COMMODITY_PROXY_TIER1_V1.md\n\
+      - Read selection record as canon: docs/SOP/POST_PPE_COMMODITY_PROXY_TIER1_V1_SELECTION.md\n\
+      - Add or update focused tests for changed behavior.\n- Run the focused tests\
+      \ and relevant repository gates before closeout.\n- Return evidence suitable\
+      \ for the existing relay, candidate gate, revision loop, and controlled publisher.\n\
+      \nPortfolio-selection evidence identity:\n{\n  \"file_hashes\": {\n    \"active_manifest\"\
+      : \"d361cc7e4590bbd99f93e5d3e9307f51c43274614d2f861f86ee359545525d5d\",\n  \
+      \  \"phase_plan\": \"827612934aeb5387334bf2131c2b55571e163c479743bd8009b1c442978ed29d\"\
+      ,\n    \"phase_queue\": \"700c13764f10d98213e7c13992b64a78ce0cb2db7dee7e675afe014a1b86e14d\"\
+      ,\n    \"registry\": \"8833b0e7ab441e3b7f723aaa5e3db039a950b3972e032995d36b8d59ffb4abb1\"\
+      \n  },\n  \"identity_sha256\": \"05b02e72473dbfc86794ca46bbfe28c72a779aefb8276d17ee5c89bb82474bab\"\
+      ,\n  \"native_slice\": {\n    \"build_branch\": \"build/auto/PPE-CommProxy-Core-Slice002-comm_proxy\"\
+      ,\n    \"declared_plane\": \"PRODUCT-PLANE\",\n    \"following_slices\": [\n\
+      \      \"PPE-CommProxy-Witness-Slice003\",\n      \"PPE-CommProxy-Closeout-Slice004\"\
+      \n    ],\n    \"layer_preset\": \"PPE_CORE\",\n    \"previous_slices\": [\n\
+      \      \"PPE-CommProxy-Control-Slice001\"\n    ],\n    \"sequence_index\": 1,\n\
+      \    \"slice_id\": \"PPE-CommProxy-Core-Slice002\",\n    \"total_slices\": 4,\n\
+      \    \"touch_set\": [\n      \"config/assets.yaml\",\n      \"src/viz/embed_display_boundary.py\"\
+      ,\n      \"scripts/witness_asset_catalog.py\"\n    ],\n    \"worker_mode\":\
+      \ \"local-agent\"\n  },\n  \"prerequisites\": {\n    \"evidence\": {\n     \
+      \ \"identity\": \"67b559884ffc60a1fa7f2fe40aa0e94c2d837bd0b38f604673107e97af17c087\"\
+      ,\n      \"source_files\": [\n        {\n          \"exists\": false,\n    \
+      \      \"path\": \"artifacts/orchestrator/ACTIVE_RUN.json\"\n        },\n  \
+      \      {\n          \"exists\": false,\n          \"path\": \"artifacts/orchestrator/OPERATOR_STATUS.md\"\
+      \n        },\n        {\n          \"exists\": false,\n          \"path\": \"\
+      artifacts/workflow_metrics/slices.jsonl\"\n        },\n        {\n         \
+      \ \"exists\": true,\n          \"git_commit\": \"0ff7a9c0530966ec2f4657257f01061643a74a10\"\
+      ,\n          \"git_committed_at\": \"2026-07-15T00:27:16-04:00\",\n        \
+      \  \"path\": \"docs/SOP/ACTIVE_PHASE_MANIFEST.json\",\n          \"sha256\"\
+      : \"d361cc7e4590bbd99f93e5d3e9307f51c43274614d2f861f86ee359545525d5d\"\n   \
+      \     },\n        {\n          \"exists\": true,\n          \"git_commit\":\
+      \ \"301612b72b1d9d7db52c7c3b7140a8aa7798f48e\",\n          \"git_committed_at\"\
+      : \"2026-07-15T12:51:54-04:00\",\n          \"path\": \"docs/SOP/PHASE_CHAPTER_BACKLOG.json\"\
+      ,\n          \"sha256\": \"72af20545a134ef31479707f08eaeb81bc235ad386e250d9ef24469b42203247\"\
+      \n        },\n        {\n          \"exists\": true,\n          \"git_commit\"\
+      : \"301612b72b1d9d7db52c7c3b7140a8aa7798f48e\",\n          \"git_committed_at\"\
+      : \"2026-07-15T12:51:54-04:00\",\n          \"path\": \"docs/SOP/PHASE_PLANS/ppe_commodity_proxy_tier1_v1_relay.json\"\
+      ,\n          \"sha256\": \"827612934aeb5387334bf2131c2b55571e163c479743bd8009b1c442978ed29d\"\
+      \n        },\n        {\n          \"exists\": true,\n          \"git_commit\"\
+      : \"301612b72b1d9d7db52c7c3b7140a8aa7798f48e\",\n          \"git_committed_at\"\
+      : \"2026-07-15T12:51:54-04:00\",\n          \"path\": \"docs/SOP/PHASE_QUEUE.json\"\
+      ,\n          \"sha256\": \"700c13764f10d98213e7c13992b64a78ce0cb2db7dee7e675afe014a1b86e14d\"\
+      \n        },\n        {\n          \"exists\": true,\n          \"git_commit\"\
+      : \"301612b72b1d9d7db52c7c3b7140a8aa7798f48e\",\n          \"git_committed_at\"\
+      : \"2026-07-15T12:51:54-04:00\",\n          \"path\": \"docs/SOP/POST_PPE_COMMODITY_PROXY_TIER1_V1_SELECTION.md\"\
+      ,\n          \"sha256\": \"0fe2224b13662a16ac44d795c041b4aeebb4f71836671ab6cf270281852a3812\"\
+      \n        },\n        {\n          \"exists\": true,\n          \"git_commit\"\
+      : \"301612b72b1d9d7db52c7c3b7140a8aa7798f48e\",\n          \"git_committed_at\"\
+      : \"2026-07-15T12:51:54-04:00\",\n          \"path\": \"docs/SOP/PPE_COMMODITY_PROXY_TIER1_V1_EVIDENCE_STATUS.md\"\
+      ,\n          \"sha256\": \"ceeebf5c8fd1d2697c7971e4967f7717f407e33aee734f5366c8fbe5ad670a41\"\
+      \n        },\n        {\n          \"exists\": true,\n          \"git_commit\"\
+      : \"301612b72b1d9d7db52c7c3b7140a8aa7798f48e\",\n          \"git_committed_at\"\
+      : \"2026-07-15T12:51:54-04:00\",\n          \"path\": \"docs/SOP/SPRINT_PPE_COMMODITY_PROXY_TIER1_V1.md\"\
+      ,\n          \"sha256\": \"d57f8f5524697c97888bb39c91155f7de318fa5f5f7da2978c917ff1e9e5f479\"\
+      \n        }\n      ]\n    },\n    \"non_blocking_slices\": [],\n    \"required_slices\"\
+      : [\n      \"PPE-CommProxy-Control-Slice001\"\n    ],\n    \"satisfied_slices\"\
+      : [\n      \"PPE-CommProxy-Control-Slice001\"\n    ],\n    \"source\": \"ppe_native_read_only\"\
+      \n  },\n  \"selected\": {\n    \"pipeline_id\": \"ppe\",\n    \"trace\": \"\
+      docs/SOP/PHASE_PLANS/ppe_commodity_proxy_tier1_v1_relay.json\",\n    \"work_item_id\"\
+      : \"ppe_commodity_proxy_tier1_v1\"\n  },\n  \"selection_explanation\": {\n \
+      \   \"policy\": [\n      \"explicit accepted founder priority\",\n      \"accepted\
+      \ external deadline\",\n      \"dependency-unblock value\",\n      \"readiness\
+      \ and evidence freshness\",\n      \"portfolio fairness\",\n      \"age within\
+      \ priority class\",\n      \"deterministic tie-breaker\"\n    ],\n    \"rank_tuple\"\
+      : [\n      1,\n      \"9999-12-31T00:00:00+00:00\",\n      -10,\n      1,\n\
+      \      0,\n      70,\n      \"ppe\",\n      \"ppe_commodity_proxy_tier1_v1\"\
+      \n    ],\n    \"why\": \"Selected the lowest deterministic rank among safe READY_TO_BUILD\
+      \ items; blocked/stale pipelines are excluded.\",\n    \"winner\": {\n     \
+      \ \"age_index\": 70,\n      \"deadline\": null,\n      \"dependency_unblock_value\"\
+      : 10,\n      \"founder_priority\": \"high\",\n      \"pipeline_id\": \"ppe\"\
+      ,\n      \"work_item_id\": \"ppe_commodity_proxy_tier1_v1\"\n    }\n  },\n \
+      \ \"source\": {\n    \"commit\": \"ec1789cd9540b1baf386c766e2b84feb6563257c\"\
+      ,\n    \"ref\": \"main\",\n    \"remote\": \"origin\",\n    \"remote_ref\":\
+      \ \"origin/main\",\n    \"remote_url\": \"https://github.com/DanielTabakman/Probability-prediction-engine.git\"\
+      ,\n    \"repository\": \"DanielTabakman/Probability-prediction-engine\"\n  },\n\
+      \  \"version\": 1\n}\n\nPipeline-native prerequisite evidence:\n{\n  \"evidence\"\
+      : {\n    \"identity\": \"67b559884ffc60a1fa7f2fe40aa0e94c2d837bd0b38f604673107e97af17c087\"\
+      ,\n    \"source_files\": [\n      {\n        \"exists\": false,\n        \"\
+      path\": \"artifacts/orchestrator/ACTIVE_RUN.json\"\n      },\n      {\n    \
+      \    \"exists\": false,\n        \"path\": \"artifacts/orchestrator/OPERATOR_STATUS.md\"\
+      \n      },\n      {\n        \"exists\": false,\n        \"path\": \"artifacts/workflow_metrics/slices.jsonl\"\
+      \n      },\n      {\n        \"exists\": true,\n        \"git_commit\": \"0ff7a9c0530966ec2f4657257f01061643a74a10\"\
+      ,\n        \"git_committed_at\": \"2026-07-15T00:27:16-04:00\",\n        \"\
+      path\": \"docs/SOP/ACTIVE_PHASE_MANIFEST.json\",\n        \"sha256\": \"d361cc7e4590bbd99f93e5d3e9307f51c43274614d2f861f86ee359545525d5d\"\
+      \n      },\n      {\n        \"exists\": true,\n        \"git_commit\": \"301612b72b1d9d7db52c7c3b7140a8aa7798f48e\"\
+      ,\n        \"git_committed_at\": \"2026-07-15T12:51:54-04:00\",\n        \"\
+      path\": \"docs/SOP/PHASE_CHAPTER_BACKLOG.json\",\n        \"sha256\": \"72af20545a134ef31479707f08eaeb81bc235ad386e250d9ef24469b42203247\"\
+      \n      },\n      {\n        \"exists\": true,\n        \"git_commit\": \"301612b72b1d9d7db52c7c3b7140a8aa7798f48e\"\
+      ,\n        \"git_committed_at\": \"2026-07-15T12:51:54-04:00\",\n        \"\
+      path\": \"docs/SOP/PHASE_PLANS/ppe_commodity_proxy_tier1_v1_relay.json\",\n\
+      \        \"sha256\": \"827612934aeb5387334bf2131c2b55571e163c479743bd8009b1c442978ed29d\"\
+      \n      },\n      {\n        \"exists\": true,\n        \"git_commit\": \"301612b72b1d9d7db52c7c3b7140a8aa7798f48e\"\
+      ,\n        \"git_committed_at\": \"2026-07-15T12:51:54-04:00\",\n        \"\
+      path\": \"docs/SOP/PHASE_QUEUE.json\",\n        \"sha256\": \"700c13764f10d98213e7c13992b64a78ce0cb2db7dee7e675afe014a1b86e14d\"\
+      \n      },\n      {\n        \"exists\": true,\n        \"git_commit\": \"301612b72b1d9d7db52c7c3b7140a8aa7798f48e\"\
+      ,\n        \"git_committed_at\": \"2026-07-15T12:51:54-04:00\",\n        \"\
+      path\": \"docs/SOP/POST_PPE_COMMODITY_PROXY_TIER1_V1_SELECTION.md\",\n     \
+      \   \"sha256\": \"0fe2224b13662a16ac44d795c041b4aeebb4f71836671ab6cf270281852a3812\"\
+      \n      },\n      {\n        \"exists\": true,\n        \"git_commit\": \"301612b72b1d9d7db52c7c3b7140a8aa7798f48e\"\
+      ,\n        \"git_committed_at\": \"2026-07-15T12:51:54-04:00\",\n        \"\
+      path\": \"docs/SOP/PPE_COMMODITY_PROXY_TIER1_V1_EVIDENCE_STATUS.md\",\n    \
+      \    \"sha256\": \"ceeebf5c8fd1d2697c7971e4967f7717f407e33aee734f5366c8fbe5ad670a41\"\
+      \n      },\n      {\n        \"exists\": true,\n        \"git_commit\": \"301612b72b1d9d7db52c7c3b7140a8aa7798f48e\"\
+      ,\n        \"git_committed_at\": \"2026-07-15T12:51:54-04:00\",\n        \"\
+      path\": \"docs/SOP/SPRINT_PPE_COMMODITY_PROXY_TIER1_V1.md\",\n        \"sha256\"\
+      : \"d57f8f5524697c97888bb39c91155f7de318fa5f5f7da2978c917ff1e9e5f479\"\n   \
+      \   }\n    ]\n  },\n  \"non_blocking_slices\": [],\n  \"required_slices\": [\n\
+      \    \"PPE-CommProxy-Control-Slice001\"\n  ],\n  \"satisfied_slices\": [\n \
+      \   \"PPE-CommProxy-Control-Slice001\"\n  ],\n  \"source\": \"ppe_native_read_only\"\
+      \n}\n\nRelevant canon/task packet:\n{\n  \"following_slices\": [\n    \"PPE-CommProxy-Witness-Slice003\"\
+      ,\n    \"PPE-CommProxy-Closeout-Slice004\"\n  ],\n  \"phase_plan\": \"docs/SOP/PHASE_PLANS/ppe_commodity_proxy_tier1_v1_relay.json\"\
+      ,\n  \"previous_slices\": [\n    \"PPE-CommProxy-Control-Slice001\"\n  ],\n\
+      \  \"selected_slice\": {\n    \"buildBranch\": \"build/auto/PPE-CommProxy-Core-Slice002-comm_proxy\"\
+      ,\n    \"declaredPlane\": \"PRODUCT-PLANE\",\n    \"hardMinutes\": 240,\n  \
+      \  \"implementationStatus\": \"PENDING\",\n    \"layerPreset\": \"PPE_CORE\"\
+      ,\n    \"maxAttempts\": 2,\n    \"sliceId\": \"PPE-CommProxy-Core-Slice002\"\
+      ,\n    \"sprintSpecPath\": \"docs/SOP/SPRINT_PPE_COMMODITY_PROXY_TIER1_V1.md\"\
+      ,\n    \"susMinutes\": 90,\n    \"touchSet\": [\n      \"config/assets.yaml\"\
+      ,\n      \"src/viz/embed_display_boundary.py\",\n      \"scripts/witness_asset_catalog.py\"\
+      \n    ],\n    \"workerMode\": \"local-agent\"\n  },\n  \"selection_record\"\
+      : \"docs/SOP/POST_PPE_COMMODITY_PROXY_TIER1_V1_SELECTION.md\",\n  \"sprint_spec_path\"\
+      : \"docs/SOP/SPRINT_PPE_COMMODITY_PROXY_TIER1_V1.md\"\n}\n\nNon-goals:\n- Do\
+      \ not charter new product scope.\n- Do not alter PPE registry or priority policy.\n\
+      - Do not run continuous refill or dispatch additional work."

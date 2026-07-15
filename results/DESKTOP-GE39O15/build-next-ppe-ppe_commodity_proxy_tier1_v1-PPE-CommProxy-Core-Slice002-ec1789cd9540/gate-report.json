@@ -1,0 +1,20 @@
+{
+  "checks": [],
+  "errors": [
+    {
+      "message": "immutable job predates candidate_validation",
+      "type": "CandidateGateError"
+    }
+  ],
+  "finished_at": "2026-07-15T22:16:02.188590+00:00",
+  "job_id": "build-next-ppe-ppe_commodity_proxy_tier1_v1-PPE-CommProxy-Core-Slice002-ec1789cd9540",
+  "policy_blocks": [],
+  "product_write_performed": false,
+  "publication_enabled": false,
+  "source_report_sha256": "ca3bed84c9957bf3f28b16a8bc4022a7f75e7c6b26c4f600df002f86ed5f49b9",
+  "started_at": "2026-07-15T22:16:02.160164+00:00",
+  "state": "awaiting_validation",
+  "status": "unvalidated",
+  "version": 1,
+  "workspace_removed": true
+}

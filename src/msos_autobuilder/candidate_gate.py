@@ -15,6 +15,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
@@ -24,6 +25,11 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+from .validation_contract import (
+    ValidationContractError,
+    load_validation_contract,
+)
 
 
 class CandidateGateError(RuntimeError):
@@ -36,12 +42,26 @@ class GateCheck:
     argv: tuple[str, ...]
     cwd: str = "."
     timeout_seconds: int = 600
+    required: bool = True
+    phase: str = "check"
 
 
 @dataclass(frozen=True)
 class GatePlan:
     checks: tuple[GateCheck, ...]
     policy_blocks: tuple[str, ...] = ()
+    source: str = "configured"
+    contract_sha256: str | None = None
+    bootstrap: tuple[GateCheck, ...] = ()
+    dependency_policy: Mapping[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class CandidateEnvironment:
+    path: Path
+    python: Path
+    scripts: Path
+    support: Path
 
 
 @dataclass(frozen=True)
@@ -140,6 +160,10 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _canonical_patch_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
 def _resolve_path(base: Path, value: Any, label: str) -> Path:
     text = str(value or "").strip()
     if not text:
@@ -208,6 +232,8 @@ def load_candidate_gate_config(path: str | Path) -> CandidateGateConfig:
                     argv=argv,
                     cwd=_safe_relative_cwd(check.get("cwd", ".")),
                     timeout_seconds=timeout,
+                    required=bool(check.get("required", True)),
+                    phase=str(check.get("phase") or "check"),
                 )
             )
         blocks_raw = plan_data.get("policy_blocks", [])
@@ -239,7 +265,10 @@ def _bounded(text: str | None, limit: int = 20_000) -> str:
     return value[-limit:]
 
 
-def _check_environment(candidate: Path) -> dict[str, str]:
+def _check_environment(
+    candidate: Path,
+    candidate_env: CandidateEnvironment | None = None,
+) -> dict[str, str]:
     baseline = (
         "PATH",
         "HOME",
@@ -249,15 +278,96 @@ def _check_environment(candidate: Path) -> dict[str, str]:
         "APPDATA",
         "TEMP",
         "TMP",
+        "PATHEXT",
     )
     environment = {key: os.environ[key] for key in baseline if key in os.environ}
     environment["PYTHONUTF8"] = "1"
-    existing = environment.get("PYTHONPATH", "")
-    environment["PYTHONPATH"] = str(candidate) + (os.pathsep + existing if existing else "")
+    environment["PYTHONNOUSERSITE"] = "1"
+    environment.pop("PYTHONHOME", None)
+    python_path = str(candidate)
+    if candidate_env is not None:
+        python_path = str(candidate_env.support) + os.pathsep + python_path
+        existing_path = environment.get("PATH") or environment.get("Path") or ""
+        candidate_path = str(candidate_env.scripts) + (
+            os.pathsep + existing_path if existing_path else ""
+        )
+        for key in tuple(environment):
+            if key.casefold() == "path":
+                environment.pop(key, None)
+        if os.name == "nt":
+            environment["Path"] = candidate_path
+        else:
+            environment["PATH"] = candidate_path
+        environment["VIRTUAL_ENV"] = str(candidate_env.path)
+        environment["PIP_REQUIRE_VIRTUALENV"] = "1"
+    environment["PYTHONPATH"] = python_path
     return environment
 
 
-def run_check(candidate: Path, check: GateCheck) -> dict[str, Any]:
+def _candidate_python(env: CandidateEnvironment) -> str:
+    return str(env.python)
+
+
+_SUBPROCESS_PYTHON_SITE_CUSTOMIZE = r'''
+"""Keep nested Python subprocesses inside the candidate validation venv."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import subprocess
+
+
+_ORIGINAL_POPEN = subprocess.Popen
+
+
+def _candidate_python() -> str | None:
+    env_path = os.environ.get("VIRTUAL_ENV")
+    if not env_path:
+        return None
+    name = "python.exe" if os.name == "nt" else "python"
+    scripts = "Scripts" if os.name == "nt" else "bin"
+    candidate = Path(env_path) / scripts / name
+    return str(candidate) if candidate.is_file() else None
+
+
+def _is_python_launcher(value: object) -> bool:
+    executable = str(value).strip().replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if executable.endswith(".exe"):
+        executable = executable[:-4]
+    return executable in {"python", "python3", "py"}
+
+
+class _CandidatePopen(_ORIGINAL_POPEN):
+    def __init__(self, args, *popen_args, **popen_kwargs):  # type: ignore[no-untyped-def]
+        if popen_kwargs.get("executable") is None:
+            candidate = _candidate_python()
+            if candidate and isinstance(args, (list, tuple)) and args and _is_python_launcher(args[0]):
+                args = [candidate, *args[1:]]
+        super().__init__(args, *popen_args, **popen_kwargs)
+
+
+subprocess.Popen = _CandidatePopen
+'''
+
+
+def _resolve_argv(check: GateCheck, env: CandidateEnvironment | None) -> list[str]:
+    argv = list(check.argv)
+    if env is not None and argv:
+        executable = argv[0].strip().lower().replace("\\", "/").rsplit("/", 1)[-1]
+        if executable.endswith(".exe"):
+            executable = executable[:-4]
+        if executable in {"python", "python3", "py"}:
+            argv[0] = _candidate_python(env)
+    return argv
+
+
+def run_check(
+    candidate: Path,
+    check: GateCheck,
+    *,
+    candidate_env: CandidateEnvironment | None = None,
+) -> dict[str, Any]:
     cwd = (candidate / check.cwd).resolve()
     try:
         cwd.relative_to(candidate.resolve())
@@ -266,9 +376,12 @@ def run_check(candidate: Path, check: GateCheck) -> dict[str, Any]:
     if not cwd.is_dir():
         return {
             "name": check.name,
-            "argv": list(check.argv),
+            "argv": _resolve_argv(check, candidate_env),
             "cwd": check.cwd,
+            "required": check.required,
+            "phase": check.phase,
             "passed": False,
+            "skipped": False,
             "returncode": None,
             "timed_out": False,
             "stdout": "",
@@ -278,7 +391,7 @@ def run_check(candidate: Path, check: GateCheck) -> dict[str, Any]:
     started = _utc_now()
     try:
         proc = subprocess.run(
-            list(check.argv),
+            _resolve_argv(check, candidate_env),
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -286,16 +399,19 @@ def run_check(candidate: Path, check: GateCheck) -> dict[str, Any]:
             errors="replace",
             shell=False,
             timeout=check.timeout_seconds,
-            env=_check_environment(candidate),
+            env=_check_environment(candidate, candidate_env),
             check=False,
         )
         return {
             "name": check.name,
-            "argv": list(check.argv),
+            "argv": _resolve_argv(check, candidate_env),
             "cwd": check.cwd,
+            "required": check.required,
+            "phase": check.phase,
             "started_at": started,
             "finished_at": _utc_now(),
             "passed": proc.returncode == 0,
+            "skipped": False,
             "returncode": proc.returncode,
             "timed_out": False,
             "stdout": _bounded(proc.stdout),
@@ -304,11 +420,14 @@ def run_check(candidate: Path, check: GateCheck) -> dict[str, Any]:
     except subprocess.TimeoutExpired as exc:
         return {
             "name": check.name,
-            "argv": list(check.argv),
+            "argv": _resolve_argv(check, candidate_env),
             "cwd": check.cwd,
+            "required": check.required,
+            "phase": check.phase,
             "started_at": started,
             "finished_at": _utc_now(),
             "passed": False,
+            "skipped": False,
             "returncode": None,
             "timed_out": True,
             "stdout": _bounded(exc.stdout if isinstance(exc.stdout, str) else ""),
@@ -317,11 +436,14 @@ def run_check(candidate: Path, check: GateCheck) -> dict[str, Any]:
     except OSError as exc:
         return {
             "name": check.name,
-            "argv": list(check.argv),
+            "argv": _resolve_argv(check, candidate_env),
             "cwd": check.cwd,
+            "required": check.required,
+            "phase": check.phase,
             "started_at": started,
             "finished_at": _utc_now(),
             "passed": False,
+            "skipped": False,
             "returncode": None,
             "timed_out": False,
             "stdout": "",
@@ -451,6 +573,58 @@ class CandidateGate:
         _run_git(candidate, "remote", "remove", "origin")
         return candidate
 
+    def _create_candidate_environment(self, candidate: Path) -> CandidateEnvironment:
+        env_path = candidate / ".msos-candidate-env"
+        proc = subprocess.run(
+            [sys.executable, "-m", "venv", str(env_path)],
+            cwd=candidate,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            shell=False,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise CandidateGateError(
+                "candidate environment creation failed: "
+                + _bounded(proc.stderr or proc.stdout)
+            )
+        python = (
+            env_path / "Scripts" / "python.exe"
+            if os.name == "nt"
+            else env_path / "bin" / "python"
+        )
+        if not python.is_file():
+            raise CandidateGateError(f"candidate environment Python not found: {python}")
+        scripts = env_path / "Scripts" if os.name == "nt" else env_path / "bin"
+        support = env_path / "msos_gate_support"
+        support.mkdir()
+        (support / "sitecustomize.py").write_text(
+            _SUBPROCESS_PYTHON_SITE_CUSTOMIZE.lstrip(),
+            encoding="utf-8",
+        )
+        return CandidateEnvironment(path=env_path, python=python, scripts=scripts, support=support)
+
+    def _verify_dependency_policy(self, candidate: Path, plan: GatePlan) -> None:
+        policy = plan.dependency_policy
+        if not policy:
+            raise CandidateGateError("candidate_validation dependency_policy is missing")
+        rel = Path(str(policy.get("dependency_source_path") or ""))
+        if not rel.parts or rel.is_absolute() or ".." in rel.parts:
+            raise CandidateGateError("dependency source path must be safe and relative")
+        dependency_source = (candidate / rel).resolve()
+        try:
+            dependency_source.relative_to(candidate.resolve())
+        except ValueError as exc:
+            raise CandidateGateError("dependency source path escaped candidate") from exc
+        if not dependency_source.is_file():
+            raise CandidateGateError(f"dependency source is missing: {rel.as_posix()}")
+        expected = str(policy.get("dependency_source_sha256") or "")
+        actual = _sha256_file(dependency_source)
+        if actual != expected:
+            raise CandidateGateError("dependency source SHA-256 does not match contract")
+
     def _load_input(self, job_dir: Path) -> tuple[dict[str, Any], str]:
         report_path = job_dir / "report.json"
         if not report_path.exists():
@@ -464,7 +638,176 @@ class CandidateGate:
         relay = _mapping(report.get("relay"), "relay evidence")
         if relay.get("complete_patch_reconstruction") is not True:
             raise CandidateGateError("relayed report does not contain complete patches")
+        integrity_path = job_dir / "result-integrity.json"
+        if integrity_path.exists():
+            integrity = _mapping(
+                json.loads(integrity_path.read_text(encoding="utf-8")),
+                "result integrity",
+            )
+            if integrity.get("corrected_report_sha256") != source_sha:
+                raise CandidateGateError(
+                    "corrected report SHA-256 does not match integrity evidence"
+                )
         return report, source_sha
+
+    def _load_generic_input(self, job_dir: Path) -> tuple[dict[str, Any], str]:
+        report, report_sha = self._load_input(job_dir)
+        source_path = job_dir / "source-report.json"
+        integrity_path = job_dir / "result-integrity.json"
+        if not source_path.is_file():
+            raise CandidateGateError("generic build-next result is missing source-report.json")
+        if not integrity_path.is_file():
+            raise CandidateGateError("generic build-next result is missing result-integrity.json")
+        source_sha = _sha256_file(source_path)
+        integrity = _mapping(
+            json.loads(integrity_path.read_text(encoding="utf-8")),
+            "result integrity",
+        )
+        if integrity.get("corrected_report_sha256") != report_sha:
+            raise CandidateGateError("corrected report SHA-256 does not match integrity evidence")
+        if integrity.get("source_report_sha256") != source_sha:
+            raise CandidateGateError("source report SHA-256 does not match integrity evidence")
+        if source_sha == report_sha:
+            raise CandidateGateError("source and corrected reports must remain distinct")
+        relay = _mapping(report.get("relay"), "relay evidence")
+        if not str(relay.get("source_report_role") or "").startswith("original-worker"):
+            raise CandidateGateError("source report role is not explicit")
+        if not str(relay.get("canonical_report_role") or "").startswith("relay-corrected"):
+            raise CandidateGateError("canonical report role is not explicit")
+        task_hashes = integrity.get("canonical_patch_sha256_by_task")
+        if not isinstance(task_hashes, dict) or not task_hashes:
+            raise CandidateGateError("result integrity must include canonical patch hashes")
+        report_tasks: set[str] = set()
+        for raw_entry in report.get("patches") or []:
+            entry = _mapping(raw_entry, "patch entry")
+            task_id = str(entry.get("task_id") or "").strip()
+            if not task_id:
+                raise CandidateGateError("patch entry is missing task_id")
+            report_tasks.add(task_id)
+            expected = task_hashes.get(task_id)
+            if expected != entry.get("patch_sha256"):
+                raise CandidateGateError("report patch hash does not match integrity metadata")
+            relative = Path(str(entry.get("patch_file") or ""))
+            if not relative.parts or relative.is_absolute() or ".." in relative.parts:
+                raise CandidateGateError("patch_file must be a safe relative path")
+            patch_path = (job_dir / relative).resolve()
+            try:
+                patch_path.relative_to(job_dir.resolve())
+            except ValueError as exc:
+                raise CandidateGateError("patch_file escaped relayed job directory") from exc
+            if not patch_path.is_file():
+                raise CandidateGateError(f"patch file not found: {entry.get('patch_file')}")
+            actual = _canonical_patch_sha256(patch_path)
+            if actual != expected:
+                raise CandidateGateError("canonical patch bytes do not match integrity metadata")
+        if set(task_hashes) != report_tasks:
+            raise CandidateGateError("result integrity task map does not match report patches")
+        return report, report_sha
+
+    def _plan_from_job_contract(
+        self,
+        job_dir: Path,
+        report: Mapping[str, Any],
+        source_head: str,
+    ) -> GatePlan:
+        job_path = job_dir / "job.yaml"
+        if not job_path.exists():
+            raise CandidateGateError("generic build-next result is missing job.yaml")
+        job = _mapping(yaml.safe_load(job_path.read_text(encoding="utf-8")), "job.yaml")
+        contract = load_validation_contract(job.get("candidate_validation"))
+        founder = _mapping(job.get("founder_build_next"), "founder_build_next")
+        native = _mapping(founder.get("native_slice"), "founder_build_next.native_slice")
+        authority = _mapping(founder.get("authority"), "founder_build_next.authority")
+        source = _mapping(founder.get("source"), "founder_build_next.source")
+        job_id = str(report.get("job_id") or "").strip()
+        expected_allowed = tuple(
+            sorted(str(path).replace("\\", "/") for path in native.get("touch_set") or [])
+        )
+        bindings = {
+            "job_id": (contract.job_id, job_id, str(job.get("job_id") or "")),
+            "pipeline_id": (contract.pipeline_id, str(founder.get("pipeline_id") or "")),
+            "work_item_id": (contract.work_item_id, str(founder.get("work_item_id") or "")),
+            "native_slice_id": (contract.native_slice_id, str(native.get("slice_id") or "")),
+            "adapter": (contract.adapter, str(founder.get("registered_adapter") or "")),
+            "target_repository": (contract.target_repository, str(founder.get("repository") or "")),
+            "source_commit": (contract.source_commit.lower(), source_head.lower(), str(source.get("commit") or "").lower()),
+            "dependency_policy.source_commit": (
+                str(contract.dependency_policy.get("source_commit") or "").lower(),
+                source_head.lower(),
+            ),
+            "allowed_changed_paths": (contract.allowed_changed_paths, expected_allowed),
+            "publication_enabled": (contract.publication_enabled, bool(authority.get("publication_enabled", True)), bool(job.get("publication_enabled", True))),
+            "merge_enabled": (contract.merge_enabled, bool(authority.get("merge_enabled", True))),
+            "product_main_write_enabled": (
+                contract.product_main_write_enabled,
+                bool(authority.get("product_main_write_enabled", True)),
+            ),
+        }
+        for label, values in bindings.items():
+            if len(set(values)) != 1:
+                raise CandidateGateError(f"candidate_validation {label} does not match immutable evidence")
+        if contract.source_commit.lower() != source_head.lower():
+            raise CandidateGateError("candidate_validation source_commit does not match report")
+        changed: set[str] = set()
+        for raw_entry in report.get("patches") or []:
+            entry = _mapping(raw_entry, "patch entry")
+            paths = entry.get("changed_paths")
+            if isinstance(paths, list):
+                changed.update(str(path).replace("\\", "/") for path in paths)
+        allowed = set(contract.allowed_changed_paths)
+        if not changed or not changed <= allowed:
+            raise CandidateGateError("candidate changed paths exceed candidate_validation authority")
+        return GatePlan(
+            bootstrap=tuple(
+                GateCheck(
+                    name=command.name,
+                    argv=command.argv,
+                    cwd=command.cwd,
+                    timeout_seconds=command.timeout_seconds,
+                    required=command.required,
+                    phase=command.phase,
+                )
+                for command in contract.bootstrap
+            ),
+            checks=tuple(
+                GateCheck(
+                    name=command.name,
+                    argv=command.argv,
+                    cwd=command.cwd,
+                    timeout_seconds=command.timeout_seconds,
+                    required=command.required,
+                    phase=command.phase,
+                )
+                for command in contract.checks
+            ),
+            source="candidate_validation",
+            contract_sha256=contract.contract_sha256,
+            dependency_policy=contract.dependency_policy,
+        )
+
+    def _unvalidated_report(
+        self,
+        job_id: str,
+        source_sha: str,
+        message: str,
+        *,
+        started: str,
+    ) -> dict[str, Any]:
+        return {
+            "version": 1,
+            "job_id": job_id,
+            "status": "unvalidated",
+            "state": "awaiting_validation",
+            "started_at": started,
+            "finished_at": _utc_now(),
+            "publication_enabled": False,
+            "product_write_performed": False,
+            "workspace_removed": True,
+            "source_report_sha256": source_sha,
+            "checks": [],
+            "policy_blocks": [],
+            "errors": [{"type": "CandidateGateError", "message": message}],
+        }
 
     def _apply_patches(
         self,
@@ -531,16 +874,21 @@ class CandidateGate:
         job_id = _safe_segment(job_dir.name, fallback="job")
         started = _utc_now()
         candidate: Path | None = None
+        candidate_env: CandidateEnvironment | None = None
         report: dict[str, Any] = {
             "version": 1,
             "job_id": job_id,
             "status": "failed",
+            "state": "candidate_failed",
             "started_at": started,
             "finished_at": None,
             "publication_enabled": False,
             "product_write_performed": False,
             "checks": [],
+            "bootstrap": [],
             "policy_blocks": list(plan.policy_blocks),
+            "plan_source": plan.source,
+            "validation_contract_sha256": plan.contract_sha256,
             "errors": [],
         }
         source_sha = ""
@@ -557,21 +905,83 @@ class CandidateGate:
             report["changed_paths"] = list(changed_paths)
             report["patches"] = patch_evidence
 
-            checks = [run_check(candidate, check) for check in plan.checks]
+            if plan.source == "candidate_validation":
+                self._verify_dependency_policy(candidate, plan)
+                candidate_env = self._create_candidate_environment(candidate)
+                report["candidate_environment"] = {
+                    "path": str(candidate_env.path),
+                    "python": str(candidate_env.python),
+                    "scripts": str(candidate_env.scripts),
+                    "path_prepend": str(candidate_env.scripts),
+                    "pythonpath_prepend": str(candidate_env.support),
+                    "virtual_env": str(candidate_env.path),
+                    "python_no_user_site": True,
+                }
+                bootstrap = [
+                    run_check(candidate, check, candidate_env=candidate_env)
+                    for check in plan.bootstrap
+                ]
+                report["bootstrap"] = bootstrap
+                if not all(item.get("passed") is True for item in bootstrap):
+                    report["status"] = "failed"
+                    report["state"] = "candidate_failed"
+                    return report, source_sha
+            checks = [
+                run_check(candidate, check, candidate_env=candidate_env)
+                for check in plan.checks
+            ]
             report["checks"] = checks
             head_after = _run_git(candidate, "rev-parse", "HEAD").stdout.strip()
             if head_after != source_head:
                 raise CandidateGateError("candidate checks created a product commit")
-            passed = all(check.get("passed") is True for check in checks)
+            passed = all(
+                check.get("passed") is True
+                for check in checks
+                if check.get("required", True) is True
+            )
             report["status"] = "passed" if passed and not plan.policy_blocks else "failed"
+            report["state"] = (
+                "candidate_passed" if report["status"] == "passed" else "candidate_failed"
+            )
         except (CandidateGateError, json.JSONDecodeError, OSError, ValueError) as exc:
             report["errors"].append({"type": type(exc).__name__, "message": str(exc)})
         finally:
+            env_path = candidate_env.path if candidate_env is not None else None
             if candidate is not None and candidate.exists():
                 shutil.rmtree(candidate, ignore_errors=True)
             report["workspace_removed"] = candidate is None or not candidate.exists()
+            if env_path is not None:
+                report["candidate_environment_removed"] = not env_path.exists()
             report["finished_at"] = _utc_now()
         return report, source_sha
+
+    def process_generic_job(self, job_dir: Path) -> tuple[dict[str, Any], str]:
+        job_id = _safe_segment(job_dir.name, fallback="job")
+        started = _utc_now()
+        try:
+            job_path = job_dir / "job.yaml"
+            if not job_path.exists():
+                raise CandidateGateError("generic build-next result is missing job.yaml")
+            job = _mapping(yaml.safe_load(job_path.read_text(encoding="utf-8")), "job.yaml")
+            if "candidate_validation" not in job:
+                raise CandidateGateError("immutable job predates candidate_validation")
+            source_report, source_sha = self._load_generic_input(job_dir)
+            codex_report = _mapping(source_report.get("codex_report"), "codex_report")
+            source_head = str(codex_report.get("source_head") or "").strip()
+            if not re.fullmatch(r"[0-9a-fA-F]{40}", source_head):
+                raise CandidateGateError("codex report is missing a full source_head SHA")
+            plan = self._plan_from_job_contract(job_dir, source_report, source_head)
+        except (
+            CandidateGateError,
+            ValidationContractError,
+            json.JSONDecodeError,
+            OSError,
+            ValueError,
+        ) as exc:
+            report_path = job_dir / "report.json"
+            source_sha = _sha256_file(report_path) if report_path.exists() else ""
+            return self._unvalidated_report(job_id, source_sha, str(exc), started=started), source_sha
+        return self.process_job(job_dir, plan)
 
     def run_once(self) -> tuple[str, ...]:
         self.state.mkdir(parents=True, exist_ok=True)
@@ -581,8 +991,6 @@ class CandidateGate:
         processed: list[str] = []
         for job_dir in self.results.job_dirs():
             job_id = _safe_segment(job_dir.name, fallback="job")
-            if job_id not in self.config.plans:
-                continue
             report_path = job_dir / "report.json"
             if not report_path.exists():
                 continue
@@ -592,7 +1000,12 @@ class CandidateGate:
                 if ledger_entry["source_report_sha256"] != source_sha:
                     raise CandidateGateError(f"relayed result changed after gate processing: {job_id}")
                 continue
-            gate_report, processed_sha = self.process_job(job_dir, self.config.plans[job_id])
+            if job_id in self.config.plans:
+                gate_report, processed_sha = self.process_job(job_dir, self.config.plans[job_id])
+            elif job_id.startswith("build-next-"):
+                gate_report, processed_sha = self.process_generic_job(job_dir)
+            else:
+                continue
             commit = self.results.publish_report(job_dir, gate_report)
             ledger[job_id] = {
                 "source_report_sha256": processed_sha or source_sha,

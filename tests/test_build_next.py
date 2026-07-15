@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -14,6 +15,7 @@ from msos_autobuilder.build_next import (
     _normalize_github_repository,
     build_next,
 )
+from msos_autobuilder.validation_contract import stable_contract_sha256
 
 SOURCE_REPO = "DanielTabakman/Probability-prediction-engine"
 
@@ -240,6 +242,7 @@ def _write_ppe(
         json.dumps(registry or _registry(), indent=2) + "\n",
         encoding="utf-8",
     )
+    (repo / "requirements.txt").write_bytes(b"# PPE fixture requirements\n")
     sop = repo / "docs" / "SOP"
     (sop / "PHASE_PLANS").mkdir(parents=True)
     for rel in [
@@ -326,6 +329,31 @@ def test_build_next_submits_exactly_one_selected_item(tmp_path: Path) -> None:
         "Fixture-Smoke-Slice003",
         "Fixture-Closeout-Slice002",
     ]
+    validation = job["candidate_validation"]
+    assert validation["version"] == 1
+    assert validation["pipeline_id"] == "ppe"
+    assert validation["adapter"] == "ppe_operator"
+    assert validation["target_repository"] == SOURCE_REPO
+    assert validation["source_commit"] == receipt.source_commit
+    assert validation["job_id"] == receipt.job_id
+    assert validation["work_item_id"] == "fixture_work"
+    assert validation["native_slice_id"] == "Fixture-Product-Slice002"
+    assert validation["allowed_changed_paths"] == ["src/viz/panel.py", "tests/test_panel.py"]
+    assert validation["dependency_policy"]["profile_id"] == "ppe-ci-pytest-v1"
+    assert validation["dependency_policy"]["dependency_source_path"] == "requirements.txt"
+    assert validation["dependency_policy"]["dependency_source_sha256"] == hashlib.sha256(
+        b"# PPE fixture requirements\n"
+    ).hexdigest()
+    assert [step["name"] for step in validation["bootstrap"]] == [
+        "upgrade-pip",
+        "install-requirements",
+        "install-test-tooling",
+        "install-candidate-package",
+    ]
+    assert validation["contract_sha256"] == stable_contract_sha256(validation)
+    assert validation["publication_enabled"] is False
+    assert validation["merge_enabled"] is False
+    assert validation["product_main_write_enabled"] is False
     assert lane["task_id"] == "Fixture-Product-Slice002"
     assert lane["branch"] == "build/auto/product-slice"
     assert lane["layer"] == "PPE_UI"

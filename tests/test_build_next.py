@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -241,6 +242,7 @@ def _write_ppe(
         json.dumps(registry or _registry(), indent=2) + "\n",
         encoding="utf-8",
     )
+    (repo / "requirements.txt").write_bytes(b"# PPE fixture requirements\n")
     sop = repo / "docs" / "SOP"
     (sop / "PHASE_PLANS").mkdir(parents=True)
     for rel in [
@@ -337,6 +339,17 @@ def test_build_next_submits_exactly_one_selected_item(tmp_path: Path) -> None:
     assert validation["work_item_id"] == "fixture_work"
     assert validation["native_slice_id"] == "Fixture-Product-Slice002"
     assert validation["allowed_changed_paths"] == ["src/viz/panel.py", "tests/test_panel.py"]
+    assert validation["dependency_policy"]["profile_id"] == "ppe-ci-pytest-v1"
+    assert validation["dependency_policy"]["dependency_source_path"] == "requirements.txt"
+    assert validation["dependency_policy"]["dependency_source_sha256"] == hashlib.sha256(
+        b"# PPE fixture requirements\n"
+    ).hexdigest()
+    assert [step["name"] for step in validation["bootstrap"]] == [
+        "upgrade-pip",
+        "install-requirements",
+        "install-test-tooling",
+        "install-candidate-package",
+    ]
     assert validation["contract_sha256"] == stable_contract_sha256(validation)
     assert validation["publication_enabled"] is False
     assert validation["merge_enabled"] is False

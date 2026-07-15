@@ -818,6 +818,7 @@ def _build_job(
     evidence_identity: Mapping[str, Any],
     prerequisite_evidence: Mapping[str, Any],
     requested_by: str,
+    dependency_source_sha256: str,
 ) -> dict[str, Any]:
     lane_id = _safe_id(native_slice.slice_id, fallback="lane")
     candidate_validation = build_ppe_validation_contract(
@@ -828,6 +829,7 @@ def _build_job(
         source_commit=source_identity.commit,
         allowed_changed_paths=native_slice.touch_set,
         target_repository="DanielTabakman/Probability-prediction-engine",
+        dependency_source_sha256=dependency_source_sha256,
     )
     return {
         "version": 1,
@@ -1119,6 +1121,9 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             )
         if state == "BLOCKED":
             raise BuildNextError(f"job {job_id} already completed or failed; refusing redispatch")
+        requirements_path = ppe_repo / "requirements.txt"
+        if not requirements_path.is_file():
+            raise BuildNextError("PPE dependency source is missing: requirements.txt")
         job = _build_job(
             job_id=job_id,
             pipeline_id=pipeline_id,
@@ -1130,6 +1135,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             evidence_identity=evidence_identity,
             prerequisite_evidence=prerequisite_evidence,
             requested_by=config.requested_by,
+            dependency_source_sha256=_sha256_file(requirements_path),
         )
         submission = _submit_feed_job(config, job)
         if not config.submit:

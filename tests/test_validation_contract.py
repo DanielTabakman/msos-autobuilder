@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from msos_autobuilder.validation_contract import (
@@ -10,6 +12,7 @@ from msos_autobuilder.validation_contract import (
 )
 
 SOURCE = "0123456789abcdef0123456789abcdef01234567"
+REQ_SHA = hashlib.sha256(b"").hexdigest()
 
 
 def _contract() -> dict:
@@ -21,6 +24,7 @@ def _contract() -> dict:
         source_commit=SOURCE,
         allowed_changed_paths=["src/app.py", "tests/test_app.py"],
         target_repository="DanielTabakman/Probability-prediction-engine",
+        dependency_source_sha256=REQ_SHA,
     )
 
 
@@ -37,8 +41,19 @@ def test_validation_contract_parses_required_fields() -> None:
     assert contract.target_repository == "DanielTabakman/Probability-prediction-engine"
     assert contract.source_commit == SOURCE
     assert contract.allowed_changed_paths == ("src/app.py", "tests/test_app.py")
-    assert contract.dependency_policy["strategy"] == "candidate_local_venv_python_editable_install"
-    assert contract.bootstrap[0].required is True
+    assert (
+        contract.dependency_policy["strategy"]
+        == "candidate_local_venv_requirements_test_tooling_editable_install"
+    )
+    assert contract.dependency_policy["dependency_source_path"] == "requirements.txt"
+    assert contract.dependency_policy["dependency_source_sha256"] == REQ_SHA
+    assert [command.name for command in contract.bootstrap] == [
+        "upgrade-pip",
+        "install-requirements",
+        "install-test-tooling",
+        "install-candidate-package",
+    ]
+    assert all(command.required is True for command in contract.bootstrap)
     assert contract.checks[0].required is True
     assert contract.publication_enabled is False
 

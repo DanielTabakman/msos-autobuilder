@@ -53,12 +53,15 @@ class GatePlan:
     source: str = "configured"
     contract_sha256: str | None = None
     bootstrap: tuple[GateCheck, ...] = ()
+    dependency_policy: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
 class CandidateEnvironment:
     path: Path
     python: Path
+    scripts: Path
+    support: Path
 
 
 @dataclass(frozen=True)
@@ -262,7 +265,10 @@ def _bounded(text: str | None, limit: int = 20_000) -> str:
     return value[-limit:]
 
 
-def _check_environment(candidate: Path) -> dict[str, str]:
+def _check_environment(
+    candidate: Path,
+    candidate_env: CandidateEnvironment | None = None,
+) -> dict[str, str]:
     baseline = (
         "PATH",
         "HOME",
@@ -272,16 +278,77 @@ def _check_environment(candidate: Path) -> dict[str, str]:
         "APPDATA",
         "TEMP",
         "TMP",
+        "PATHEXT",
     )
     environment = {key: os.environ[key] for key in baseline if key in os.environ}
     environment["PYTHONUTF8"] = "1"
-    existing = environment.get("PYTHONPATH", "")
-    environment["PYTHONPATH"] = str(candidate) + (os.pathsep + existing if existing else "")
+    environment["PYTHONNOUSERSITE"] = "1"
+    environment.pop("PYTHONHOME", None)
+    python_path = str(candidate)
+    if candidate_env is not None:
+        python_path = str(candidate_env.support) + os.pathsep + python_path
+        existing_path = environment.get("PATH") or environment.get("Path") or ""
+        candidate_path = str(candidate_env.scripts) + (
+            os.pathsep + existing_path if existing_path else ""
+        )
+        for key in tuple(environment):
+            if key.casefold() == "path":
+                environment.pop(key, None)
+        if os.name == "nt":
+            environment["Path"] = candidate_path
+        else:
+            environment["PATH"] = candidate_path
+        environment["VIRTUAL_ENV"] = str(candidate_env.path)
+        environment["PIP_REQUIRE_VIRTUALENV"] = "1"
+    environment["PYTHONPATH"] = python_path
     return environment
 
 
 def _candidate_python(env: CandidateEnvironment) -> str:
     return str(env.python)
+
+
+_SUBPROCESS_PYTHON_SITE_CUSTOMIZE = r'''
+"""Keep nested Python subprocesses inside the candidate validation venv."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import subprocess
+
+
+_ORIGINAL_POPEN = subprocess.Popen
+
+
+def _candidate_python() -> str | None:
+    env_path = os.environ.get("VIRTUAL_ENV")
+    if not env_path:
+        return None
+    name = "python.exe" if os.name == "nt" else "python"
+    scripts = "Scripts" if os.name == "nt" else "bin"
+    candidate = Path(env_path) / scripts / name
+    return str(candidate) if candidate.is_file() else None
+
+
+def _is_python_launcher(value: object) -> bool:
+    executable = str(value).strip().replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if executable.endswith(".exe"):
+        executable = executable[:-4]
+    return executable in {"python", "python3", "py"}
+
+
+class _CandidatePopen(_ORIGINAL_POPEN):
+    def __init__(self, args, *popen_args, **popen_kwargs):  # type: ignore[no-untyped-def]
+        if popen_kwargs.get("executable") is None:
+            candidate = _candidate_python()
+            if candidate and isinstance(args, (list, tuple)) and args and _is_python_launcher(args[0]):
+                args = [candidate, *args[1:]]
+        super().__init__(args, *popen_args, **popen_kwargs)
+
+
+subprocess.Popen = _CandidatePopen
+'''
 
 
 def _resolve_argv(check: GateCheck, env: CandidateEnvironment | None) -> list[str]:
@@ -332,7 +399,7 @@ def run_check(
             errors="replace",
             shell=False,
             timeout=check.timeout_seconds,
-            env=_check_environment(candidate),
+            env=_check_environment(candidate, candidate_env),
             check=False,
         )
         return {
@@ -530,7 +597,33 @@ class CandidateGate:
         )
         if not python.is_file():
             raise CandidateGateError(f"candidate environment Python not found: {python}")
-        return CandidateEnvironment(path=env_path, python=python)
+        scripts = env_path / "Scripts" if os.name == "nt" else env_path / "bin"
+        support = env_path / "msos_gate_support"
+        support.mkdir()
+        (support / "sitecustomize.py").write_text(
+            _SUBPROCESS_PYTHON_SITE_CUSTOMIZE.lstrip(),
+            encoding="utf-8",
+        )
+        return CandidateEnvironment(path=env_path, python=python, scripts=scripts, support=support)
+
+    def _verify_dependency_policy(self, candidate: Path, plan: GatePlan) -> None:
+        policy = plan.dependency_policy
+        if not policy:
+            raise CandidateGateError("candidate_validation dependency_policy is missing")
+        rel = Path(str(policy.get("dependency_source_path") or ""))
+        if not rel.parts or rel.is_absolute() or ".." in rel.parts:
+            raise CandidateGateError("dependency source path must be safe and relative")
+        dependency_source = (candidate / rel).resolve()
+        try:
+            dependency_source.relative_to(candidate.resolve())
+        except ValueError as exc:
+            raise CandidateGateError("dependency source path escaped candidate") from exc
+        if not dependency_source.is_file():
+            raise CandidateGateError(f"dependency source is missing: {rel.as_posix()}")
+        expected = str(policy.get("dependency_source_sha256") or "")
+        actual = _sha256_file(dependency_source)
+        if actual != expected:
+            raise CandidateGateError("dependency source SHA-256 does not match contract")
 
     def _load_input(self, job_dir: Path) -> tuple[dict[str, Any], str]:
         report_path = job_dir / "report.json"
@@ -638,6 +731,10 @@ class CandidateGate:
             "adapter": (contract.adapter, str(founder.get("registered_adapter") or "")),
             "target_repository": (contract.target_repository, str(founder.get("repository") or "")),
             "source_commit": (contract.source_commit.lower(), source_head.lower(), str(source.get("commit") or "").lower()),
+            "dependency_policy.source_commit": (
+                str(contract.dependency_policy.get("source_commit") or "").lower(),
+                source_head.lower(),
+            ),
             "allowed_changed_paths": (contract.allowed_changed_paths, expected_allowed),
             "publication_enabled": (contract.publication_enabled, bool(authority.get("publication_enabled", True)), bool(job.get("publication_enabled", True))),
             "merge_enabled": (contract.merge_enabled, bool(authority.get("merge_enabled", True))),
@@ -685,6 +782,7 @@ class CandidateGate:
             ),
             source="candidate_validation",
             contract_sha256=contract.contract_sha256,
+            dependency_policy=contract.dependency_policy,
         )
 
     def _unvalidated_report(
@@ -808,10 +906,16 @@ class CandidateGate:
             report["patches"] = patch_evidence
 
             if plan.source == "candidate_validation":
+                self._verify_dependency_policy(candidate, plan)
                 candidate_env = self._create_candidate_environment(candidate)
                 report["candidate_environment"] = {
                     "path": str(candidate_env.path),
                     "python": str(candidate_env.python),
+                    "scripts": str(candidate_env.scripts),
+                    "path_prepend": str(candidate_env.scripts),
+                    "pythonpath_prepend": str(candidate_env.support),
+                    "virtual_env": str(candidate_env.path),
+                    "python_no_user_site": True,
                 }
                 bootstrap = [
                     run_check(candidate, check, candidate_env=candidate_env)

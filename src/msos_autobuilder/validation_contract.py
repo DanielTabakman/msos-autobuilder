@@ -85,14 +85,34 @@ def _repository(value: Any) -> str:
 def _dependency_policy(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValidationContractError("candidate_validation dependency_policy must be a mapping")
-    expected = {
+    expected_scalars = {
         "version": 1,
-        "source": "target_repository_package_metadata",
+        "adapter": "ppe_operator",
+        "profile_id": "ppe-ci-pytest-v1",
+        "source": "accepted_ppe_ci_bootstrap",
+        "dependency_source_path": "requirements.txt",
         "network_allowed": True,
-        "strategy": "candidate_local_venv_python_editable_install",
+        "candidate_environment_required": True,
+        "strategy": "candidate_local_venv_requirements_test_tooling_editable_install",
     }
-    if raw != expected:
-        raise ValidationContractError("candidate_validation dependency_policy is unsupported")
+    for key, expected in expected_scalars.items():
+        if raw.get(key) != expected:
+            raise ValidationContractError("candidate_validation dependency_policy is unsupported")
+    digest = str(raw.get("dependency_source_sha256") or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValidationContractError(
+            "candidate_validation dependency_policy dependency_source_sha256 is invalid"
+        )
+    source_commit = str(raw.get("source_commit") or "").strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", source_commit):
+        raise ValidationContractError(
+            "candidate_validation dependency_policy source_commit is invalid"
+        )
+    tooling = raw.get("test_tooling")
+    if tooling != ["pytest", "pytest-xdist", "ruff"]:
+        raise ValidationContractError(
+            "candidate_validation dependency_policy test_tooling is unsupported"
+        )
     return dict(raw)
 
 
@@ -231,6 +251,7 @@ def build_ppe_validation_contract(
     source_commit: str,
     allowed_changed_paths: Sequence[str],
     target_repository: str,
+    dependency_source_sha256: str,
     adapter: str = "ppe_operator",
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
@@ -245,11 +266,39 @@ def build_ppe_validation_contract(
         "allowed_changed_paths": sorted(path.replace("\\", "/") for path in allowed_changed_paths),
         "dependency_policy": {
             "version": 1,
-            "source": "target_repository_package_metadata",
+            "adapter": adapter,
+            "profile_id": "ppe-ci-pytest-v1",
+            "source": "accepted_ppe_ci_bootstrap",
+            "source_commit": source_commit,
+            "dependency_source_path": "requirements.txt",
+            "dependency_source_sha256": dependency_source_sha256,
             "network_allowed": True,
-            "strategy": "candidate_local_venv_python_editable_install",
+            "candidate_environment_required": True,
+            "strategy": "candidate_local_venv_requirements_test_tooling_editable_install",
+            "test_tooling": ["pytest", "pytest-xdist", "ruff"],
         },
         "bootstrap": [
+            {
+                "name": "upgrade-pip",
+                "argv": ["python", "-m", "pip", "install", "--upgrade", "pip"],
+                "cwd": ".",
+                "timeout_seconds": 600,
+                "required": True,
+            },
+            {
+                "name": "install-requirements",
+                "argv": ["python", "-m", "pip", "install", "-r", "requirements.txt"],
+                "cwd": ".",
+                "timeout_seconds": 1200,
+                "required": True,
+            },
+            {
+                "name": "install-test-tooling",
+                "argv": ["python", "-m", "pip", "install", "pytest", "pytest-xdist", "ruff"],
+                "cwd": ".",
+                "timeout_seconds": 1200,
+                "required": True,
+            },
             {
                 "name": "install-candidate-package",
                 "argv": ["python", "-m", "pip", "install", "-e", "."],

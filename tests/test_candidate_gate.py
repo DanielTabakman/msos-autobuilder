@@ -15,7 +15,10 @@ from msos_autobuilder.candidate_gate import (
     CandidateGateError,
     load_candidate_gate_config,
 )
-from msos_autobuilder.validation_contract import stable_contract_sha256
+from msos_autobuilder.validation_contract import (
+    build_ppe_validation_contract,
+    stable_contract_sha256,
+)
 
 
 def _git(path: Path | None, *args: str, check: bool = True) -> str:
@@ -42,6 +45,7 @@ def _init_repo(path: Path) -> Path:
     _git(path, "config", "user.email", "test@example.com")
     _git(path, "config", "user.name", "Test")
     (path / "app.txt").write_bytes(b"base\n")
+    (path / "requirements.txt").write_bytes(b"# fixture requirements\n")
     (path / "pyproject.toml").write_text(
         "[build-system]\n"
         'requires = ["setuptools>=68"]\n'
@@ -58,8 +62,34 @@ def _init_repo(path: Path) -> Path:
         "assert Path('new.txt').read_text() == 'new\\n'\n",
         encoding="utf-8",
     )
+    tests = path / "tests"
+    tests.mkdir()
+    (tests / "test_smoke.py").write_text(
+        "from pathlib import Path\n"
+        "\n"
+        "def test_candidate_patch_applied():\n"
+        "    assert Path('app.txt').read_text() == 'candidate\\n'\n"
+        "    assert Path('new.txt').read_text() == 'new\\n'\n",
+        encoding="utf-8",
+    )
+    (tests / "test_nested_python.py").write_text(
+        "import os\n"
+        "import subprocess\n"
+        "import sys\n"
+        "\n"
+        "def test_nested_python_uses_candidate_venv():\n"
+        "    nested = subprocess.check_output(\n"
+        "        ['python', '-c', 'import sys; print(sys.executable)'],\n"
+        "        text=True,\n"
+        "    ).strip()\n"
+        "    assert '.msos-candidate-env' in nested.replace('\\\\', '/')\n"
+        "    assert nested != sys.executable or '.msos-candidate-env' in sys.executable.replace('\\\\', '/')\n"
+        "    assert os.environ.get('VIRTUAL_ENV')\n"
+        "    assert '.msos-candidate-env' in os.environ['VIRTUAL_ENV'].replace('\\\\', '/')\n",
+        encoding="utf-8",
+    )
     _git(path, "add", "app.txt")
-    _git(path, "add", "pyproject.toml", "fixture_check.py")
+    _git(path, "add", "requirements.txt", "pyproject.toml", "fixture_check.py", "tests")
     _git(path, "commit", "-qm", "initial source")
     return path
 
@@ -179,48 +209,17 @@ def _generic_contract(
     job_id: str,
     source_head: str,
     changed_paths: tuple[str, ...],
-    check_module: str = "fixture_check",
 ) -> dict:
-    contract = {
-        "version": 1,
-        "pipeline_id": "ppe",
-        "adapter": "ppe_operator",
-        "target_repository": "DanielTabakman/Probability-prediction-engine",
-        "source_commit": source_head,
-        "job_id": job_id,
-        "work_item_id": "fixture-work",
-        "native_slice_id": "Fixture-Slice002",
-        "allowed_changed_paths": list(changed_paths),
-        "dependency_policy": {
-            "version": 1,
-            "source": "target_repository_package_metadata",
-            "network_allowed": True,
-            "strategy": "candidate_local_venv_python_editable_install",
-        },
-        "bootstrap": [
-            {
-                "name": "install-candidate-package",
-                "argv": ["python", "-m", "pip", "install", "-e", "."],
-                "cwd": ".",
-                "timeout_seconds": 120,
-                "required": True,
-            }
-        ],
-        "checks": [
-            {
-                "name": "fixture-check",
-                "argv": ["python", "-m", check_module],
-                "cwd": ".",
-                "timeout_seconds": 30,
-                "required": True,
-            }
-        ],
-        "publication_enabled": False,
-        "merge_enabled": False,
-        "product_main_write_enabled": False,
-    }
-    contract["contract_sha256"] = stable_contract_sha256(contract)
-    return contract
+    return build_ppe_validation_contract(
+        pipeline_id="ppe",
+        job_id=job_id,
+        work_item_id="fixture-work",
+        native_slice_id="Fixture-Slice002",
+        source_commit=source_head,
+        allowed_changed_paths=changed_paths,
+        target_repository="DanielTabakman/Probability-prediction-engine",
+        dependency_source_sha256=hashlib.sha256(b"# fixture requirements\n").hexdigest(),
+    )
 
 
 def _generic_job_yaml(job_id: str, source_head: str, changed_paths: tuple[str, ...], contract: dict) -> str:
@@ -483,6 +482,7 @@ def test_candidate_gate_rejects_default_branch_and_mutated_result(tmp_path: Path
 
 def test_candidate_gate_discovers_generic_build_next_contract(tmp_path: Path) -> None:
     packages_before = _pip_freeze()
+    active_python = Path(sys.executable).resolve()
     source = _init_repo(tmp_path / "source")
     source_head = _git(source, "rev-parse", "HEAD")
     patch, changed_paths = _candidate_patch(source)
@@ -512,9 +512,18 @@ def test_candidate_gate_discovers_generic_build_next_contract(tmp_path: Path) ->
     assert report["status"] == "passed"
     assert report["state"] == "candidate_passed"
     assert report["plan_source"] == "candidate_validation"
-    assert [check["phase"] for check in report["bootstrap"]] == ["bootstrap"]
+    assert [check["name"] for check in report["bootstrap"]] == [
+        "upgrade-pip",
+        "install-requirements",
+        "install-test-tooling",
+        "install-candidate-package",
+    ]
+    assert [check["phase"] for check in report["bootstrap"]] == ["bootstrap"] * 4
     assert [check["phase"] for check in report["checks"]] == ["check"]
     assert report["candidate_environment"]["python"]
+    assert Path(report["candidate_environment"]["python"]).resolve() != active_python
+    assert ".msos-candidate-env" in report["candidate_environment"]["python"].replace("\\", "/")
+    assert ".msos-candidate-env" in report["candidate_environment"]["path_prepend"].replace("\\", "/")
     assert report["candidate_environment_removed"] is True
     assert all(check["required"] is True for check in [*report["bootstrap"], *report["checks"]])
     assert _pip_freeze() == packages_before
@@ -643,6 +652,83 @@ def test_generic_build_next_requires_canonical_integrity(
     report = _read_gate_report(tmp_path, remote, job_id=job_id)
     assert report["status"] == "unvalidated"
     assert message in report["errors"][0]["message"]
+
+
+def test_generic_dependency_source_must_exist_and_match_contract(tmp_path: Path) -> None:
+    source = _init_repo(tmp_path / "source")
+    (source / "requirements.txt").unlink()
+    _git(source, "add", "-u", "requirements.txt")
+    _git(source, "commit", "-qm", "remove requirements")
+    source_head = _git(source, "rev-parse", "HEAD")
+    patch, changed_paths = _candidate_patch(source)
+    job_id = "build-next-ppe-fixture-work-Fixture-Slice002-abcdef123456"
+    contract = _generic_contract(
+        job_id=job_id,
+        source_head=source_head,
+        changed_paths=changed_paths,
+    )
+    remote = _results_remote(
+        tmp_path,
+        source_head=source_head,
+        patch=patch,
+        changed_paths=changed_paths,
+        job_id=job_id,
+        job_yaml=_generic_job_yaml(job_id, source_head, changed_paths, contract),
+    )
+    config_path = _write_generic_config(
+        tmp_path,
+        host_root=tmp_path / "host",
+        source=source,
+        remote=remote,
+    )
+
+    assert CandidateGate(load_candidate_gate_config(config_path)).run_once() == (job_id,)
+    report = _read_gate_report(tmp_path, remote, job_id=job_id)
+    assert report["status"] == "failed"
+    assert "dependency source is missing" in report["errors"][0]["message"]
+
+
+def test_failed_dependency_bootstrap_cannot_pass(tmp_path: Path) -> None:
+    source = _init_repo(tmp_path / "source")
+    (source / "requirements.txt").write_text(
+        "definitely-not-a-real-package-for-msos-autobuilder-tests==0\n",
+        encoding="utf-8",
+    )
+    _git(source, "add", "requirements.txt")
+    _git(source, "commit", "-qm", "bad requirements")
+    source_head = _git(source, "rev-parse", "HEAD")
+    patch, changed_paths = _candidate_patch(source)
+    job_id = "build-next-ppe-fixture-work-Fixture-Slice002-abcdef123456"
+    contract = _generic_contract(
+        job_id=job_id,
+        source_head=source_head,
+        changed_paths=changed_paths,
+    )
+    contract["dependency_policy"]["dependency_source_sha256"] = hashlib.sha256(
+        (source / "requirements.txt").read_bytes()
+    ).hexdigest()
+    contract["contract_sha256"] = stable_contract_sha256(contract)
+    remote = _results_remote(
+        tmp_path,
+        source_head=source_head,
+        patch=patch,
+        changed_paths=changed_paths,
+        job_id=job_id,
+        job_yaml=_generic_job_yaml(job_id, source_head, changed_paths, contract),
+    )
+    config_path = _write_generic_config(
+        tmp_path,
+        host_root=tmp_path / "host",
+        source=source,
+        remote=remote,
+    )
+
+    assert CandidateGate(load_candidate_gate_config(config_path)).run_once() == (job_id,)
+    report = _read_gate_report(tmp_path, remote, job_id=job_id)
+    assert report["status"] == "failed"
+    assert report["bootstrap"][1]["name"] == "install-requirements"
+    assert report["bootstrap"][1]["passed"] is False
+    assert report["checks"] == []
 
 
 @pytest.mark.parametrize(

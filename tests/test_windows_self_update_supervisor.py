@@ -32,6 +32,113 @@ MANAGED_TASK_NAMES = [
 ]
 
 
+def _legacy_supervisor_source() -> str:
+    source = (ROOT / "src" / "msos_autobuilder" / "self_update_supervisor.py").read_text(
+        encoding="utf-8"
+    )
+    source = re.sub(
+        r"\n    def disable\(self, task_names: Sequence\[str\]\) -> None:\n"
+        r"        if task_names:\n"
+        r"            self\._invoke\(\"disable\", task_names\)\n",
+        "\n",
+        source,
+        count=1,
+    )
+    source = re.sub(
+        r"\n    def wait_for\(\n"
+        r".*?"
+        r"\n\ndef _read_active_pointer",
+        r"""
+    def wait_for(self, commit: str, not_before: datetime) -> dict[str, Any]:
+        deadline = time.monotonic() + self.config.health_timeout_seconds
+        task_names = [task.task_name for task in self.config.managed_tasks]
+        last_detail: dict[str, Any] = {}
+        healthy_since: float | None = None
+        while time.monotonic() < deadline:
+            observed_at = time.monotonic()
+            states = dict(self.task_controller.states(task_names))
+            witnesses: dict[str, Any] = {}
+            healthy = True
+            for task in self.config.managed_tasks:
+                state = states.get(task.task_name, "Missing")
+                if state.lower() != "running":
+                    healthy = False
+                witness_path = self.config.witnesses_root / f"{task.service}.json"
+                witness = _load_json(witness_path, {})
+                witnesses[task.service] = witness
+                try:
+                    started_at = datetime.fromisoformat(str(witness.get("started_at")))
+                except (TypeError, ValueError):
+                    started_at = datetime.min.replace(tzinfo=UTC)
+                if (
+                    witness.get("release_commit") != commit
+                    or witness.get("state") != "running"
+                    or started_at < not_before
+                    or not isinstance(witness.get("child_pid"), int)
+                ):
+                    healthy = False
+            last_detail = {"task_states": states, "witnesses": witnesses}
+            if healthy:
+                if healthy_since is None:
+                    healthy_since = observed_at
+                if observed_at - healthy_since >= self.config.health_stability_seconds:
+                    return {
+                        **last_detail,
+                        "stability_seconds": self.config.health_stability_seconds,
+                    }
+            else:
+                healthy_since = None
+            time.sleep(self.config.health_poll_seconds)
+        raise SupervisorError(
+            "managed tasks did not produce a complete post-cutover health witness: "
+            + json.dumps(last_detail, sort_keys=True)
+        )
+
+
+def _read_active_pointer""",
+        source,
+        count=1,
+        flags=re.DOTALL,
+    )
+    source = re.sub(
+        r"\n\ndef _release_supports_refill\(release_path: Path\) -> bool:\n"
+        r".*?"
+        r"\n\ndef _write_active_pointer",
+        "\n\ndef _write_active_pointer",
+        source,
+        count=1,
+        flags=re.DOTALL,
+    )
+    assert "def _release_managed_tasks" not in source
+    controller_source = source.split("class PowerShellTaskController:", 1)[1].split(
+        "class FileHealthVerifier:",
+        1,
+    )[0]
+    assert "def disable(self, task_names" not in controller_source
+    assert "def wait_for(self, commit: str, not_before: datetime)" in source
+    return source
+
+
+def _legacy_task_control_source() -> str:
+    script = TASK_CONTROL.read_text(encoding="utf-8")
+    script = script.replace(
+        '[ValidateSet("stop", "start", "disable", "states")]',
+        '[ValidateSet("stop", "start", "states")]',
+    )
+    script = re.sub(
+        r'\n    "disable" \{\n'
+        r"        foreach \(\$Name in \$TaskNames\) \{\n"
+        r".*?"
+        r"\n    \}",
+        "",
+        script,
+        count=1,
+        flags=re.DOTALL,
+    )
+    assert '"disable"' not in script
+    return script
+
+
 def test_installer_preserves_external_supervisor_and_atomic_release_boundary() -> None:
     script = INSTALLER.read_text(encoding="utf-8")
 
@@ -271,18 +378,7 @@ def _build_stable_bootstrap_handoff_fixture(
                 encoding="utf-8",
             )
         elif relative == "src/msos_autobuilder/self_update_supervisor.py":
-            legacy_supervisor = subprocess.check_output(
-                [
-                    "git",
-                    "-C",
-                    str(ROOT),
-                    "show",
-                    f"{LEGACY_BOOTSTRAP_COMMIT}:src/msos_autobuilder/self_update_supervisor.py",
-                ],
-                text=True,
-                encoding="utf-8",
-            )
-            path.write_text(legacy_supervisor, encoding="utf-8")
+            path.write_text(_legacy_supervisor_source(), encoding="utf-8")
         else:
             shutil.copy2(source, path)
         path.write_bytes(path.read_bytes().replace(b"\r\n", b"\n"))
@@ -492,17 +588,7 @@ def _stubbed_task_control_script(
     legacy_interface: bool = False,
 ) -> str:
     if legacy_interface:
-        script = subprocess.check_output(
-            [
-                "git",
-                "-C",
-                str(ROOT),
-                "show",
-                f"{LEGACY_BOOTSTRAP_COMMIT}:scripts/windows_self_update_task_control.ps1",
-            ],
-            text=True,
-            encoding="utf-8",
-        )
+        script = _legacy_task_control_source()
     else:
         script = TASK_CONTROL.read_text(encoding="utf-8")
     if stderr_failure is None:

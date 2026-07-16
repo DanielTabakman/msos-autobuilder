@@ -15,6 +15,12 @@ from .codex_shadow import (
     render_codex_shadow_json,
     run_codex_shadow,
 )
+from .continuous_improvement import (
+    GitHubClient,
+    PlannerConfig,
+    propose_one_improvement,
+    render_proposal_result_json,
+)
 from .inventory import build_inventory, render_json, render_markdown
 from .persistent_host import (
     HostPaths,
@@ -195,6 +201,21 @@ def _build_next_command(args: argparse.Namespace) -> int:
     receipt = build_next(config)
     _write_or_print(render_receipt_json(receipt), args.json_out)
     return 2 if receipt.status == "BLOCKED" else 0
+
+
+def _continuous_improvement_propose_command(args: argparse.Namespace) -> int:
+    result = propose_one_improvement(
+        GitHubClient(cwd=Path.cwd()),
+        PlannerConfig(
+            repository=args.repository,
+            dry_run=args.dry_run,
+            limit_issues=args.limit_issues,
+            limit_prs=args.limit_prs,
+            label=args.label,
+        ),
+    )
+    _write_or_print(render_proposal_result_json(result), args.json_out)
+    return 0
 
 
 def _refill_config(args: argparse.Namespace, *, submit: bool = True) -> RefillConfig:
@@ -419,6 +440,18 @@ def build_parser() -> argparse.ArgumentParser:
     build_next_parser.add_argument("--dry-run", action="store_true")
     build_next_parser.add_argument("--json-out")
     build_next_parser.set_defaults(func=_build_next_command)
+
+    ci_propose = subparsers.add_parser(
+        "continuous-improvement-propose",
+        help="create or update one proposal-only internal improvement issue",
+    )
+    ci_propose.add_argument("--repository", default="DanielTabakman/msos-autobuilder")
+    ci_propose.add_argument("--label", default="continuous-improvement")
+    ci_propose.add_argument("--limit-issues", type=int, default=50)
+    ci_propose.add_argument("--limit-prs", type=int, default=30)
+    ci_propose.add_argument("--dry-run", action="store_true")
+    ci_propose.add_argument("--json-out")
+    ci_propose.set_defaults(func=_continuous_improvement_propose_command)
 
     refill_status = subparsers.add_parser(
         "refill-status",

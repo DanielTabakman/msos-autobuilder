@@ -233,6 +233,9 @@ def _build_stable_bootstrap_handoff_fixture(
     *,
     task_control_stderr_failure: str | None = None,
     task_control_stderr_repeat: int = 0,
+    health_timeout_seconds: float = 5,
+    health_poll_seconds: float = 0.1,
+    health_stability_seconds: float = 0,
 ) -> dict[str, object]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     repo = tmp_path / "repo"
@@ -314,9 +317,9 @@ def _build_stable_bootstrap_handoff_fixture(
                 f"'{(live_bootstrap / 'windows_self_update_task_control.ps1').as_posix()}'",
                 "release_probe_script: "
                 f"'{(live_bootstrap / 'managed_release_health_probe.py').as_posix()}'",
-                "health_timeout_seconds: 5",
-                "health_poll_seconds: 0.1",
-                "health_stability_seconds: 0",
+                f"health_timeout_seconds: {health_timeout_seconds}",
+                f"health_poll_seconds: {health_poll_seconds}",
+                f"health_stability_seconds: {health_stability_seconds}",
                 "managed_tasks:",
                 "  - service: host",
                 "    task_name: 'MSOS Autobuilder Host'",
@@ -511,6 +514,7 @@ def _stubbed_task_control_script(
             "    if (-not $StubbedSupervisorRoot) { return }",
             "    $Service = Get-ServiceName $TaskName",
             "    if (-not $Service) { return }",
+            "    if ($env:MSOS_STUBBED_SKIP_WITNESS_SERVICE -eq $Service) { return }",
             "    $StateRoot = Join-Path $StubbedSupervisorRoot 'state'",
             "    $ActivePath = Join-Path $StateRoot 'active-release.json'",
             "    if (-not (Test-Path $ActivePath -PathType Leaf)) { return }",
@@ -565,10 +569,32 @@ def _stubbed_task_control_script(
             "    param([string]$TaskName, [object]$ErrorAction)",
             "    Add-Call -Action 'start' -Name $TaskName",
             "    $FailAfter = [int]($env:MSOS_STUBBED_FAIL_START_AFTER_COUNT -as [int])",
-            "    if ($FailAfter -gt 0 -and (Get-ServiceName $TaskName) -and "
+            "    $FailStartForCommit = $env:MSOS_STUBBED_FAIL_START_COMMIT",
+            "    $ShouldFailStart = $true",
+            "    if ($FailStartForCommit) {",
+            "        $ShouldFailStart = $false",
+            "        if ($StubbedSupervisorRoot) {",
+            "            $StateRoot = Join-Path $StubbedSupervisorRoot 'state'",
+            "            $ActivePath = Join-Path $StateRoot 'active-release.json'",
+            "            if (Test-Path $ActivePath -PathType Leaf) {",
+            "                $Active = Get-Content -Raw $ActivePath | ConvertFrom-Json",
+            "                $ShouldFailStart = ([string]$Active.commit -eq $FailStartForCommit)",
+            "            }",
+            "        }",
+            "    }",
+            "    $FailOnceMarker = $env:MSOS_STUBBED_FAIL_START_ONCE_MARKER",
+            "    if ($FailOnceMarker -and (Test-Path $FailOnceMarker -PathType Leaf)) {",
+            "        $ShouldFailStart = $false",
+            "    }",
+            "    if ($ShouldFailStart -and $FailAfter -gt 0 -and (Get-ServiceName $TaskName) -and "
             "$TaskName -ne 'MSOS Autobuilder Capacity-One Refill') {",
             "        $script:StubbedStartCount += 1",
             "        if ($script:StubbedStartCount -ge $FailAfter) {",
+            "            if ($FailOnceMarker) {",
+            "                $MarkerParent = Split-Path -Parent $FailOnceMarker",
+            "                New-Item -ItemType Directory -Force -Path $MarkerParent | Out-Null",
+            "                Set-Content -Path $FailOnceMarker -Value 'failed' -Encoding UTF8",
+            "            }",
             "            throw 'simulated restart witness start failure'",
             "        }",
             "    }",
@@ -1114,7 +1140,12 @@ def test_stable_bootstrap_handoff_recovers_legacy_services_after_restart_witness
     if powershell is None:
         pytest.skip("PowerShell is not installed on this runner")
 
-    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    fixture = _build_stable_bootstrap_handoff_fixture(
+        tmp_path,
+        health_timeout_seconds=1,
+        health_poll_seconds=0.05,
+        health_stability_seconds=0.1,
+    )
     _convert_installed_bootstrap_to_six_service_baseline(fixture)
     live_bootstrap = fixture["live_bootstrap"]
     host_root = fixture["host_root"]
@@ -1134,6 +1165,7 @@ $global:RefillAction = [pscustomobject]@{{
     )
 }}
 $env:MSOS_STUBBED_FAIL_START_AFTER_COUNT = '2'
+$env:MSOS_STUBBED_FAIL_START_ONCE_MARKER = '{(tmp_path / "restart-failed.marker").as_posix()}'
 """
 
     result, calls_path = _run_handoff_fixture(
@@ -1149,13 +1181,27 @@ $env:MSOS_STUBBED_FAIL_START_AFTER_COUNT = '2'
         for target, content in old_bytes.items()
     )
     report = _read_handoff_report(fixture)
+    expected_services = ["host", "relay", "gate", "revision", "publisher"]
     assert report["outcome"] == "rolled_back"
+    assert report["activation"]["attempted"] is True
+    assert report["activation"]["performed"] is True
+    assert report["activation"]["legacy_restart_witness_started"] is True
+    assert report["activation"]["live_task_mutation_touched"] is True
+    assert report["activation"]["status"] == "restart_witness_failed"
+    assert report["activation"]["selected_services"] == expected_services
+    assert report["activation"]["disabled_services"] == ["refill"]
+    assert "simulated restart witness start failure" in report["activation"][
+        "legacy_restart_witness_error"
+    ]
     assert report["rollback"]["performed"] is True
     assert report["rollback"]["service_recovery_passed"] is True
     recovery = report["rollback"]["service_recovery"]
-    expected_services = ["host", "relay", "gate", "revision", "publisher"]
     assert recovery["selected_services"] == expected_services
     assert recovery["disabled_services"] == ["refill"]
+    assert recovery["health_timeout_seconds"] == 1
+    assert recovery["health_poll_seconds"] == 0.05
+    assert recovery["configured_stability_seconds"] == 0.1
+    assert recovery["achieved_stability_seconds"] >= 0.1
     assert recovery["disabled_task_states"] == {"refill": "Disabled"}
     assert recovery["active_commit"] == fixture["old_commit"]
     assert recovery["task_states"]["MSOS Autobuilder Capacity-One Refill"] == "Disabled"
@@ -1166,19 +1212,9 @@ $env:MSOS_STUBBED_FAIL_START_AFTER_COUNT = '2'
         witness = json.loads(witness_path.read_text(encoding="utf-8-sig"))
         assert witness["state"] == "running"
         assert witness["release_commit"] == fixture["old_commit"]
+        assert isinstance(witness["child_pid"], int)
 
-    outer_calls = [
-        json.loads(line)
-        for line in calls_path.read_text(encoding="utf-8-sig").splitlines()
-    ]
-    assert [call["name"] for call in outer_calls if call["action"] == "start"][-5:] == (
-        MANAGED_TASK_NAMES[:-1]
-    )
-    assert any(
-        call["action"] == "disable"
-        and call["name"] == "MSOS Autobuilder Capacity-One Refill"
-        for call in outer_calls
-    )
+    assert calls_path.read_text(encoding="utf-8-sig")
     nested_calls = [
         json.loads(line)
         for line in (tmp_path / "nested-scheduled-task-calls.jsonl")
@@ -1186,8 +1222,75 @@ $env:MSOS_STUBBED_FAIL_START_AFTER_COUNT = '2'
         .splitlines()
     ]
     assert [call["name"] for call in nested_calls if call["action"] == "start"] == (
-        MANAGED_TASK_NAMES[:2]
+        MANAGED_TASK_NAMES[:2] + MANAGED_TASK_NAMES[:-1]
     )
+    assert any(
+        call["action"] == "disable"
+        and call["name"] == "MSOS Autobuilder Capacity-One Refill"
+        for call in nested_calls
+    )
+
+
+def test_stable_bootstrap_handoff_reports_rollback_failed_when_recovery_health_fails(
+    tmp_path: Path,
+) -> None:
+    if sys.platform != "win32":
+        pytest.skip("restart-witness recovery regression targets Windows Scheduled Task semantics")
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(
+        tmp_path,
+        health_timeout_seconds=0.4,
+        health_poll_seconds=0.05,
+        health_stability_seconds=0.1,
+    )
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    live_bootstrap = fixture["live_bootstrap"]
+    host_root = fixture["host_root"]
+    assert isinstance(live_bootstrap, Path)
+    assert isinstance(host_root, Path)
+    old_bytes = _live_bootstrap_bytes(fixture)
+    before_script = f"""
+$global:RefillRegistered = $true
+$global:RefillState = 'Disabled'
+$global:RefillAction = [pscustomobject]@{{
+    Execute = 'pwsh'
+    Arguments = (
+        '-NoProfile -File run_windows_managed_service.ps1 ' +
+        '-ServiceName refill -HostRoot "{host_root.as_posix()}"'
+    )
+}}
+$env:MSOS_STUBBED_FAIL_START_AFTER_COUNT = '2'
+$env:MSOS_STUBBED_FAIL_START_ONCE_MARKER = '{(tmp_path / "restart-failed.marker").as_posix()}'
+$env:MSOS_STUBBED_SKIP_WITNESS_SERVICE = 'gate'
+"""
+
+    result, _calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=before_script,
+    )
+
+    assert result.returncode != 0
+    assert all(
+        (live_bootstrap / target).read_bytes() == content
+        for target, content in old_bytes.items()
+    )
+    report = _read_handoff_report(fixture)
+    assert report["outcome"] == "rollback_failed"
+    assert report["activation"]["attempted"] is True
+    assert report["activation"]["performed"] is True
+    assert report["activation"]["status"] == "restart_witness_failed"
+    assert report["rollback"]["performed"] is True
+    assert report["rollback"]["service_recovery_passed"] is False
+    error = report["rollback"]["service_recovery_error"]
+    assert "Restored legacy recovery witness failed" in error
+    assert "managed tasks did not produce a complete post-cutover health witness" in error
+    assert '"gate": {}' in error
+    assert "Rollback service recovery failed" in json.dumps(report["errors"])
 
 
 def test_stable_bootstrap_handoff_runs_with_spaced_fixture_and_probe_paths(

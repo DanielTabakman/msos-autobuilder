@@ -16,6 +16,7 @@ import yaml
 from msos_autobuilder.self_update_supervisor import (
     CheckResult,
     ExpectedFile,
+    FileHealthVerifier,
     ManagedTask,
     ManifestError,
     ReleaseBuilder,
@@ -259,6 +260,16 @@ class FailFirstStartTasks(FakeTasks):
             raise SupervisorError("new release tasks did not start")
 
 
+class StaticTaskStates(FakeTasks):
+    def __init__(self, states: dict[str, str]) -> None:
+        super().__init__()
+        self._states = states
+
+    def states(self, task_names: Sequence[str]) -> dict[str, str]:
+        self.calls.append(("states", tuple(task_names)))
+        return {name: self._states.get(name, "Missing") for name in task_names}
+
+
 class FakeHealth:
     def __init__(self, outcomes: list[dict[str, Any] | Exception]) -> None:
         self.outcomes = outcomes
@@ -291,6 +302,95 @@ def _supervisor(
         task_controller=tasks,
         health_verifier=health,  # type: ignore[arg-type]
     )
+
+
+def _write_witness(config: SupervisorConfig, service: str, payload: dict[str, Any]) -> None:
+    config.witnesses_root.mkdir(parents=True, exist_ok=True)
+    (config.witnesses_root / f"{service}.json").write_text(
+        json.dumps(payload) + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_file_health_verifier_requires_canonical_stable_recovery_contract(
+    tmp_path: Path,
+) -> None:
+    commit = "1" * 40
+    host = ManagedTask("host", "Host Task")
+    refill = ManagedTask("refill", "Refill Task")
+    config = SupervisorConfig(
+        supervisor_root=tmp_path / "supervisor",
+        host_root=tmp_path / "host",
+        repo_url="https://github.com/DanielTabakman/msos-autobuilder.git",
+        repository="DanielTabakman/msos-autobuilder",
+        task_controller_script=tmp_path / "task-control.ps1",
+        release_probe_script=tmp_path / "probe.py",
+        managed_tasks=(host, refill),
+        health_timeout_seconds=0.5,
+        health_poll_seconds=0.01,
+        health_stability_seconds=0.03,
+    )
+    not_before = datetime.now(UTC)
+    _write_witness(
+        config,
+        "host",
+        {
+            "state": "running",
+            "release_commit": commit,
+            "started_at": datetime.now(UTC).isoformat(),
+            "child_pid": 123,
+        },
+    )
+    tasks = StaticTaskStates({"Host Task": "Running", "Refill Task": "Disabled"})
+
+    evidence = FileHealthVerifier(config, tasks).wait_for(
+        commit,
+        not_before,
+        managed_tasks=(host,),
+        disabled_tasks=(refill,),
+    )
+
+    assert evidence["task_states"] == {"Host Task": "Running", "Refill Task": "Disabled"}
+    assert evidence["disabled_task_states"] == {"refill": "Disabled"}
+    assert evidence["witnesses"]["host"]["release_commit"] == commit
+    assert evidence["health_timeout_seconds"] == 0.5
+    assert evidence["health_poll_seconds"] == 0.01
+    assert evidence["stability_seconds"] == 0.03
+    assert evidence["achieved_stability_seconds"] >= 0.03
+    assert [call[0] for call in tasks.calls].count("states") >= 2
+
+
+def test_file_health_verifier_rejects_non_integer_child_pid(tmp_path: Path) -> None:
+    commit = "1" * 40
+    host = ManagedTask("host", "Host Task")
+    config = SupervisorConfig(
+        supervisor_root=tmp_path / "supervisor",
+        host_root=tmp_path / "host",
+        repo_url="https://github.com/DanielTabakman/msos-autobuilder.git",
+        repository="DanielTabakman/msos-autobuilder",
+        task_controller_script=tmp_path / "task-control.ps1",
+        release_probe_script=tmp_path / "probe.py",
+        managed_tasks=(host,),
+        health_timeout_seconds=0.05,
+        health_poll_seconds=0.01,
+        health_stability_seconds=0.01,
+    )
+    _write_witness(
+        config,
+        "host",
+        {
+            "state": "running",
+            "release_commit": commit,
+            "started_at": datetime.now(UTC).isoformat(),
+            "child_pid": "123",
+        },
+    )
+
+    with pytest.raises(SupervisorError, match="post-cutover health witness"):
+        FileHealthVerifier(config, StaticTaskStates({"Host Task": "Running"})).wait_for(
+            commit,
+            datetime.now(UTC),
+        )
 
 
 def test_corrupt_stale_lock_is_recovered(tmp_path: Path) -> None:

@@ -882,7 +882,10 @@ class FileHealthVerifier:
                 if observed_at - healthy_since >= self.config.health_stability_seconds:
                     return {
                         **last_detail,
+                        "health_timeout_seconds": self.config.health_timeout_seconds,
+                        "health_poll_seconds": self.config.health_poll_seconds,
                         "stability_seconds": self.config.health_stability_seconds,
+                        "achieved_stability_seconds": observed_at - healthy_since,
                     }
             else:
                 healthy_since = None

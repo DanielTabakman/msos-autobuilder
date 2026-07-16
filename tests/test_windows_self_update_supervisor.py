@@ -394,6 +394,17 @@ def _read_handoff_report(fixture: dict[str, object]) -> dict[str, object]:
     return json.loads(reports[0].read_text(encoding="utf-8-sig"))
 
 
+def _live_bootstrap_bytes(fixture: dict[str, object]) -> dict[str, bytes]:
+    live_bootstrap = fixture["live_bootstrap"]
+    target_names = fixture["target_names"]
+    assert isinstance(live_bootstrap, Path)
+    assert isinstance(target_names, dict)
+    return {
+        target: (live_bootstrap / target).read_bytes()
+        for target in [*target_names.values(), "supervisor.yaml", "managed-services.json"]
+    }
+
+
 def _stubbed_task_control_script(
     *,
     state: str = "Running",
@@ -710,15 +721,15 @@ def test_stable_bootstrap_handoff_runs_with_temp_root_and_stubbed_tasks(
         for call in calls
         if call["name"] == "MSOS Autobuilder Update Supervisor"
     ]
-    assert update_task_actions == [
-        "get",
+    assert update_task_actions[:4] == ["get", "export", "get", "export"]
+    assert update_task_actions[4:] == [
         "stop",
         "get",
         "get",
         "disable",
-        "get",
         "enable",
         "get",
+        "export",
     ]
     nested_calls = [
         json.loads(line)
@@ -797,8 +808,7 @@ def test_stable_bootstrap_handoff_rejects_substantive_installed_mutation_with_pa
     assert report["outcome"] == "failed"
     assert report["activation"]["performed"] is False
     assert report["rollback"]["performed"] is False
-    assert report["update_task"]["restored"] is True
-    assert report["update_task"]["final_state"] == "Ready"
+    assert report["update_task"]["restored"] is False
     hashes = report["file_hashes"]
     assert "self_update_supervisor.py" in hashes
     assert "self_update_evidence_relay.py" in hashes
@@ -817,7 +827,7 @@ def test_stable_bootstrap_handoff_rejects_substantive_installed_mutation_with_pa
         for call in calls
         if call["name"] == "MSOS Autobuilder Update Supervisor"
     ]
-    assert update_task_actions == ["get", "enable", "get"]
+    assert update_task_actions == []
 
 
 def test_stable_bootstrap_handoff_retains_complete_python_stderr_on_probe_failure(
@@ -834,6 +844,9 @@ def test_stable_bootstrap_handoff_retains_complete_python_stderr_on_probe_failur
         task_control_stderr_failure=stderr_begin + "{0}" + stderr_end,
         task_control_stderr_repeat=80_000,
     )
+    live_bootstrap = fixture["live_bootstrap"]
+    assert isinstance(live_bootstrap, Path)
+    old_bytes = _live_bootstrap_bytes(fixture)
     result, calls_path = _run_handoff_fixture(
         fixture,
         powershell,
@@ -850,7 +863,14 @@ def test_stable_bootstrap_handoff_retains_complete_python_stderr_on_probe_failur
     assert "Traceback (most recent call last)" in report_text
     assert "SupervisorError" in report_text
     assert report["activation"]["performed"] is False
+    assert report["rollback"]["performed"] is False
+    assert report["rollback"]["refill_task_restored"] is True
     assert report["update_task"]["restored"] is True
+    assert live_bootstrap.exists()
+    assert all(
+        (live_bootstrap / target).read_bytes() == content
+        for target, content in old_bytes.items()
+    )
     calls = [
         json.loads(line)
         for line in calls_path.read_text(encoding="utf-8-sig").splitlines()
@@ -860,6 +880,12 @@ def test_stable_bootstrap_handoff_retains_complete_python_stderr_on_probe_failur
         and call["name"] == "MSOS Autobuilder Update Supervisor"
         for call in calls
     )
+    refill_actions = [
+        call["action"]
+        for call in calls
+        if call["name"] == "MSOS Autobuilder Capacity-One Refill"
+    ]
+    assert refill_actions.count("unregister") == 1
 
 
 def test_stable_bootstrap_handoff_restores_refill_absence_on_registration_failure(
@@ -1020,13 +1046,8 @@ def test_stable_bootstrap_handoff_report_write_failure_is_not_nominal_success(
 
     fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
     live_bootstrap = fixture["live_bootstrap"]
-    target_names = fixture["target_names"]
     assert isinstance(live_bootstrap, Path)
-    assert isinstance(target_names, dict)
-    old_bytes = {
-        target: (live_bootstrap / target).read_bytes()
-        for target in [*target_names.values(), "supervisor.yaml", "managed-services.json"]
-    }
+    old_bytes = _live_bootstrap_bytes(fixture)
 
     result, calls_path = _run_handoff_fixture(
         fixture,
@@ -1064,18 +1085,18 @@ def test_stable_bootstrap_handoff_restores_old_bootstrap_on_updater_restore_fail
 
     fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
     live_bootstrap = fixture["live_bootstrap"]
-    target_names = fixture["target_names"]
     assert isinstance(live_bootstrap, Path)
-    assert isinstance(target_names, dict)
-    old_bytes = {
-        target: (live_bootstrap / target).read_bytes()
-        for target in [*target_names.values(), "supervisor.yaml", "managed-services.json"]
-    }
+    old_bytes = _live_bootstrap_bytes(fixture)
     before_script = """
+$global:UpdateRestoreFailureInjected = $false
 function Enable-ScheduledTask {
     param([string]$TaskName, [object]$ErrorAction)
     Add-Call -Action 'enable' -Name $TaskName
-    if ($TaskName -eq 'MSOS Autobuilder Update Supervisor') {
+    if (
+        $TaskName -eq 'MSOS Autobuilder Update Supervisor' -and
+        -not $global:UpdateRestoreFailureInjected
+    ) {
+        $global:UpdateRestoreFailureInjected = $true
         throw 'simulated updater restore failure'
     }
     [pscustomobject]@{ TaskName = $TaskName; State = 'Ready' }
@@ -1097,16 +1118,64 @@ function Enable-ScheduledTask {
     report = _read_handoff_report(fixture)
     assert report["outcome"] == "failed_after_activation"
     assert report["rollback"]["performed"] is True
-    assert "Failed to re-enable updater Scheduled Task" in json.dumps(report)
+    assert report["update_task"]["restored"] is True
+    assert report["update_task"]["reregistered_from_preflight_xml"] is True
+    assert report["update_task"]["final_state"] == report["update_task"]["preflight"]["state"]
+    assert (
+        report["update_task"]["final_xml_sha256"]
+        == report["update_task"]["preflight"]["xml_sha256"]
+    )
+    assert "Failed to restore updater Scheduled Task" in json.dumps(report)
     calls = [
         json.loads(line)
         for line in calls_path.read_text(encoding="utf-8-sig").splitlines()
     ]
+    update_actions = [
+        call["action"]
+        for call in calls
+        if call["name"] == "MSOS Autobuilder Update Supervisor"
+    ]
+    assert "unregister" in update_actions
+    assert "register" in update_actions
     assert any(
         call["action"] == "unregister"
         and call["name"] == "MSOS Autobuilder Capacity-One Refill"
         for call in calls
     )
+
+
+def test_stable_bootstrap_handoff_fails_closed_when_refill_task_preexists(
+    tmp_path: Path,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    before_script = "$global:RefillRegistered = $true"
+
+    result, calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=before_script,
+    )
+
+    assert result.returncode != 0
+    report = _read_handoff_report(fixture)
+    assert "baseline must be exactly the reviewed five tasks with refill absent" in json.dumps(
+        report
+    )
+    calls = [
+        json.loads(line)
+        for line in calls_path.read_text(encoding="utf-8-sig").splitlines()
+    ]
+    refill_actions = [
+        call["action"]
+        for call in calls
+        if call["name"] == "MSOS Autobuilder Capacity-One Refill"
+    ]
+    assert refill_actions == ["get", "export"]
 
 
 def test_task_controller_round_trips_task_names_through_powershell_stdin(

@@ -457,8 +457,8 @@ function Register-DisabledRefillTask {
         $Existing = Get-ScheduledTask -TaskName $RefillTaskName -ErrorAction SilentlyContinue
         if ($Existing) {
             Stop-ScheduledTask -TaskName $RefillTaskName -ErrorAction SilentlyContinue
-            Unregister-ScheduledTask -TaskName $RefillTaskName -Confirm:$false
             $Touched = $true
+            Unregister-ScheduledTask -TaskName $RefillTaskName -Confirm:$false
         }
         $Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$RunnerScript`" -ServiceName `"$RefillServiceName`" -SupervisorRoot `"$SupervisorRoot`" -HostRoot `"$HostRoot`""
         $Action = New-ScheduledTaskAction -Execute $PowerShellExe -Argument $Arguments
@@ -481,6 +481,18 @@ function Register-DisabledRefillTask {
     }
 }
 
+function Assert-InstalledScheduledTaskBaseline {
+    param([Parameter(Mandatory = $true)][hashtable]$Evidence)
+    foreach ($TaskName in $ExistingManagedTaskNames) {
+        if (-not $Evidence[$TaskName].exists) {
+            throw "Installed Scheduled Task baseline is incomplete: missing $TaskName."
+        }
+    }
+    if ($Evidence[$RefillTaskName].exists) {
+        throw "Installed Scheduled Task baseline must be exactly the reviewed five tasks with refill absent."
+    }
+}
+
 function Restore-RefillTask {
     param([string]$BackupXmlPath)
     $Existing = Get-ScheduledTask -TaskName $RefillTaskName -ErrorAction SilentlyContinue
@@ -493,6 +505,67 @@ function Restore-RefillTask {
     }
 }
 
+function Test-CompleteBootstrapRestoreSource {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path $Path -PathType Container)) { return $false }
+    foreach ($Entry in $BootstrapFileMap) {
+        if (-not (Test-Path (Join-Path $Path $Entry.target) -PathType Leaf)) { return $false }
+    }
+    foreach ($Name in @("supervisor.yaml", "managed-services.json")) {
+        if (-not (Test-Path (Join-Path $Path $Name) -PathType Leaf)) { return $false }
+    }
+    return $true
+}
+
+function Restore-UpdaterTask {
+    param(
+        [Parameter(Mandatory = $true)][string]$BackupXmlPath,
+        [Parameter(Mandatory = $true)][hashtable]$PreflightEvidence
+    )
+    $RestoreError = $null
+    try {
+        if ([string]$PreflightEvidence.state -eq "Disabled") {
+            Disable-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop | Out-Null
+        }
+        else {
+            Enable-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop | Out-Null
+        }
+    }
+    catch {
+        $RestoreError = $_.Exception.Message
+        $Existing = Get-ScheduledTask -TaskName $UpdateTaskName -ErrorAction SilentlyContinue
+        if ($Existing) {
+            Stop-ScheduledTask -TaskName $UpdateTaskName -ErrorAction SilentlyContinue
+            Unregister-ScheduledTask -TaskName $UpdateTaskName -Confirm:$false
+        }
+        Register-ScheduledTask -TaskName $UpdateTaskName -Xml (Get-Content -Raw $BackupXmlPath) -Force | Out-Null
+        if ([string]$PreflightEvidence.state -eq "Disabled") {
+            Disable-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop | Out-Null
+        }
+        else {
+            Enable-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop | Out-Null
+        }
+    }
+    $Final = Get-ScheduledTaskEvidence -TaskName $UpdateTaskName
+    $Report.update_task["final_state"] = [string]$Final.state
+    $Report.update_task["final_xml_sha256"] = [string]$Final.xml_sha256
+    if (-not $Final.exists) {
+        throw "Updater Scheduled Task restoration failed: task is missing."
+    }
+    if ([string]$Final.xml_sha256 -ne [string]$PreflightEvidence.xml_sha256) {
+        throw "Updater Scheduled Task restoration failed: final XML does not match preflight."
+    }
+    if ([string]$Final.state -ne [string]$PreflightEvidence.state) {
+        throw "Updater Scheduled Task restoration failed: final state $($Final.state) does not match preflight $($PreflightEvidence.state)."
+    }
+    $Report.update_task["restored"] = $true
+    if ($RestoreError) {
+        $Report.update_task["normal_restore_error"] = $RestoreError
+        $Report.update_task["reregistered_from_preflight_xml"] = $true
+        throw "Updater Scheduled Task normal restore failed and was transactionally restored from preflight XML: $RestoreError"
+    }
+}
+
 function ConvertTo-ComparablePath {
     param([Parameter(Mandatory = $true)][string]$Path)
     return $Path.TrimEnd("\", "/").Replace("\", "/").ToLowerInvariant()
@@ -500,17 +573,29 @@ function ConvertTo-ComparablePath {
 
 function Restore-HandoffState {
     param([Parameter(Mandatory = $true)][string]$Reason)
-    if (Test-Path $BootstrapRoot) {
-        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $BootstrapRoot
-    }
-    if ($null -ne $ActivationBackup -and (Test-Path $ActivationBackup)) {
+    $BootstrapRestored = $false
+    if ($null -ne $ActivationBackup -and (Test-CompleteBootstrapRestoreSource -Path $ActivationBackup)) {
+        if (Test-Path $BootstrapRoot) {
+            Remove-Item -Recurse -Force -ErrorAction Stop $BootstrapRoot
+        }
         Move-Item -Path $ActivationBackup -Destination $BootstrapRoot
         $Report.rollback = @{ performed = $true; restored_from = $ActivationBackup; reason = $Reason; refill_task_restored = $false }
         $script:ActivationBackup = $null
+        $BootstrapRestored = $true
     }
-    elseif (Test-Path $RollbackBootstrap) {
+    elseif (Test-CompleteBootstrapRestoreSource -Path $RollbackBootstrap) {
+        if (Test-Path $BootstrapRoot) {
+            Remove-Item -Recurse -Force -ErrorAction Stop $BootstrapRoot
+        }
         Copy-Item -Recurse -Force -Path $RollbackBootstrap -Destination $BootstrapRoot
         $Report.rollback = @{ performed = $true; restored_from = $RollbackBootstrap; reason = $Reason; refill_task_restored = $false }
+        $BootstrapRestored = $true
+    }
+    elseif ($null -ne $ActivationBackup -and (Test-Path $ActivationBackup)) {
+        throw "Refusing to remove BootstrapRoot without a complete validated rollback bootstrap source."
+    }
+    if (-not $BootstrapRestored -and -not $Report.rollback.ContainsKey("refill_task_restored")) {
+        $Report.rollback["refill_task_restored"] = $false
     }
     if ($RefillTaskTouched -and -not $Report.rollback["refill_task_restored"]) {
         Restore-RefillTask -BackupXmlPath $RefillTaskBackupXml
@@ -719,6 +804,7 @@ $RollbackBootstrap = Join-Path $RollbackParent ("bootstrap-$ExpectedOldBootstrap
 $ActivationBackup = $null
 $RefillTaskBackupXml = $null
 $RefillTaskTouched = $false
+$UpdateTaskBackupXml = $null
 $ReportPath = Join-Path $ReportsRoot ($AttemptId + ".json")
 $ValidationResults = New-Object System.Collections.ArrayList
 $Report = @{
@@ -780,6 +866,7 @@ try {
         $TaskEvidence[$TaskName] = Get-ScheduledTaskEvidence -TaskName $TaskName
     }
     $Report.scheduled_tasks["preflight"] = $TaskEvidence
+    Assert-InstalledScheduledTaskBaseline -Evidence $TaskEvidence
 
     Test-ReportPathWritable -Path $ReportPath
     Get-BootstrapHashEvidence -RepoRoot $RepoRoot -BootstrapRoot $BootstrapRoot -OldCommit $ExpectedOldBootstrapCommit -NewCommit $Commit -Evidence $Report.file_hashes
@@ -798,7 +885,12 @@ try {
     }
 
     $Task = Get-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop
+    $UpdateTaskBackupXml = Join-Path $StageRoot "update-task-before.xml"
+    Export-ScheduledTask -TaskName $UpdateTaskName | Set-Content -Path $UpdateTaskBackupXml -Encoding UTF8
+    $UpdateTaskPreflightEvidence = Get-ScheduledTaskEvidence -TaskName $UpdateTaskName
+    $Report.update_task["preflight"] = $UpdateTaskPreflightEvidence
     $Report.update_task["initial_state"] = [string]$Task.State
+    $Report.update_task["preflight_xml_sha256"] = [string]$UpdateTaskPreflightEvidence.xml_sha256
     Stop-ScheduledTask -TaskName $UpdateTaskName -ErrorAction SilentlyContinue
     $Deadline = (Get-Date).AddSeconds(30)
     while ((Get-Date) -lt $Deadline) {
@@ -819,8 +911,8 @@ try {
         $RefillTaskBackupXml = Join-Path $StageRoot "refill-task-before.xml"
         Export-ScheduledTask -TaskName $RefillTaskName | Set-Content -Path $RefillTaskBackupXml -Encoding UTF8
     }
-    Register-DisabledRefillTask -SupervisorRoot $SupervisorRoot -HostRoot $HostRoot -BackupXmlPath $RefillTaskBackupXml
     $RefillTaskTouched = $true
+    Register-DisabledRefillTask -SupervisorRoot $SupervisorRoot -HostRoot $HostRoot -BackupXmlPath $RefillTaskBackupXml
     $Report.scheduled_tasks["staged_refill"] = Get-ScheduledTaskEvidence -TaskName $RefillTaskName
     if ([string]$Report.scheduled_tasks["staged_refill"].state -ne "Disabled") {
         throw "Refill task must remain exactly Disabled until a later managed-release cutover."
@@ -876,19 +968,12 @@ catch {
 }
 finally {
     try {
-        if (Get-ScheduledTask -TaskName $UpdateTaskName -ErrorAction SilentlyContinue) {
-            if ([string]$Report.update_task["initial_state"] -eq "Disabled") {
-                Disable-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop | Out-Null
-            }
-            else {
-                Enable-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop | Out-Null
-            }
-            $Report.update_task["restored"] = $true
-            $Report.update_task["final_state"] = [string](Get-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop).State
+        if ($UpdateTaskBackupXml -and (Test-Path $UpdateTaskBackupXml -PathType Leaf)) {
+            Restore-UpdaterTask -BackupXmlPath $UpdateTaskBackupXml -PreflightEvidence $Report.update_task["preflight"]
         }
     }
     catch {
-        $Report.errors += "Failed to re-enable updater Scheduled Task: $($_.Exception.Message)"
+        $Report.errors += "Failed to restore updater Scheduled Task: $($_.Exception.Message)"
         if ($Report.outcome -eq "success") {
             $Report.outcome = "failed_after_activation"
             Restore-HandoffState -Reason "updater Scheduled Task restoration failed"

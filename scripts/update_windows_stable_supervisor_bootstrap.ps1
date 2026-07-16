@@ -642,6 +642,14 @@ function Restore-HandoffState {
     }
 }
 
+function Disable-RestoredRefillTaskForRecovery {
+    $Existing = Get-ScheduledTask -TaskName $RefillTaskName -ErrorAction SilentlyContinue
+    if ($null -eq $Existing) { return "Missing" }
+    Stop-ScheduledTask -TaskName $RefillTaskName -ErrorAction SilentlyContinue
+    Disable-ScheduledTask -TaskName $RefillTaskName -ErrorAction Stop | Out-Null
+    return [string](Get-ScheduledTask -TaskName $RefillTaskName -ErrorAction Stop).State
+}
+
 function Test-ReportPathWritable {
     param([Parameter(Mandatory = $true)][string]$Path)
     if (Test-Path $Path) { throw "Immutable report already exists: $Path" }
@@ -993,17 +1001,46 @@ def main(stdout_file):
     config = module.load_supervisor_config(bootstrap / "supervisor.yaml")
     active = module._read_active_pointer(config)
     release_path = pathlib.Path(str(active["release_path"]))
-    selected, disabled = module._release_managed_tasks(config, release_path)
+    release_supports_refill = (release_path / "src" / "msos_autobuilder" / "refill_controller.py").is_file()
+    selected = []
+    disabled = []
+    for task in config.managed_tasks:
+        if task.service == "refill" and not release_supports_refill:
+            disabled.append(task)
+        else:
+            selected.append(task)
+    selected = tuple(selected)
+    disabled = tuple(disabled)
+    verifier_config = config
+    if disabled:
+        try:
+            import dataclasses
+            verifier_config = dataclasses.replace(config, managed_tasks=selected)
+        except BaseException:
+            verifier_config = config
     controller = module.PowerShellTaskController(config.task_controller_script)
-    health = module.FileHealthVerifier(config, controller)
+    health = module.FileHealthVerifier(verifier_config, controller)
     selected_names = [task.task_name for task in selected]
     disabled_names = [task.task_name for task in disabled]
     started = datetime.datetime.now(datetime.UTC)
     controller.stop(selected_names)
     controller.start(selected_names)
+    health_evidence = health.wait_for(str(active["commit"]), started)
+    task_states = dict(health_evidence.get("task_states", {}))
+    disabled_service_states = {}
     if disabled_names:
-        controller.disable(disabled_names)
-    health_evidence = health.wait_for(str(active["commit"]), started, selected, disabled)
+        disabled_task_states = dict(controller.states(disabled_names))
+        task_states.update(disabled_task_states)
+        for task in disabled:
+            state = str(disabled_task_states.get(task.task_name, "Missing"))
+            disabled_service_states[task.service] = state
+            if state.lower() != "disabled":
+                raise RuntimeError(
+                    "restored disabled task is not Disabled: "
+                    + json.dumps({task.service: state}, sort_keys=True)
+                )
+    configured_stability = config.health_stability_seconds
+    achieved_stability = health_evidence.get("achieved_stability_seconds", configured_stability)
     stdout_file.write(json.dumps({
         "active_commit": str(active["commit"]),
         "selected_services": [task.service for task in selected],
@@ -1011,11 +1048,16 @@ def main(stdout_file):
         "health_timeout_seconds": config.health_timeout_seconds,
         "health_poll_seconds": config.health_poll_seconds,
         "configured_stability_seconds": config.health_stability_seconds,
-        "achieved_stability_seconds": health_evidence.get("achieved_stability_seconds"),
-        "task_states": health_evidence.get("task_states", {}),
-        "disabled_task_states": health_evidence.get("disabled_task_states", {}),
+        "achieved_stability_seconds": achieved_stability,
+        "task_states": task_states,
+        "disabled_task_states": disabled_service_states,
         "witnesses": health_evidence.get("witnesses", {}),
         "health": health_evidence,
+        "legacy_interface": {
+            "release_managed_tasks_helper": hasattr(module, "_release_managed_tasks"),
+            "task_controller_disable": hasattr(controller, "disable"),
+            "wait_for_arguments": 2,
+        },
     }, sort_keys=True))
     stdout_file.write("\n")
     stdout_file.flush()
@@ -1254,7 +1296,9 @@ try {
         Restore-HandoffState -Reason $ActivationError
         if ($LegacyRestartWitnessStarted) {
             try {
+                $RecoveryRefillState = Disable-RestoredRefillTaskForRecovery
                 $Recovery = Test-RestoredLegacyRecoveryWitness -BootstrapRoot $BootstrapRoot -BootstrapPython $BootstrapPython
+                $Recovery | Add-Member -NotePropertyName "outer_refill_disable_state" -NotePropertyValue $RecoveryRefillState -Force
                 $Report.rollback["service_recovery"] = $Recovery
                 $Report.rollback["service_recovery_passed"] = $true
                 $Report.outcome = "rolled_back"

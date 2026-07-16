@@ -20,6 +20,7 @@ INVOKER = ROOT / "scripts" / "invoke_windows_self_update.ps1"
 ROLLBACK = ROOT / "scripts" / "rollback_windows_self_update.ps1"
 BOOTSTRAP_HANDOFF = ROOT / "scripts" / "update_windows_stable_supervisor_bootstrap.ps1"
 PROBE = ROOT / "scripts" / "managed_release_health_probe.py"
+LEGACY_BOOTSTRAP_COMMIT = "cf1b9e7c0f9429a53ad66ca043fef27a89a49474"
 SCRIPTS = (INSTALLER, RUNNER, TASK_CONTROL, INVOKER, ROLLBACK, BOOTSTRAP_HANDOFF)
 MANAGED_TASK_NAMES = [
     "MSOS Autobuilder Host",
@@ -265,9 +266,23 @@ def _build_stable_bootstrap_handoff_fixture(
                 _stubbed_task_control_script(
                     stderr_failure=task_control_stderr_failure,
                     stderr_repeat=task_control_stderr_repeat,
+                    legacy_interface=True,
                 ),
                 encoding="utf-8",
             )
+        elif relative == "src/msos_autobuilder/self_update_supervisor.py":
+            legacy_supervisor = subprocess.check_output(
+                [
+                    "git",
+                    "-C",
+                    str(ROOT),
+                    "show",
+                    f"{LEGACY_BOOTSTRAP_COMMIT}:src/msos_autobuilder/self_update_supervisor.py",
+                ],
+                text=True,
+                encoding="utf-8",
+            )
+            path.write_text(legacy_supervisor, encoding="utf-8")
         else:
             shutil.copy2(source, path)
         path.write_bytes(path.read_bytes().replace(b"\r\n", b"\n"))
@@ -282,6 +297,17 @@ def _build_stable_bootstrap_handoff_fixture(
     subprocess.run(["git", "commit", "-qm", "old bootstrap"], cwd=repo, check=True)
     old_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
 
+    shutil.copy2(
+        ROOT / "src" / "msos_autobuilder" / "self_update_supervisor.py",
+        repo / "src/msos_autobuilder/self_update_supervisor.py",
+    )
+    (repo / "scripts/windows_self_update_task_control.ps1").write_text(
+        _stubbed_task_control_script(
+            stderr_failure=task_control_stderr_failure,
+            stderr_repeat=task_control_stderr_repeat,
+        ),
+        encoding="utf-8",
+    )
     (repo / "src/msos_autobuilder/self_update_evidence_relay.py").write_bytes(
         b"print('relay fixture v2')\n"
     )
@@ -463,8 +489,22 @@ def _stubbed_task_control_script(
     state: str = "Running",
     stderr_failure: str | None = None,
     stderr_repeat: int = 0,
+    legacy_interface: bool = False,
 ) -> str:
-    script = TASK_CONTROL.read_text(encoding="utf-8")
+    if legacy_interface:
+        script = subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(ROOT),
+                "show",
+                f"{LEGACY_BOOTSTRAP_COMMIT}:scripts/windows_self_update_task_control.ps1",
+            ],
+            text=True,
+            encoding="utf-8",
+        )
+    else:
+        script = TASK_CONTROL.read_text(encoding="utf-8")
     if stderr_failure is None:
         get_body = (
             "    Add-Call -Action 'get' -Name $TaskName\n"
@@ -728,7 +768,13 @@ function Stop-ScheduledTask {{
 function Disable-ScheduledTask {{
     param([string]$TaskName, [object]$ErrorAction)
     Add-Call -Action 'disable' -Name $TaskName
-    if ($TaskName -eq 'MSOS Autobuilder Capacity-One Refill') {{ $global:RefillState = 'Disabled' }}
+    if ($TaskName -eq 'MSOS Autobuilder Capacity-One Refill') {{
+        $global:RefillState = 'Disabled'
+        $Marker = Join-Path (Join-Path '{supervisor.as_posix()}' 'state') 'refill-disabled.marker'
+        $MarkerParent = Split-Path -Parent $Marker
+        New-Item -ItemType Directory -Force -Path $MarkerParent | Out-Null
+        Set-Content -Path $Marker -Value 'disabled' -Encoding UTF8
+    }}
     if ($TaskName -eq 'MSOS Autobuilder Update Supervisor') {{
         $global:UpdateTaskState = 'Disabled'
     }}
@@ -1198,6 +1244,12 @@ $env:MSOS_STUBBED_FAIL_START_ONCE_MARKER = '{(tmp_path / "restart-failed.marker"
     recovery = report["rollback"]["service_recovery"]
     assert recovery["selected_services"] == expected_services
     assert recovery["disabled_services"] == ["refill"]
+    assert recovery["legacy_interface"] == {
+        "release_managed_tasks_helper": False,
+        "task_controller_disable": False,
+        "wait_for_arguments": 2,
+    }
+    assert recovery["outer_refill_disable_state"] == "Disabled"
     assert recovery["health_timeout_seconds"] == 1
     assert recovery["health_poll_seconds"] == 0.05
     assert recovery["configured_stability_seconds"] == 0.1
@@ -1224,10 +1276,15 @@ $env:MSOS_STUBBED_FAIL_START_ONCE_MARKER = '{(tmp_path / "restart-failed.marker"
     assert [call["name"] for call in nested_calls if call["action"] == "start"] == (
         MANAGED_TASK_NAMES[:2] + MANAGED_TASK_NAMES[:-1]
     )
+    assert not any(call["action"] == "disable" for call in nested_calls)
+    outer_calls = [
+        json.loads(line)
+        for line in calls_path.read_text(encoding="utf-8-sig").splitlines()
+    ]
     assert any(
         call["action"] == "disable"
         and call["name"] == "MSOS Autobuilder Capacity-One Refill"
-        for call in nested_calls
+        for call in outer_calls
     )
 
 

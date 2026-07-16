@@ -151,6 +151,11 @@ def test_stable_bootstrap_handoff_is_exact_commit_reversible_and_non_mutating() 
     assert "Assert-NoActiveUpdateAttempt" in script
     assert "PowerShellTaskController" in script
     assert "controller.states(task_names)" in script
+    assert "Add-StagedServiceConfiguration" in script
+    assert "Register-DisabledRefillTask" in script
+    assert "Restore-RefillTask" in script
+    assert "Disable-ScheduledTask -TaskName $RefillTaskName" in script
+    assert "Refill task must remain disabled" in script
     assert "previous = sys.modules.get(module_name)" in script
     assert "sys.modules[module_name] = module" in script
     assert "sys.modules.pop(module_name, None)" in script
@@ -173,10 +178,10 @@ def test_stable_bootstrap_handoff_is_exact_commit_reversible_and_non_mutating() 
     assert "Move-Item -Path $BootstrapRoot -Destination $ActivationBackup" in script
     assert "Move-Item -Path $StagedBootstrap -Destination $BootstrapRoot" in script
     assert "stable-bootstrap-update-handoff" in script
-    assert "active-release.json" not in script
+    assert "active-release.json" in script
     assert "update-ledger.json" not in script
-    assert "Unregister-ScheduledTask" not in script
-    assert "Register-ScheduledTask" not in script
+    assert "Unregister-ScheduledTask" in script
+    assert "Register-ScheduledTask" in script
     assert "MSOS_TASK_CONTROLLER_POWERSHELL" not in (
         ROOT / "src" / "msos_autobuilder" / "self_update_supervisor.py"
     ).read_text(encoding="utf-8")
@@ -283,6 +288,57 @@ def _build_stable_bootstrap_handoff_fixture(
     }
     for source, target in target_names.items():
         shutil.copy2(repo / source, live_bootstrap / target)
+    (live_bootstrap / "supervisor.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                f"supervisor_root: '{supervisor.as_posix()}'",
+                f"host_root: '{(tmp_path / 'host').as_posix()}'",
+                "repo_url: 'https://github.com/DanielTabakman/msos-autobuilder.git'",
+                "repository: 'DanielTabakman/msos-autobuilder'",
+                "task_controller_script: "
+                f"'{(live_bootstrap / 'windows_self_update_task_control.ps1').as_posix()}'",
+                "release_probe_script: "
+                f"'{(live_bootstrap / 'managed_release_health_probe.py').as_posix()}'",
+                "managed_tasks:",
+                "  - service: host",
+                "    task_name: 'MSOS Autobuilder Host'",
+                "  - service: relay",
+                "    task_name: 'MSOS Autobuilder Result Relay'",
+                "  - service: gate",
+                "    task_name: 'MSOS Autobuilder Candidate Gate'",
+                "  - service: revision",
+                "    task_name: 'MSOS Autobuilder Revision Loop'",
+                "  - service: publisher",
+                "    task_name: 'MSOS Autobuilder Controlled Publisher'",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (live_bootstrap / "managed-services.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "services": {
+                    "host": {"argv": ["host"], "log_file": "{host_root}/logs/host.log"},
+                    "relay": {"argv": ["relay"], "log_file": "{host_root}/logs/relay.log"},
+                    "gate": {"argv": ["gate"], "log_file": "{host_root}/logs/gate.log"},
+                    "revision": {
+                        "argv": ["revision"],
+                        "log_file": "{host_root}/logs/revision.log",
+                    },
+                    "publisher": {
+                        "argv": ["publisher"],
+                        "log_file": "{host_root}/logs/publisher.log",
+                    },
+                },
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     subprocess.run(["git", "checkout", "-q", new_commit], cwd=repo, check=True)
 
     return {
@@ -406,7 +462,36 @@ function Add-Call([string]$Action, [string]$Name) {{
 function Get-ScheduledTask {{
     param([string]$TaskName, [object]$ErrorAction)
     Add-Call -Action 'get' -Name $TaskName
-    [pscustomobject]@{{ TaskName = $TaskName; State = 'Ready' }}
+    if ($TaskName -eq 'MSOS Autobuilder Capacity-One Refill' -and -not $global:RefillRegistered) {{
+        return $null
+    }}
+    if ($TaskName -eq 'MSOS Autobuilder Capacity-One Refill') {{
+        $State = $global:RefillState
+    }} else {{
+        $State = 'Ready'
+    }}
+    [pscustomobject]@{{
+        TaskName = $TaskName
+        State = $State
+        TaskPath = '\\'
+        Actions = @([pscustomobject]@{{
+            Execute = 'powershell.exe'
+            Arguments = '-stub'
+            WorkingDirectory = $null
+        }})
+        Triggers = @([pscustomobject]@{{ Enabled = $true }})
+        Principal = [pscustomobject]@{{
+            UserId = 'USER'
+            LogonType = 'Interactive'
+            RunLevel = 'Limited'
+        }}
+        Settings = [pscustomobject]@{{
+            MultipleInstances = 'IgnoreNew'
+            RestartCount = 3
+            RestartInterval = 'PT1M'
+        }}
+        Description = "stub task"
+    }}
 }}
 function Stop-ScheduledTask {{
     param([string]$TaskName, [object]$ErrorAction)
@@ -415,6 +500,7 @@ function Stop-ScheduledTask {{
 function Disable-ScheduledTask {{
     param([string]$TaskName, [object]$ErrorAction)
     Add-Call -Action 'disable' -Name $TaskName
+    if ($TaskName -eq 'MSOS Autobuilder Capacity-One Refill') {{ $global:RefillState = 'Disabled' }}
     [pscustomobject]@{{ TaskName = $TaskName; State = 'Disabled' }}
 }}
 function Enable-ScheduledTask {{
@@ -422,12 +508,69 @@ function Enable-ScheduledTask {{
     Add-Call -Action 'enable' -Name $TaskName
     [pscustomobject]@{{ TaskName = $TaskName; State = 'Ready' }}
 }}
+$global:RefillRegistered = $false
+$global:RefillState = 'Ready'
+function Export-ScheduledTask {{
+    param([string]$TaskName)
+    Add-Call -Action 'export' -Name $TaskName
+    '<Task></Task>'
+}}
+function Unregister-ScheduledTask {{
+    param([string]$TaskName, [switch]$Confirm)
+    Add-Call -Action 'unregister' -Name $TaskName
+    if ($TaskName -eq 'MSOS Autobuilder Capacity-One Refill') {{
+        $global:RefillRegistered = $false
+    }}
+}}
+function New-ScheduledTaskAction {{
+    param([string]$Execute, [string]$Argument)
+    [pscustomobject]@{{ Execute = $Execute; Arguments = $Argument }}
+}}
+function New-ScheduledTaskTrigger {{
+    param([string]$User, [switch]$AtLogOn)
+    [pscustomobject]@{{ UserId = $User; AtLogOn = [bool]$AtLogOn }}
+}}
+function New-ScheduledTaskPrincipal {{
+    param([string]$UserId, [string]$LogonType, [string]$RunLevel)
+    [pscustomobject]@{{ UserId = $UserId; LogonType = $LogonType; RunLevel = $RunLevel }}
+}}
+function New-ScheduledTaskSettingsSet {{
+    param(
+        [switch]$AllowStartIfOnBatteries,
+        [switch]$DontStopIfGoingOnBatteries,
+        [string]$MultipleInstances,
+        [int]$RestartCount,
+        [timespan]$RestartInterval
+    )
+    [pscustomobject]@{{
+        MultipleInstances = $MultipleInstances
+        RestartCount = $RestartCount
+        RestartInterval = $RestartInterval
+    }}
+}}
+function Register-ScheduledTask {{
+    param(
+        [string]$TaskName,
+        [object]$Action,
+        [object]$Trigger,
+        [object]$Principal,
+        [object]$Settings,
+        [string]$Description,
+        [string]$Xml,
+        [switch]$Force
+    )
+    Add-Call -Action 'register' -Name $TaskName
+    if ($TaskName -eq 'MSOS Autobuilder Capacity-One Refill') {{
+        $global:RefillRegistered = $true
+    }}
+}}
 $env:MSOS_STUBBED_TASK_CALLS_PATH = '{nested_calls_path.as_posix()}'
 {before_script}
 & '{BOOTSTRAP_HANDOFF.as_posix()}' `
     -Commit '{new_commit}' `
     -ExpectedOldBootstrapCommit '{old_commit}' `
     -RepoRoot '{repo.as_posix()}' `
+    -HostRoot '{(tmp_path / "host").as_posix()}' `
     -SupervisorRoot '{supervisor.as_posix()}' `
     -BootstrapPython '{Path(sys.executable).as_posix()}'
 """
@@ -491,6 +634,13 @@ def test_stable_bootstrap_handoff_runs_with_temp_root_and_stubbed_tasks(
     assert report["new_bootstrap_commit"] == fixture["new_commit"]
     assert report["rollback"]["performed"] is False
     assert report["update_task"]["restored"] is True
+    assert report["service_configuration"]["preflight"]["active_release"]["exists"] is False
+    assert report["service_configuration"]["supervisor.yaml"]["activated"]["exists"] is True
+    assert report["service_configuration"]["managed-services.json"]["activated"]["exists"] is True
+    assert report["scheduled_tasks"]["preflight"]["MSOS Autobuilder Capacity-One Refill"][
+        "exists"
+    ] is False
+    assert report["scheduled_tasks"]["staged_refill"]["state"] == "Disabled"
     assert "self_update_evidence_relay.py" in report["file_hashes"]
     relay_hashes = report["file_hashes"]["self_update_evidence_relay.py"]
     assert relay_hashes["installed_sha256"] != relay_hashes["expected_old_commit_sha256"]
@@ -530,6 +680,14 @@ def test_stable_bootstrap_handoff_runs_with_temp_root_and_stubbed_tasks(
         .splitlines()
     ]
     assert [call["name"] for call in nested_calls if call["action"] == "get"] == MANAGED_TASK_NAMES
+    assert any(
+        call["action"] == "register" and call["name"] == "MSOS Autobuilder Capacity-One Refill"
+        for call in calls
+    )
+    assert any(
+        call["action"] == "disable" and call["name"] == "MSOS Autobuilder Capacity-One Refill"
+        for call in calls
+    )
 
 
 def test_stable_bootstrap_handoff_runs_with_spaced_fixture_and_probe_paths(

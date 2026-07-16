@@ -9,6 +9,7 @@ param(
     [string]$ExpectedOldBootstrapCommit,
 
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
+    [string]$HostRoot = (Join-Path $env:USERPROFILE ".msos-autobuilder"),
     [string]$SupervisorRoot = (Join-Path $env:USERPROFILE ".msos-autobuilder-supervisor"),
     [string]$UpdateTaskName = "MSOS Autobuilder Update Supervisor",
     [string]$BootstrapPython = (Join-Path $SupervisorRoot "bootstrap-venv\Scripts\python.exe")
@@ -25,6 +26,17 @@ $ManagedTaskNames = @(
     "MSOS Autobuilder Controlled Publisher",
     "MSOS Autobuilder Capacity-One Refill"
 )
+
+$ExistingManagedTaskNames = @(
+    "MSOS Autobuilder Host",
+    "MSOS Autobuilder Result Relay",
+    "MSOS Autobuilder Candidate Gate",
+    "MSOS Autobuilder Revision Loop",
+    "MSOS Autobuilder Controlled Publisher"
+)
+
+$RefillTaskName = "MSOS Autobuilder Capacity-One Refill"
+$RefillServiceName = "refill"
 
 $BootstrapFileMap = @(
     @{ source = "src/msos_autobuilder/self_update_supervisor.py"; target = "self_update_supervisor.py" },
@@ -80,6 +92,107 @@ function Invoke-Checked {
 function Get-FileSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
     return Get-ByteArraySha256 -Bytes ([System.IO.File]::ReadAllBytes($Path))
+}
+
+function Get-TextFileEvidence {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path $Path -PathType Leaf)) {
+        return @{ exists = $false; path = $Path }
+    }
+    $Bytes = [System.IO.File]::ReadAllBytes($Path)
+    return @{
+        exists = $true
+        path = $Path
+        sha256 = Get-ByteArraySha256 -Bytes $Bytes
+        canonical_sha256 = Get-CrlfCanonicalSha256 -Bytes $Bytes
+        length = $Bytes.Length
+    }
+}
+
+function Get-ScheduledTaskEvidence {
+    param([Parameter(Mandatory = $true)][string]$TaskName)
+    $Task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($null -eq $Task) {
+        return @{ exists = $false; task_name = $TaskName }
+    }
+    $Xml = Export-ScheduledTask -TaskName $TaskName
+    $XmlBytes = [System.Text.Encoding]::UTF8.GetBytes([string]$Xml)
+    $ActionEvidence = @(
+        $Task.Actions | ForEach-Object {
+            @{
+                execute = [string]$_.Execute
+                arguments = [string]$_.Arguments
+                working_directory = [string]$_.WorkingDirectory
+            }
+        }
+    )
+    return @{
+        exists = $true
+        task_name = $TaskName
+        xml_sha256 = Get-ByteArraySha256 -Bytes $XmlBytes
+        xml_canonical_sha256 = Get-CrlfCanonicalSha256 -Bytes $XmlBytes
+        state = [string]$Task.State
+        task_path = [string]$Task.TaskPath
+        actions = $ActionEvidence
+        trigger_count = @($Task.Triggers).Count
+        user_id = [string]$Task.Principal.UserId
+        logon_type = [string]$Task.Principal.LogonType
+        run_level = [string]$Task.Principal.RunLevel
+        multiple_instances = [string]$Task.Settings.MultipleInstances
+        restart_count = [string]$Task.Settings.RestartCount
+        restart_interval = [string]$Task.Settings.RestartInterval
+        description = [string]$Task.Description
+        durable_enabled = ([string]$Task.State -ne "Disabled")
+    }
+}
+
+function Get-UpdaterEnabledContract {
+    param([Parameter(Mandatory = $true)][string]$State)
+    if ($State -eq "Disabled") { return "disabled" }
+    return "enabled"
+}
+
+function Get-ScheduledTaskBackupXml {
+    param([Parameter(Mandatory = $true)][string]$BackupXmlPath)
+    return (Get-Content -Raw $BackupXmlPath).TrimStart([char]0xFEFF)
+}
+
+function Restore-UpdaterTaskXmlAndEnabledContract {
+    param(
+        [Parameter(Mandatory = $true)][string]$BackupXmlPath,
+        [Parameter(Mandatory = $true)][string]$EnabledContract
+    )
+    $Existing = Get-ScheduledTask -TaskName $UpdateTaskName -ErrorAction SilentlyContinue
+    if ($Existing) {
+        Stop-ScheduledTask -TaskName $UpdateTaskName -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $UpdateTaskName -Confirm:$false
+    }
+    Register-ScheduledTask -TaskName $UpdateTaskName -Xml (Get-ScheduledTaskBackupXml -BackupXmlPath $BackupXmlPath) -Force | Out-Null
+    if ($EnabledContract -eq "disabled") {
+        Disable-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop | Out-Null
+    }
+    else {
+        Enable-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop | Out-Null
+    }
+}
+
+function Get-ActiveReleaseEvidence {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $Evidence = Get-TextFileEvidence -Path $Path
+    if (-not $Evidence.exists) { return $Evidence }
+    $Active = Get-Content -Path $Path -Raw | ConvertFrom-Json
+    $Evidence["commit"] = [string]$Active.commit
+    $Evidence["release_path"] = [string]$Active.release_path
+    if ($Evidence["commit"] -notmatch "^[0-9a-f]{40}$") {
+        throw "active-release.json does not contain a valid exact commit."
+    }
+    if (-not $Evidence["release_path"]) {
+        throw "active-release.json does not contain a release_path."
+    }
+    if (-not (Test-Path $Evidence["release_path"] -PathType Container)) {
+        throw "active-release.json release_path does not exist."
+    }
+    return $Evidence
 }
 
 function Get-ByteArraySha256 {
@@ -193,6 +306,322 @@ function Copy-BootstrapSourceFiles {
         if ($Evidence[$Entry.target]["staged_sha256"] -ne $Evidence[$Entry.target]["new_checkout_sha256"]) {
             throw "Staged bootstrap file $($Entry.target) does not match the reviewed checkout bytes."
         }
+    }
+}
+
+function Add-StagedServiceConfiguration {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstalledBootstrap,
+        [Parameter(Mandatory = $true)][string]$StagedBootstrap,
+        [Parameter(Mandatory = $true)][string]$BootstrapPython,
+        [Parameter(Mandatory = $true)][hashtable]$Evidence
+    )
+    if (-not (Test-Path $BootstrapPython -PathType Leaf)) {
+        throw "Stable supervisor Python not found at $BootstrapPython"
+    }
+    $ProbePath = Join-Path ([System.IO.Path]::GetTempPath()) ("msos-bootstrap-service-config-" + [Guid]::NewGuid().ToString("N") + ".py")
+    $StdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) ("msos-bootstrap-service-config-stdout-" + [Guid]::NewGuid().ToString("N") + ".txt")
+    $StderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ("msos-bootstrap-service-config-stderr-" + [Guid]::NewGuid().ToString("N") + ".txt")
+    $Probe = @"
+import copy
+import json
+import pathlib
+import sys
+import traceback
+
+import yaml
+
+installed = pathlib.Path(sys.argv[1])
+staged = pathlib.Path(sys.argv[2])
+stdout_path = pathlib.Path(sys.argv[3])
+stderr_path = pathlib.Path(sys.argv[4])
+
+old_tasks = [
+    ("host", "MSOS Autobuilder Host"),
+    ("relay", "MSOS Autobuilder Result Relay"),
+    ("gate", "MSOS Autobuilder Candidate Gate"),
+    ("revision", "MSOS Autobuilder Revision Loop"),
+    ("publisher", "MSOS Autobuilder Controlled Publisher"),
+]
+refill_task = {"service": "refill", "task_name": "MSOS Autobuilder Capacity-One Refill"}
+refill_service = {
+    "argv": [
+        "-m",
+        "msos_autobuilder",
+        "refill-run",
+        "--service-config",
+        "{host_root}/service.yaml",
+        "--interval-seconds",
+        "30",
+    ],
+    "log_file": "{host_root}/logs/capacity-one-refill.log",
+}
+
+
+def load_yaml(path):
+    with path.open("r", encoding="utf-8-sig") as handle:
+        value = yaml.safe_load(handle)
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{path} must contain a mapping")
+    return value
+
+
+def load_json(path):
+    with path.open("r", encoding="utf-8-sig") as handle:
+        value = json.load(handle)
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{path} must contain a mapping")
+    return value
+
+
+def main(stdout_file):
+    supervisor = load_yaml(installed / "supervisor.yaml")
+    host_root = supervisor.get("host_root")
+    if not isinstance(host_root, str) or not host_root:
+        raise RuntimeError("supervisor.yaml host_root must be a non-empty string")
+    managed_tasks = supervisor.get("managed_tasks")
+    if not isinstance(managed_tasks, list):
+        raise RuntimeError("supervisor.yaml managed_tasks must be a list")
+    task_pairs = [
+        (str(item.get("service")), str(item.get("task_name")))
+        for item in managed_tasks
+        if isinstance(item, dict)
+    ]
+    if task_pairs != old_tasks:
+        raise RuntimeError(
+            "installed supervisor.yaml must contain exactly the reviewed five managed tasks"
+        )
+    supervisor["managed_tasks"] = [*managed_tasks, refill_task]
+
+    services = load_json(installed / "managed-services.json")
+    service_map = services.get("services")
+    if not isinstance(service_map, dict):
+        raise RuntimeError("managed-services.json services must be a mapping")
+    old_service_names = [name for name, _task_name in old_tasks]
+    if sorted(service_map) != sorted(old_service_names):
+        raise RuntimeError(
+            "installed managed-services.json must contain exactly the reviewed five services"
+        )
+    service_map = copy.deepcopy(service_map)
+    service_map["refill"] = refill_service
+    services["services"] = service_map
+
+    (staged / "supervisor.yaml").write_text(
+        yaml.safe_dump(supervisor, sort_keys=False),
+        encoding="utf-8",
+    )
+    (staged / "managed-services.json").write_text(
+        json.dumps(services, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    stdout_file.write(json.dumps({
+        "host_root": host_root,
+        "managed_tasks": supervisor["managed_tasks"],
+        "semantic_change": {
+            "added_service": refill_service,
+            "added_task": refill_task,
+        },
+        "services": sorted(service_map),
+    }, sort_keys=True))
+    stdout_file.write("\n")
+
+
+with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open(
+    "w",
+    encoding="utf-8",
+) as stderr_file:
+    try:
+        main(stdout_file)
+    except BaseException:
+        traceback.print_exc(file=stderr_file)
+        stderr_file.flush()
+        sys.exit(1)
+"@
+    try {
+        Write-Utf8NoBom -Path $ProbePath -Value $Probe
+        & $BootstrapPython $ProbePath $InstalledBootstrap $StagedBootstrap $StdoutPath $StderrPath
+        $ExitCode = $LASTEXITCODE
+        $Stdout = if (Test-Path $StdoutPath) { Get-Content -Raw -Encoding UTF8 $StdoutPath } else { "" }
+        $Stderr = if (Test-Path $StderrPath) { Get-Content -Raw -Encoding UTF8 $StderrPath } else { "" }
+        if ($ExitCode -ne 0) {
+            throw "Staged service configuration generation failed with exit $ExitCode. stdout:`n$Stdout`nstderr:`n$Stderr"
+        }
+        $Evidence["staged_generation"] = $Stdout | ConvertFrom-Json
+        foreach ($Name in @("supervisor.yaml", "managed-services.json")) {
+            $Path = Join-Path $StagedBootstrap $Name
+            if (-not $Evidence.ContainsKey($Name)) {
+                $Evidence[$Name] = @{}
+            }
+            $Evidence[$Name]["staged"] = Get-TextFileEvidence -Path $Path
+        }
+    }
+    finally {
+        Remove-Item -Force -ErrorAction SilentlyContinue $ProbePath
+        Remove-Item -Force -ErrorAction SilentlyContinue $StdoutPath
+        Remove-Item -Force -ErrorAction SilentlyContinue $StderrPath
+    }
+}
+
+function Register-DisabledRefillTask {
+    param(
+        [Parameter(Mandatory = $true)][string]$SupervisorRoot,
+        [Parameter(Mandatory = $true)][string]$HostRoot,
+        [string]$BackupXmlPath
+    )
+    $RunnerScript = Join-Path $SupervisorRoot "bootstrap\run_windows_managed_service.ps1"
+    $AuthorityTask = Get-ScheduledTask -TaskName $ExistingManagedTaskNames[0] -ErrorAction Stop
+    $AuthorityAction = @($AuthorityTask.Actions)[0]
+    if ($null -eq $AuthorityAction -or -not [string]$AuthorityAction.Execute) {
+        throw "Managed host Scheduled Task does not expose an executable for refill derivation."
+    }
+    $PowerShellExe = [string]$AuthorityAction.Execute
+    $UserId = [string]$AuthorityTask.Principal.UserId
+    if (-not $UserId) {
+        $UserId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    }
+    $LogonType = [string]$AuthorityTask.Principal.LogonType
+    if (-not $LogonType) { $LogonType = "Interactive" }
+    $RunLevel = [string]$AuthorityTask.Principal.RunLevel
+    if (-not $RunLevel) { $RunLevel = "Limited" }
+    $Touched = $false
+    try {
+        $Existing = Get-ScheduledTask -TaskName $RefillTaskName -ErrorAction SilentlyContinue
+        if ($Existing) {
+            Stop-ScheduledTask -TaskName $RefillTaskName -ErrorAction SilentlyContinue
+            $Touched = $true
+            Unregister-ScheduledTask -TaskName $RefillTaskName -Confirm:$false
+        }
+        $Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$RunnerScript`" -ServiceName `"$RefillServiceName`" -SupervisorRoot `"$SupervisorRoot`" -HostRoot `"$HostRoot`""
+        $Action = New-ScheduledTaskAction -Execute $PowerShellExe -Argument $Arguments
+        $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $UserId
+        $Principal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType $LogonType -RunLevel $RunLevel
+        $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+        $Touched = $true
+        Register-ScheduledTask -TaskName $RefillTaskName -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Description "Version-routed MSOS Autobuilder service: $RefillServiceName" -Force | Out-Null
+        Disable-ScheduledTask -TaskName $RefillTaskName -ErrorAction Stop | Out-Null
+        $Refill = Get-ScheduledTask -TaskName $RefillTaskName -ErrorAction Stop
+        if ([string]$Refill.State -ne "Disabled") {
+            throw "Refill Scheduled Task postcondition failed: expected Disabled, found $($Refill.State)."
+        }
+    }
+    catch {
+        if ($Touched) {
+            Restore-RefillTask -BackupXmlPath $BackupXmlPath
+        }
+        throw
+    }
+}
+
+function Assert-InstalledScheduledTaskBaseline {
+    param([Parameter(Mandatory = $true)][hashtable]$Evidence)
+    foreach ($TaskName in $ExistingManagedTaskNames) {
+        if (-not $Evidence[$TaskName].exists) {
+            throw "Installed Scheduled Task baseline is incomplete: missing $TaskName."
+        }
+    }
+    if ($Evidence[$RefillTaskName].exists) {
+        throw "Installed Scheduled Task baseline must be exactly the reviewed five tasks with refill absent."
+    }
+}
+
+function Restore-RefillTask {
+    param([string]$BackupXmlPath)
+    $Existing = Get-ScheduledTask -TaskName $RefillTaskName -ErrorAction SilentlyContinue
+    if ($Existing) {
+        Stop-ScheduledTask -TaskName $RefillTaskName -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $RefillTaskName -Confirm:$false
+    }
+    if ($BackupXmlPath -and (Test-Path $BackupXmlPath -PathType Leaf)) {
+        Register-ScheduledTask -TaskName $RefillTaskName -Xml (Get-Content -Raw $BackupXmlPath) -Force | Out-Null
+    }
+}
+
+function Test-CompleteBootstrapRestoreSource {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path $Path -PathType Container)) { return $false }
+    foreach ($Entry in $BootstrapFileMap) {
+        if (-not (Test-Path (Join-Path $Path $Entry.target) -PathType Leaf)) { return $false }
+    }
+    foreach ($Name in @("supervisor.yaml", "managed-services.json")) {
+        if (-not (Test-Path (Join-Path $Path $Name) -PathType Leaf)) { return $false }
+    }
+    return $true
+}
+
+function Restore-UpdaterTask {
+    param(
+        [Parameter(Mandatory = $true)][string]$BackupXmlPath,
+        [Parameter(Mandatory = $true)][hashtable]$PreflightEvidence
+    )
+    $RestoreError = $null
+    $PreflightState = [string]$PreflightEvidence.state
+    $EnabledContract = Get-UpdaterEnabledContract -State $PreflightState
+    $ExpectedFinalState = if ($EnabledContract -eq "disabled") { "Disabled" } else { "Ready" }
+    $Report.update_task["restore_enabled_contract"] = $EnabledContract
+    $Report.update_task["expected_final_state"] = $ExpectedFinalState
+    try {
+        Restore-UpdaterTaskXmlAndEnabledContract -BackupXmlPath $BackupXmlPath -EnabledContract $EnabledContract
+    }
+    catch {
+        $RestoreError = $_.Exception.Message
+        Restore-UpdaterTaskXmlAndEnabledContract -BackupXmlPath $BackupXmlPath -EnabledContract $EnabledContract
+    }
+    $Final = Get-ScheduledTaskEvidence -TaskName $UpdateTaskName
+    $Report.update_task["final_state"] = [string]$Final.state
+    $Report.update_task["final_xml_sha256"] = [string]$Final.xml_sha256
+    $Report.update_task["final_enabled_contract"] = Get-UpdaterEnabledContract -State ([string]$Final.state)
+    if (-not $Final.exists) {
+        throw "Updater Scheduled Task restoration failed: task is missing."
+    }
+    if ([string]$Final.xml_sha256 -ne [string]$PreflightEvidence.xml_sha256) {
+        throw "Updater Scheduled Task restoration failed: final XML does not match preflight."
+    }
+    if ([string]$Final.state -ne $ExpectedFinalState) {
+        throw "Updater Scheduled Task restoration failed: final state $($Final.state) does not match restored $EnabledContract contract $ExpectedFinalState from preflight $PreflightState."
+    }
+    $Report.update_task["restored"] = $true
+    if ($RestoreError) {
+        $Report.update_task["normal_restore_error"] = $RestoreError
+        $Report.update_task["reregistered_from_preflight_xml"] = $true
+        throw "Updater Scheduled Task normal restore failed and was transactionally restored from preflight XML: $RestoreError"
+    }
+}
+
+function ConvertTo-ComparablePath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    return $Path.TrimEnd("\", "/").Replace("\", "/").ToLowerInvariant()
+}
+
+function Restore-HandoffState {
+    param([Parameter(Mandatory = $true)][string]$Reason)
+    $BootstrapRestored = $false
+    if ($null -ne $ActivationBackup -and (Test-CompleteBootstrapRestoreSource -Path $ActivationBackup)) {
+        if (Test-Path $BootstrapRoot) {
+            Remove-Item -Recurse -Force -ErrorAction Stop $BootstrapRoot
+        }
+        Move-Item -Path $ActivationBackup -Destination $BootstrapRoot
+        $Report.rollback = @{ performed = $true; restored_from = $ActivationBackup; reason = $Reason; refill_task_restored = $false }
+        $script:ActivationBackup = $null
+        $BootstrapRestored = $true
+    }
+    elseif (Test-CompleteBootstrapRestoreSource -Path $RollbackBootstrap) {
+        if (Test-Path $BootstrapRoot) {
+            Remove-Item -Recurse -Force -ErrorAction Stop $BootstrapRoot
+        }
+        Copy-Item -Recurse -Force -Path $RollbackBootstrap -Destination $BootstrapRoot
+        $Report.rollback = @{ performed = $true; restored_from = $RollbackBootstrap; reason = $Reason; refill_task_restored = $false }
+        $BootstrapRestored = $true
+    }
+    elseif ($null -ne $ActivationBackup -and (Test-Path $ActivationBackup)) {
+        throw "Refusing to remove BootstrapRoot without a complete validated rollback bootstrap source."
+    }
+    if (-not $BootstrapRestored -and -not $Report.rollback.ContainsKey("refill_task_restored")) {
+        $Report.rollback["refill_task_restored"] = $false
+    }
+    if ($RefillTaskTouched -and -not $Report.rollback["refill_task_restored"]) {
+        Restore-RefillTask -BackupXmlPath $RefillTaskBackupXml
+        $Report.rollback["refill_task_restored"] = $true
+        $Report.scheduled_tasks["rollback_refill"] = Get-ScheduledTaskEvidence -TaskName $RefillTaskName
     }
 }
 
@@ -383,6 +812,7 @@ with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open(
 }
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
+$HostRoot = $HostRoot.TrimEnd("\", "/")
 $SupervisorRoot = $SupervisorRoot.TrimEnd("\", "/")
 $BootstrapRoot = Join-Path $SupervisorRoot "bootstrap"
 $ReportsRoot = Join-Path $SupervisorRoot "reports"
@@ -393,6 +823,9 @@ $StageRoot = Join-Path $StageParent $AttemptId
 $StagedBootstrap = Join-Path $StageRoot "bootstrap"
 $RollbackBootstrap = Join-Path $RollbackParent ("bootstrap-$ExpectedOldBootstrapCommit-" + (Get-Date -Format "yyyyMMddTHHmmss.fffffffZ"))
 $ActivationBackup = $null
+$RefillTaskBackupXml = $null
+$RefillTaskTouched = $false
+$UpdateTaskBackupXml = $null
 $ReportPath = Join-Path $ReportsRoot ($AttemptId + ".json")
 $ValidationResults = New-Object System.Collections.ArrayList
 $Report = @{
@@ -407,8 +840,10 @@ $Report = @{
     report_path = $ReportPath
     validation_results = @()
     file_hashes = @{}
+    service_configuration = @{}
+    scheduled_tasks = @{}
     activation = @{ performed = $false }
-    rollback = @{ performed = $false }
+    rollback = @{ performed = $false; refill_task_restored = $false }
     update_task = @{ name = $UpdateTaskName; restored = $false }
     outcome = "started"
     errors = @()
@@ -436,22 +871,52 @@ try {
     if (-not (Test-Path $BootstrapRoot -PathType Container)) {
         throw "Installed stable bootstrap not found at $BootstrapRoot"
     }
+    $SupervisorConfigPath = Join-Path $BootstrapRoot "supervisor.yaml"
+    $ManagedServicesPath = Join-Path $BootstrapRoot "managed-services.json"
+    $ActivePointerPath = Join-Path $SupervisorRoot "state\active-release.json"
+    $Report.service_configuration["preflight"] = @{
+        supervisor = Get-TextFileEvidence -Path $SupervisorConfigPath
+        managed_services = Get-TextFileEvidence -Path $ManagedServicesPath
+        active_release = Get-ActiveReleaseEvidence -Path $ActivePointerPath
+    }
+    if (-not $Report.service_configuration["preflight"]["active_release"].exists) {
+        throw "Installed managed release pointer is missing; refusing an unbound bootstrap handoff."
+    }
+    $TaskEvidence = @{}
+    foreach ($TaskName in @($ExistingManagedTaskNames + $RefillTaskName)) {
+        $TaskEvidence[$TaskName] = Get-ScheduledTaskEvidence -TaskName $TaskName
+    }
+    $Report.scheduled_tasks["preflight"] = $TaskEvidence
+    Assert-InstalledScheduledTaskBaseline -Evidence $TaskEvidence
+
     Test-ReportPathWritable -Path $ReportPath
     Get-BootstrapHashEvidence -RepoRoot $RepoRoot -BootstrapRoot $BootstrapRoot -OldCommit $ExpectedOldBootstrapCommit -NewCommit $Commit -Evidence $Report.file_hashes
 
     New-Item -ItemType Directory -Force -Path $StageParent, $RollbackParent, $ReportsRoot | Out-Null
     Copy-Item -Recurse -Force -Path $BootstrapRoot -Destination $StagedBootstrap
     Copy-BootstrapSourceFiles -RepoRoot $RepoRoot -DestinationRoot $StagedBootstrap -Evidence $Report.file_hashes
+    Add-StagedServiceConfiguration -InstalledBootstrap $BootstrapRoot -StagedBootstrap $StagedBootstrap -BootstrapPython $BootstrapPython -Evidence $Report.service_configuration
+    $ConfiguredHostRoot = [string]$Report.service_configuration["staged_generation"].host_root
+    if ((ConvertTo-ComparablePath -Path $ConfiguredHostRoot) -ne (ConvertTo-ComparablePath -Path $HostRoot)) {
+        throw "HostRoot parameter does not match installed supervisor.yaml host_root."
+    }
 
     Invoke-Checked -Name "staged PowerShell parser" -Results $ValidationResults -Command {
         Test-PowerShellScriptsParse -BootstrapRoot $StagedBootstrap
     }
-    Invoke-Checked -Name "staged Python to PowerShell states transport" -Results $ValidationResults -Command {
-        Test-StagedTaskTransport -BootstrapRoot $StagedBootstrap -BootstrapPython $BootstrapPython | ConvertTo-Json -Compress
-    }
 
     $Task = Get-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop
+    $UpdateTaskBackupXml = Join-Path $StageRoot "update-task-before.xml"
+    $UpdateTaskPreflightXml = [string](Export-ScheduledTask -TaskName $UpdateTaskName)
+    $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($UpdateTaskBackupXml, $UpdateTaskPreflightXml, $Utf8NoBom)
+    $UpdateTaskPreflightEvidence = Get-ScheduledTaskEvidence -TaskName $UpdateTaskName
+    $Report.update_task["preflight"] = $UpdateTaskPreflightEvidence
     $Report.update_task["initial_state"] = [string]$Task.State
+    $Report.update_task["preflight_state"] = [string]$UpdateTaskPreflightEvidence.state
+    $Report.update_task["preflight_enabled_contract"] = Get-UpdaterEnabledContract -State ([string]$UpdateTaskPreflightEvidence.state)
+    $Report.update_task["preflight_durable_enabled"] = ([string]$UpdateTaskPreflightEvidence.state -ne "Disabled")
+    $Report.update_task["preflight_xml_sha256"] = [string]$UpdateTaskPreflightEvidence.xml_sha256
     Stop-ScheduledTask -TaskName $UpdateTaskName -ErrorAction SilentlyContinue
     $Deadline = (Get-Date).AddSeconds(30)
     while ((Get-Date) -lt $Deadline) {
@@ -467,6 +932,25 @@ try {
 
     Assert-NoActiveUpdateAttempt -SupervisorRoot $SupervisorRoot
 
+    $ExistingRefillTask = Get-ScheduledTask -TaskName $RefillTaskName -ErrorAction SilentlyContinue
+    if ($ExistingRefillTask) {
+        $RefillTaskBackupXml = Join-Path $StageRoot "refill-task-before.xml"
+        Export-ScheduledTask -TaskName $RefillTaskName | Set-Content -Path $RefillTaskBackupXml -Encoding UTF8
+    }
+    $RefillTaskTouched = $true
+    Register-DisabledRefillTask -SupervisorRoot $SupervisorRoot -HostRoot $HostRoot -BackupXmlPath $RefillTaskBackupXml
+    $Report.scheduled_tasks["staged_refill"] = Get-ScheduledTaskEvidence -TaskName $RefillTaskName
+    if ([string]$Report.scheduled_tasks["staged_refill"].state -ne "Disabled") {
+        throw "Refill task must remain exactly Disabled until a later managed-release cutover."
+    }
+    $RefillAction = @($Report.scheduled_tasks["staged_refill"].actions)[0]
+    if ($null -eq $RefillAction -or [string]$RefillAction.arguments -notlike "*-HostRoot `"$HostRoot`"*") {
+        throw "Refill task HostRoot does not match the installed supervisor configuration."
+    }
+    Invoke-Checked -Name "staged Python to PowerShell states transport" -Results $ValidationResults -Command {
+        Test-StagedTaskTransport -BootstrapRoot $StagedBootstrap -BootstrapPython $BootstrapPython | ConvertTo-Json -Compress
+    }
+
     Copy-Item -Recurse -Force -Path $BootstrapRoot -Destination $RollbackBootstrap
     $ActivationBackup = Join-Path $RollbackParent ("activation-backup-" + [Guid]::NewGuid().ToString("N"))
     Move-Item -Path $BootstrapRoot -Destination $ActivationBackup
@@ -476,48 +960,50 @@ try {
             Add-Content -Path (Join-Path $BootstrapRoot $BootstrapFileMap[0].target) -Value "test-only-corruption"
         }
         Confirm-ActivatedBootstrapHashes -BootstrapRoot $BootstrapRoot -Evidence $Report.file_hashes
+        foreach ($Name in @("supervisor.yaml", "managed-services.json")) {
+            $Report.service_configuration[$Name]["activated"] = Get-TextFileEvidence -Path (Join-Path $BootstrapRoot $Name)
+            if ($Report.service_configuration[$Name]["activated"].sha256 -ne $Report.service_configuration[$Name]["staged"].sha256) {
+                throw "Activated service configuration $Name does not match the staged reviewed handoff content."
+            }
+        }
         $Report.activation = @{
             performed = $true
             activated_bootstrap = $BootstrapRoot
             activation_backup = $ActivationBackup
             activated_hashes_verified = $true
+            service_configuration_verified = $true
+            refill_task_state = [string](Get-ScheduledTask -TaskName $RefillTaskName -ErrorAction Stop).State
         }
-        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $ActivationBackup
-        $ActivationBackup = $null
         $Report.outcome = "success"
     }
     catch {
-        if (Test-Path $BootstrapRoot) {
-            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $BootstrapRoot
-        }
-        if ($null -ne $ActivationBackup -and (Test-Path $ActivationBackup)) {
-            Move-Item -Path $ActivationBackup -Destination $BootstrapRoot
-            $Report.rollback = @{ performed = $true; restored_from = $ActivationBackup; reason = $_.Exception.Message }
-            $ActivationBackup = $null
-        }
+        Restore-HandoffState -Reason $_.Exception.Message
         throw
     }
 }
 catch {
     $Report.errors += $_.Exception.Message
     if ($Report.outcome -eq "started") { $Report.outcome = "failed" }
-    if ($null -ne $ActivationBackup -and (Test-Path $ActivationBackup) -and -not (Test-Path $BootstrapRoot)) {
-        Move-Item -Path $ActivationBackup -Destination $BootstrapRoot
-        $Report.rollback = @{ performed = $true; restored_from = $ActivationBackup; reason = "outer catch restore" }
+    if (
+        ($null -ne $ActivationBackup -and (Test-Path $ActivationBackup)) -or
+        ($RefillTaskTouched -and -not $Report.rollback["refill_task_restored"])
+    ) {
+        Restore-HandoffState -Reason "outer catch restore"
     }
     throw
 }
 finally {
     try {
-        if (Get-ScheduledTask -TaskName $UpdateTaskName -ErrorAction SilentlyContinue) {
-            Enable-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop | Out-Null
-            $Report.update_task["restored"] = $true
-            $Report.update_task["final_state"] = [string](Get-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop).State
+        if ($UpdateTaskBackupXml -and (Test-Path $UpdateTaskBackupXml -PathType Leaf)) {
+            Restore-UpdaterTask -BackupXmlPath $UpdateTaskBackupXml -PreflightEvidence $Report.update_task["preflight"]
         }
     }
     catch {
-        $Report.errors += "Failed to re-enable updater Scheduled Task: $($_.Exception.Message)"
-        if ($Report.outcome -eq "success") { $Report.outcome = "failed_after_activation" }
+        $Report.errors += "Failed to restore updater Scheduled Task: $($_.Exception.Message)"
+        if ($Report.outcome -eq "success") {
+            $Report.outcome = "failed_after_activation"
+            Restore-HandoffState -Reason "updater Scheduled Task restoration failed"
+        }
     }
     $Report.validation_results = @($ValidationResults)
     $Report.recorded_at = [DateTimeOffset]::UtcNow.ToString("o")
@@ -530,11 +1016,18 @@ finally {
     }
     catch {
         $Report.errors += "Could not write stable bootstrap update report: $($_.Exception.Message)"
-        if ($Report.outcome -eq "success") { $Report.outcome = "failed_evidence_missing" }
+        if ($Report.outcome -eq "success") {
+            $Report.outcome = "failed_evidence_missing"
+            Restore-HandoffState -Reason "immutable report persistence failed"
+        }
         throw "Could not write stable bootstrap update report: $($_.Exception.Message)"
     }
     if ($Report.outcome -ne "success") {
         throw "Stable supervisor bootstrap handoff finished with outcome $($Report.outcome)."
+    }
+    if ($null -ne $ActivationBackup -and (Test-Path $ActivationBackup)) {
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $ActivationBackup
+        $ActivationBackup = $null
     }
     Write-Host "Stable supervisor bootstrap updated to $Commit" -ForegroundColor Green
 }

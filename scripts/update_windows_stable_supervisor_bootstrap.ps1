@@ -142,6 +142,37 @@ function Get-ScheduledTaskEvidence {
         restart_count = [string]$Task.Settings.RestartCount
         restart_interval = [string]$Task.Settings.RestartInterval
         description = [string]$Task.Description
+        durable_enabled = ([string]$Task.State -ne "Disabled")
+    }
+}
+
+function Get-UpdaterEnabledContract {
+    param([Parameter(Mandatory = $true)][string]$State)
+    if ($State -eq "Disabled") { return "disabled" }
+    return "enabled"
+}
+
+function Get-ScheduledTaskBackupXml {
+    param([Parameter(Mandatory = $true)][string]$BackupXmlPath)
+    return (Get-Content -Raw $BackupXmlPath).TrimStart([char]0xFEFF)
+}
+
+function Restore-UpdaterTaskXmlAndEnabledContract {
+    param(
+        [Parameter(Mandatory = $true)][string]$BackupXmlPath,
+        [Parameter(Mandatory = $true)][string]$EnabledContract
+    )
+    $Existing = Get-ScheduledTask -TaskName $UpdateTaskName -ErrorAction SilentlyContinue
+    if ($Existing) {
+        Stop-ScheduledTask -TaskName $UpdateTaskName -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $UpdateTaskName -Confirm:$false
+    }
+    Register-ScheduledTask -TaskName $UpdateTaskName -Xml (Get-ScheduledTaskBackupXml -BackupXmlPath $BackupXmlPath) -Force | Out-Null
+    if ($EnabledContract -eq "disabled") {
+        Disable-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop | Out-Null
+    }
+    else {
+        Enable-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop | Out-Null
     }
 }
 
@@ -523,40 +554,30 @@ function Restore-UpdaterTask {
         [Parameter(Mandatory = $true)][hashtable]$PreflightEvidence
     )
     $RestoreError = $null
+    $PreflightState = [string]$PreflightEvidence.state
+    $EnabledContract = Get-UpdaterEnabledContract -State $PreflightState
+    $ExpectedFinalState = if ($EnabledContract -eq "disabled") { "Disabled" } else { "Ready" }
+    $Report.update_task["restore_enabled_contract"] = $EnabledContract
+    $Report.update_task["expected_final_state"] = $ExpectedFinalState
     try {
-        if ([string]$PreflightEvidence.state -eq "Disabled") {
-            Disable-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop | Out-Null
-        }
-        else {
-            Enable-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop | Out-Null
-        }
+        Restore-UpdaterTaskXmlAndEnabledContract -BackupXmlPath $BackupXmlPath -EnabledContract $EnabledContract
     }
     catch {
         $RestoreError = $_.Exception.Message
-        $Existing = Get-ScheduledTask -TaskName $UpdateTaskName -ErrorAction SilentlyContinue
-        if ($Existing) {
-            Stop-ScheduledTask -TaskName $UpdateTaskName -ErrorAction SilentlyContinue
-            Unregister-ScheduledTask -TaskName $UpdateTaskName -Confirm:$false
-        }
-        Register-ScheduledTask -TaskName $UpdateTaskName -Xml (Get-Content -Raw $BackupXmlPath) -Force | Out-Null
-        if ([string]$PreflightEvidence.state -eq "Disabled") {
-            Disable-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop | Out-Null
-        }
-        else {
-            Enable-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop | Out-Null
-        }
+        Restore-UpdaterTaskXmlAndEnabledContract -BackupXmlPath $BackupXmlPath -EnabledContract $EnabledContract
     }
     $Final = Get-ScheduledTaskEvidence -TaskName $UpdateTaskName
     $Report.update_task["final_state"] = [string]$Final.state
     $Report.update_task["final_xml_sha256"] = [string]$Final.xml_sha256
+    $Report.update_task["final_enabled_contract"] = Get-UpdaterEnabledContract -State ([string]$Final.state)
     if (-not $Final.exists) {
         throw "Updater Scheduled Task restoration failed: task is missing."
     }
     if ([string]$Final.xml_sha256 -ne [string]$PreflightEvidence.xml_sha256) {
         throw "Updater Scheduled Task restoration failed: final XML does not match preflight."
     }
-    if ([string]$Final.state -ne [string]$PreflightEvidence.state) {
-        throw "Updater Scheduled Task restoration failed: final state $($Final.state) does not match preflight $($PreflightEvidence.state)."
+    if ([string]$Final.state -ne $ExpectedFinalState) {
+        throw "Updater Scheduled Task restoration failed: final state $($Final.state) does not match restored $EnabledContract contract $ExpectedFinalState from preflight $PreflightState."
     }
     $Report.update_task["restored"] = $true
     if ($RestoreError) {
@@ -886,10 +907,15 @@ try {
 
     $Task = Get-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop
     $UpdateTaskBackupXml = Join-Path $StageRoot "update-task-before.xml"
-    Export-ScheduledTask -TaskName $UpdateTaskName | Set-Content -Path $UpdateTaskBackupXml -Encoding UTF8
+    $UpdateTaskPreflightXml = [string](Export-ScheduledTask -TaskName $UpdateTaskName)
+    $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($UpdateTaskBackupXml, $UpdateTaskPreflightXml, $Utf8NoBom)
     $UpdateTaskPreflightEvidence = Get-ScheduledTaskEvidence -TaskName $UpdateTaskName
     $Report.update_task["preflight"] = $UpdateTaskPreflightEvidence
     $Report.update_task["initial_state"] = [string]$Task.State
+    $Report.update_task["preflight_state"] = [string]$UpdateTaskPreflightEvidence.state
+    $Report.update_task["preflight_enabled_contract"] = Get-UpdaterEnabledContract -State ([string]$UpdateTaskPreflightEvidence.state)
+    $Report.update_task["preflight_durable_enabled"] = ([string]$UpdateTaskPreflightEvidence.state -ne "Disabled")
     $Report.update_task["preflight_xml_sha256"] = [string]$UpdateTaskPreflightEvidence.xml_sha256
     Stop-ScheduledTask -TaskName $UpdateTaskName -ErrorAction SilentlyContinue
     $Deadline = (Get-Date).AddSeconds(30)

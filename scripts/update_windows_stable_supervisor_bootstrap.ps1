@@ -274,7 +274,7 @@ function Test-PidRunning {
 
 function Assert-NoActiveUpdateAttempt {
     param([Parameter(Mandatory = $true)][string]$SupervisorRoot)
-    $LockPath = Join-Path $SupervisorRoot "state\update.lock"
+    $LockPath = Join-Path (Join-Path $SupervisorRoot "state") "update.lock"
     if (-not (Test-Path $LockPath -PathType Leaf)) { return }
     try {
         $Lock = Get-Content -Path $LockPath -Raw | ConvertFrom-Json
@@ -344,6 +344,7 @@ old_tasks = [
     ("publisher", "MSOS Autobuilder Controlled Publisher"),
 ]
 refill_task = {"service": "refill", "task_name": "MSOS Autobuilder Capacity-One Refill"}
+six_tasks = [*old_tasks, (refill_task["service"], refill_task["task_name"])]
 refill_service = {
     "argv": [
         "-m",
@@ -387,23 +388,34 @@ def main(stdout_file):
         for item in managed_tasks
         if isinstance(item, dict)
     ]
-    if task_pairs != old_tasks:
+    if task_pairs == old_tasks:
+        supervisor["managed_tasks"] = [*managed_tasks, refill_task]
+        task_shape = "five-to-six"
+    elif task_pairs == six_tasks:
+        supervisor["managed_tasks"] = managed_tasks
+        task_shape = "six-to-six"
+    else:
         raise RuntimeError(
-            "installed supervisor.yaml must contain exactly the reviewed five managed tasks"
+            "installed supervisor.yaml must contain exactly the reviewed five tasks "
+            "or the accepted six-task repair baseline"
         )
-    supervisor["managed_tasks"] = [*managed_tasks, refill_task]
 
     services = load_json(installed / "managed-services.json")
     service_map = services.get("services")
     if not isinstance(service_map, dict):
         raise RuntimeError("managed-services.json services must be a mapping")
     old_service_names = [name for name, _task_name in old_tasks]
-    if sorted(service_map) != sorted(old_service_names):
-        raise RuntimeError(
-            "installed managed-services.json must contain exactly the reviewed five services"
-        )
     service_map = copy.deepcopy(service_map)
-    service_map["refill"] = refill_service
+    if sorted(service_map) == sorted(old_service_names):
+        service_map["refill"] = refill_service
+        service_shape = "five-to-six"
+    elif sorted(service_map) == sorted([*old_service_names, "refill"]):
+        service_shape = "six-to-six"
+    else:
+        raise RuntimeError(
+            "installed managed-services.json must contain exactly the reviewed five services "
+            "or the accepted six-service repair baseline"
+        )
     services["services"] = service_map
 
     (staged / "supervisor.yaml").write_text(
@@ -418,8 +430,9 @@ def main(stdout_file):
         "host_root": host_root,
         "managed_tasks": supervisor["managed_tasks"],
         "semantic_change": {
-            "added_service": refill_service,
-            "added_task": refill_task,
+            "mode": "preserve-six-service-baseline" if task_shape == "six-to-six" else "add-refill-service",
+            "added_service": None if service_shape == "six-to-six" else refill_service,
+            "added_task": None if task_shape == "six-to-six" else refill_task,
         },
         "services": sorted(service_map),
     }, sort_keys=True))
@@ -520,8 +533,12 @@ function Assert-InstalledScheduledTaskBaseline {
         }
     }
     if ($Evidence[$RefillTaskName].exists) {
-        throw "Installed Scheduled Task baseline must be exactly the reviewed five tasks with refill absent."
+        if ([string]$Evidence[$RefillTaskName].state -ne "Disabled") {
+            throw "Installed Scheduled Task baseline requires refill to be absent or exactly Disabled."
+        }
+        return "six-task-disabled-refill"
     }
+    return "five-task-refill-absent"
 }
 
 function Restore-RefillTask {
@@ -811,6 +828,203 @@ with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open(
     }
 }
 
+function Test-ActivatedLegacyRestartWitness {
+    param(
+        [Parameter(Mandatory = $true)][string]$BootstrapRoot,
+        [Parameter(Mandatory = $true)][string]$BootstrapPython
+    )
+    if (-not (Test-Path $BootstrapPython -PathType Leaf)) {
+        throw "Stable supervisor Python not found at $BootstrapPython"
+    }
+    $ProbePath = Join-Path ([System.IO.Path]::GetTempPath()) ("msos-bootstrap-legacy-restart-" + [Guid]::NewGuid().ToString("N") + ".py")
+    $StdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) ("msos-bootstrap-legacy-restart-stdout-" + [Guid]::NewGuid().ToString("N") + ".txt")
+    $StderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ("msos-bootstrap-legacy-restart-stderr-" + [Guid]::NewGuid().ToString("N") + ".txt")
+    $Probe = @"
+import datetime
+import importlib.util
+import json
+import pathlib
+import sys
+import traceback
+
+bootstrap = pathlib.Path(sys.argv[1])
+stdout_path = pathlib.Path(sys.argv[2])
+stderr_path = pathlib.Path(sys.argv[3])
+
+
+def load_module():
+    module_path = bootstrap / "self_update_supervisor.py"
+    spec = importlib.util.spec_from_file_location("activated_self_update_supervisor", module_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    module_name = spec.name
+    previous = sys.modules.get(module_name)
+    had_previous = module_name in sys.modules
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if had_previous:
+            sys.modules[module_name] = previous
+        else:
+            sys.modules.pop(module_name, None)
+    return module
+
+
+def main(stdout_file):
+    module = load_module()
+    config = module.load_supervisor_config(bootstrap / "supervisor.yaml")
+    active = module._read_active_pointer(config)
+    release_path = pathlib.Path(str(active["release_path"]))
+    selected, disabled = module._release_managed_tasks(config, release_path)
+    controller = module.PowerShellTaskController(config.task_controller_script)
+    health = module.FileHealthVerifier(config, controller)
+    selected_names = [task.task_name for task in selected]
+    disabled_names = [task.task_name for task in disabled]
+    started = datetime.datetime.now(datetime.UTC)
+    controller.stop(selected_names)
+    controller.start(selected_names)
+    if disabled_names:
+        controller.disable(disabled_names)
+    evidence = health.wait_for(str(active["commit"]), started, selected, disabled)
+    stdout_file.write(json.dumps({
+        "active_commit": str(active["commit"]),
+        "selected_services": [task.service for task in selected],
+        "disabled_services": [task.service for task in disabled],
+        "health": evidence,
+    }, sort_keys=True))
+    stdout_file.write("\n")
+    stdout_file.flush()
+
+
+with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open(
+    "w",
+    encoding="utf-8",
+) as stderr_file:
+    try:
+        main(stdout_file)
+    except BaseException:
+        traceback.print_exc(file=stderr_file)
+        stderr_file.flush()
+        sys.exit(1)
+"@
+    try {
+        Write-Utf8NoBom -Path $ProbePath -Value $Probe
+        & $BootstrapPython `
+            $ProbePath `
+            $BootstrapRoot `
+            $StdoutPath `
+            $StderrPath
+        $ExitCode = $LASTEXITCODE
+        $Stdout = if (Test-Path $StdoutPath) { Get-Content -Raw -Encoding UTF8 $StdoutPath } else { "" }
+        $Stderr = if (Test-Path $StderrPath) { Get-Content -Raw -Encoding UTF8 $StderrPath } else { "" }
+        if ($ExitCode -ne 0) {
+            throw "Activated legacy restart witness failed with exit $ExitCode. stdout:`n$Stdout`nstderr:`n$Stderr"
+        }
+        return ($Stdout | ConvertFrom-Json)
+    }
+    finally {
+        Remove-Item -Force -ErrorAction SilentlyContinue $ProbePath
+        Remove-Item -Force -ErrorAction SilentlyContinue $StdoutPath
+        Remove-Item -Force -ErrorAction SilentlyContinue $StderrPath
+    }
+}
+
+function Test-RestoredLegacyRecoveryWitness {
+    param([Parameter(Mandatory = $true)][string]$SupervisorRoot)
+    $StateRoot = Join-Path $SupervisorRoot "state"
+    $ActivePointerPath = Join-Path $StateRoot "active-release.json"
+    $WitnessRoot = Join-Path $StateRoot "service-witnesses"
+    if (-not (Test-Path $ActivePointerPath -PathType Leaf)) {
+        throw "Active release pointer not found during rollback service recovery."
+    }
+    $Active = Get-Content -Path $ActivePointerPath -Raw | ConvertFrom-Json
+    $ReleaseCommit = [string]$Active.commit
+    $ReleasePath = [string]$Active.release_path
+    if ($ReleaseCommit -notmatch "^[0-9a-f]{40}$" -or -not (Test-Path $ReleasePath -PathType Container)) {
+        throw "Active release pointer is malformed during rollback service recovery."
+    }
+    $Selected = @(
+        @{ service = "host"; task_name = "MSOS Autobuilder Host" },
+        @{ service = "relay"; task_name = "MSOS Autobuilder Result Relay" },
+        @{ service = "gate"; task_name = "MSOS Autobuilder Candidate Gate" },
+        @{ service = "revision"; task_name = "MSOS Autobuilder Revision Loop" },
+        @{ service = "publisher"; task_name = "MSOS Autobuilder Controlled Publisher" }
+    )
+    $Disabled = @()
+    $RefillModule = Join-Path (Join-Path (Join-Path $ReleasePath "src") "msos_autobuilder") "refill_controller.py"
+    if (Test-Path $RefillModule -PathType Leaf) {
+        $Selected += @{ service = "refill"; task_name = $RefillTaskName }
+    }
+    else {
+        $Disabled += @{ service = "refill"; task_name = $RefillTaskName }
+    }
+    $Started = [DateTimeOffset]::UtcNow
+    foreach ($Task in $Selected) {
+        Stop-ScheduledTask -TaskName $Task.task_name -ErrorAction SilentlyContinue
+    }
+    foreach ($Task in $Selected) {
+        Enable-ScheduledTask -TaskName $Task.task_name -ErrorAction Stop | Out-Null
+        Start-ScheduledTask -TaskName $Task.task_name -ErrorAction Stop
+    }
+    foreach ($Task in $Disabled) {
+        Stop-ScheduledTask -TaskName $Task.task_name -ErrorAction SilentlyContinue
+        Disable-ScheduledTask -TaskName $Task.task_name -ErrorAction Stop | Out-Null
+    }
+
+    $Deadline = (Get-Date).AddSeconds(30)
+    $LastDetail = @{}
+    while ((Get-Date) -lt $Deadline) {
+        $Healthy = $true
+        $TaskStates = @{}
+        $Witnesses = @{}
+        $DisabledStates = @{}
+        foreach ($Task in $Selected) {
+            $State = [string](Get-ScheduledTask -TaskName $Task.task_name -ErrorAction Stop).State
+            $TaskStates[$Task.task_name] = $State
+            if ($State -ne "Running") { $Healthy = $false }
+            $WitnessPath = Join-Path $WitnessRoot ($Task.service + ".json")
+            if (-not (Test-Path $WitnessPath -PathType Leaf)) {
+                $Healthy = $false
+                continue
+            }
+            try {
+                $Witness = Get-Content -Path $WitnessPath -Raw | ConvertFrom-Json
+                $Witnesses[$Task.service] = $Witness
+                $WitnessStarted = [DateTimeOffset]::Parse([string]$Witness.started_at)
+                if (
+                    [string]$Witness.state -ne "running" -or
+                    [string]$Witness.release_commit -ne $ReleaseCommit -or
+                    $WitnessStarted -lt $Started
+                ) {
+                    $Healthy = $false
+                }
+            }
+            catch {
+                $Healthy = $false
+                $Witnesses[$Task.service] = @{ error = $_.Exception.Message }
+            }
+        }
+        foreach ($Task in $Disabled) {
+            $State = [string](Get-ScheduledTask -TaskName $Task.task_name -ErrorAction Stop).State
+            $TaskStates[$Task.task_name] = $State
+            $DisabledStates[$Task.service] = $State
+            if ($State -ne "Disabled") { $Healthy = $false }
+        }
+        $LastDetail = @{
+            active_commit = $ReleaseCommit
+            selected_services = @($Selected | ForEach-Object { $_.service })
+            disabled_services = @($Disabled | ForEach-Object { $_.service })
+            task_states = $TaskStates
+            disabled_task_states = $DisabledStates
+            witnesses = $Witnesses
+        }
+        if ($Healthy) { return $LastDetail }
+        Start-Sleep -Milliseconds 500
+    }
+    throw "Rollback service recovery did not produce fresh healthy witnesses: $($LastDetail | ConvertTo-Json -Depth 20 -Compress)"
+}
+
 $RepoRoot = (Resolve-Path $RepoRoot).Path
 $HostRoot = $HostRoot.TrimEnd("\", "/")
 $SupervisorRoot = $SupervisorRoot.TrimEnd("\", "/")
@@ -825,6 +1039,7 @@ $RollbackBootstrap = Join-Path $RollbackParent ("bootstrap-$ExpectedOldBootstrap
 $ActivationBackup = $null
 $RefillTaskBackupXml = $null
 $RefillTaskTouched = $false
+$LegacyRestartWitnessStarted = $false
 $UpdateTaskBackupXml = $null
 $ReportPath = Join-Path $ReportsRoot ($AttemptId + ".json")
 $ValidationResults = New-Object System.Collections.ArrayList
@@ -873,7 +1088,7 @@ try {
     }
     $SupervisorConfigPath = Join-Path $BootstrapRoot "supervisor.yaml"
     $ManagedServicesPath = Join-Path $BootstrapRoot "managed-services.json"
-    $ActivePointerPath = Join-Path $SupervisorRoot "state\active-release.json"
+    $ActivePointerPath = Join-Path (Join-Path $SupervisorRoot "state") "active-release.json"
     $Report.service_configuration["preflight"] = @{
         supervisor = Get-TextFileEvidence -Path $SupervisorConfigPath
         managed_services = Get-TextFileEvidence -Path $ManagedServicesPath
@@ -887,7 +1102,8 @@ try {
         $TaskEvidence[$TaskName] = Get-ScheduledTaskEvidence -TaskName $TaskName
     }
     $Report.scheduled_tasks["preflight"] = $TaskEvidence
-    Assert-InstalledScheduledTaskBaseline -Evidence $TaskEvidence
+    $InstalledTaskBaselineMode = Assert-InstalledScheduledTaskBaseline -Evidence $TaskEvidence
+    $Report.scheduled_tasks["baseline_mode"] = $InstalledTaskBaselineMode
 
     Test-ReportPathWritable -Path $ReportPath
     Get-BootstrapHashEvidence -RepoRoot $RepoRoot -BootstrapRoot $BootstrapRoot -OldCommit $ExpectedOldBootstrapCommit -NewCommit $Commit -Evidence $Report.file_hashes
@@ -937,8 +1153,10 @@ try {
         $RefillTaskBackupXml = Join-Path $StageRoot "refill-task-before.xml"
         Export-ScheduledTask -TaskName $RefillTaskName | Set-Content -Path $RefillTaskBackupXml -Encoding UTF8
     }
-    $RefillTaskTouched = $true
-    Register-DisabledRefillTask -SupervisorRoot $SupervisorRoot -HostRoot $HostRoot -BackupXmlPath $RefillTaskBackupXml
+    if ($InstalledTaskBaselineMode -eq "five-task-refill-absent") {
+        $RefillTaskTouched = $true
+        Register-DisabledRefillTask -SupervisorRoot $SupervisorRoot -HostRoot $HostRoot -BackupXmlPath $RefillTaskBackupXml
+    }
     $Report.scheduled_tasks["staged_refill"] = Get-ScheduledTaskEvidence -TaskName $RefillTaskName
     if ([string]$Report.scheduled_tasks["staged_refill"].state -ne "Disabled") {
         throw "Refill task must remain exactly Disabled until a later managed-release cutover."
@@ -966,6 +1184,8 @@ try {
                 throw "Activated service configuration $Name does not match the staged reviewed handoff content."
             }
         }
+        $LegacyRestartWitnessStarted = $true
+        $RestartWitness = Test-ActivatedLegacyRestartWitness -BootstrapRoot $BootstrapRoot -BootstrapPython $BootstrapPython
         $Report.activation = @{
             performed = $true
             activated_bootstrap = $BootstrapRoot
@@ -973,11 +1193,27 @@ try {
             activated_hashes_verified = $true
             service_configuration_verified = $true
             refill_task_state = [string](Get-ScheduledTask -TaskName $RefillTaskName -ErrorAction Stop).State
+            legacy_restart_witness = $RestartWitness
         }
         $Report.outcome = "success"
     }
     catch {
-        Restore-HandoffState -Reason $_.Exception.Message
+        $ActivationError = $_.Exception.Message
+        Restore-HandoffState -Reason $ActivationError
+        if ($LegacyRestartWitnessStarted) {
+            try {
+                $Recovery = Test-RestoredLegacyRecoveryWitness -SupervisorRoot $SupervisorRoot
+                $Report.rollback["service_recovery"] = $Recovery
+                $Report.rollback["service_recovery_passed"] = $true
+                $Report.outcome = "rolled_back"
+            }
+            catch {
+                $Report.rollback["service_recovery_passed"] = $false
+                $Report.rollback["service_recovery_error"] = $_.Exception.Message
+                $Report.outcome = "rollback_failed"
+                $Report.errors += "Rollback service recovery failed: $($_.Exception.Message)"
+            }
+        }
         throw
     }
 }

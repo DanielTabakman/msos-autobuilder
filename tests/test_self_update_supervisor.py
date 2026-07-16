@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -15,6 +16,7 @@ import yaml
 from msos_autobuilder.self_update_supervisor import (
     CheckResult,
     ExpectedFile,
+    ManagedTask,
     ManifestError,
     ReleaseBuilder,
     StagedRelease,
@@ -82,12 +84,48 @@ def _config(tmp_path: Path) -> SupervisorConfig:
     )
 
 
+def _six_service_config(tmp_path: Path) -> SupervisorConfig:
+    base = _config(tmp_path)
+    return SupervisorConfig(
+        **{
+            **base.__dict__,
+            "managed_tasks": (
+                ManagedTask("host", "MSOS Autobuilder Host"),
+                ManagedTask("relay", "MSOS Autobuilder Result Relay"),
+                ManagedTask("gate", "MSOS Autobuilder Candidate Gate"),
+                ManagedTask("revision", "MSOS Autobuilder Revision Loop"),
+                ManagedTask("publisher", "MSOS Autobuilder Controlled Publisher"),
+                ManagedTask("refill", "MSOS Autobuilder Capacity-One Refill"),
+            ),
+            "health_stability_seconds": 0.0,
+        }
+    )
+
+
 def _release(config: SupervisorConfig, commit: str) -> Path:
     path = config.versions_root / commit
     path.mkdir(parents=True)
     (path / "release.json").write_text(
         json.dumps({"version": 1, "commit": commit}) + "\n", encoding="utf-8"
     )
+    return path
+
+
+def _release_with_modules(config: SupervisorConfig, commit: str, *, refill: bool) -> Path:
+    path = _release(config, commit)
+    package = path / "src" / "msos_autobuilder"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    for module_name in (
+        "persistent_host",
+        "results_relay",
+        "candidate_gate_revisions",
+        "revision_loop",
+        "controlled_publisher",
+    ):
+        (package / f"{module_name}.py").write_text("# fixture\n", encoding="utf-8")
+    if refill:
+        (package / "refill_controller.py").write_text("# fixture\n", encoding="utf-8")
     return path
 
 
@@ -202,6 +240,9 @@ class FakeTasks:
     def start(self, task_names: Sequence[str]) -> None:
         self.calls.append(("start", tuple(task_names)))
 
+    def disable(self, task_names: Sequence[str]) -> None:
+        self.calls.append(("disable", tuple(task_names)))
+
     def states(self, task_names: Sequence[str]) -> dict[str, str]:
         return {name: "Running" for name in task_names}
 
@@ -223,7 +264,13 @@ class FakeHealth:
         self.outcomes = outcomes
         self.calls: list[str] = []
 
-    def wait_for(self, commit: str, not_before: datetime) -> dict[str, Any]:
+    def wait_for(
+        self,
+        commit: str,
+        not_before: datetime,
+        managed_tasks: Sequence[ManagedTask] | None = None,
+        disabled_tasks: Sequence[ManagedTask] = (),
+    ) -> dict[str, Any]:
         assert not_before.tzinfo is UTC
         self.calls.append(commit)
         outcome = self.outcomes.pop(0)
@@ -329,6 +376,108 @@ def test_failed_health_automatically_restores_previous_release(tmp_path: Path) -
     assert json.loads(config.active_pointer.read_text())["commit"] == "1" * 40
     ledger = json.loads(config.ledger_path.read_text())
     assert ledger["commits"]["a" * 40]["outcome"] == "rolled_back"
+
+
+def test_failed_six_service_cutover_restores_legacy_five_service_release(
+    tmp_path: Path,
+) -> None:
+    config = _six_service_config(tmp_path)
+    previous = _release_with_modules(config, "1" * 40, refill=False)
+    broken = _release_with_modules(config, "a" * 40, refill=True)
+    _write_active_pointer(config, "1" * 40, previous)
+    builder = FakeBuilder(staged=StagedRelease("a" * 40, broken, ()))
+    tasks = FakeTasks()
+    health = FakeHealth(
+        [
+            SupervisorError("six-service release failed after pointer swap"),
+            {
+                "task_states": {
+                    "MSOS Autobuilder Host": "Running",
+                    "MSOS Autobuilder Result Relay": "Running",
+                    "MSOS Autobuilder Candidate Gate": "Running",
+                    "MSOS Autobuilder Revision Loop": "Running",
+                    "MSOS Autobuilder Controlled Publisher": "Running",
+                    "MSOS Autobuilder Capacity-One Refill": "Disabled",
+                },
+                "service_set": ["host", "relay", "gate", "revision", "publisher"],
+                "disabled_task_states": {"refill": "Disabled"},
+            },
+        ]
+    )
+
+    report, _ = _supervisor(config, builder, tasks, health).apply(_manifest_text())
+
+    assert report.outcome == "rolled_back"
+    assert report.cutover["from_service_set"] == [
+        "host",
+        "relay",
+        "gate",
+        "revision",
+        "publisher",
+    ]
+    assert report.cutover["to_service_set"] == [
+        "host",
+        "relay",
+        "gate",
+        "revision",
+        "publisher",
+        "refill",
+    ]
+    assert report.rollback["service_set"] == [
+        "host",
+        "relay",
+        "gate",
+        "revision",
+        "publisher",
+    ]
+    assert report.rollback["disabled_services"] == ["refill"]
+    assert report.rollback["disabled_task_states"] == {"refill": "Disabled"}
+    assert tasks.calls == [
+        (
+            "stop",
+            (
+                "MSOS Autobuilder Host",
+                "MSOS Autobuilder Result Relay",
+                "MSOS Autobuilder Candidate Gate",
+                "MSOS Autobuilder Revision Loop",
+                "MSOS Autobuilder Controlled Publisher",
+            ),
+        ),
+        (
+            "start",
+            (
+                "MSOS Autobuilder Host",
+                "MSOS Autobuilder Result Relay",
+                "MSOS Autobuilder Candidate Gate",
+                "MSOS Autobuilder Revision Loop",
+                "MSOS Autobuilder Controlled Publisher",
+                "MSOS Autobuilder Capacity-One Refill",
+            ),
+        ),
+        (
+            "stop",
+            (
+                "MSOS Autobuilder Host",
+                "MSOS Autobuilder Result Relay",
+                "MSOS Autobuilder Candidate Gate",
+                "MSOS Autobuilder Revision Loop",
+                "MSOS Autobuilder Controlled Publisher",
+                "MSOS Autobuilder Capacity-One Refill",
+            ),
+        ),
+        (
+            "start",
+            (
+                "MSOS Autobuilder Host",
+                "MSOS Autobuilder Result Relay",
+                "MSOS Autobuilder Candidate Gate",
+                "MSOS Autobuilder Revision Loop",
+                "MSOS Autobuilder Controlled Publisher",
+            ),
+        ),
+        ("disable", ("MSOS Autobuilder Capacity-One Refill",)),
+    ]
+    assert json.loads(config.active_pointer.read_text())["commit"] == "1" * 40
 
 
 def test_task_start_failure_after_pointer_swap_still_restores_previous_release(
@@ -484,6 +633,96 @@ def test_release_builder_fetches_and_verifies_only_exact_commit(tmp_path: Path) 
     assert verifier.calls == [("fixture/repo", commit, ("CI", "Windows Smoke"))]
     reused = builder.stage(manifest)
     assert reused.reused is True
+
+
+def test_release_builder_stages_legacy_release_without_refill_controller(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "legacy-source"
+    source.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=source, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=source, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=source, check=True)
+    (source / "pyproject.toml").write_text("[project]\nname='fixture'\n", encoding="utf-8")
+    package = source / "src" / "msos_autobuilder"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    supervisor = package / "self_update_supervisor.py"
+    supervisor.write_text("# fixture supervisor\n", encoding="utf-8")
+    for module_name in (
+        "persistent_host",
+        "results_relay",
+        "candidate_gate_revisions",
+        "revision_loop",
+        "controlled_publisher",
+    ):
+        (package / f"{module_name}.py").write_text("# fixture\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=source, check=True)
+    subprocess.run(["git", "commit", "-qm", "legacy fixture"], cwd=source, check=True)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
+
+    config = _config(tmp_path)
+    config = SupervisorConfig(
+        **{
+            **config.__dict__,
+            "repo_url": str(source),
+            "repository": "fixture/repo",
+            "release_probe_script": Path(__file__).resolve().parents[1]
+            / "scripts"
+            / "managed_release_health_probe.py",
+        }
+    )
+    raw = _manifest_dict(
+        commit=commit,
+        file_hash=hashlib.sha256((source / "pyproject.toml").read_bytes()).hexdigest(),
+    )
+    raw["repository"] = "fixture/repo"
+    raw["repo_url"] = str(source)
+    raw["expected_files"][1]["sha256"] = hashlib.sha256(supervisor.read_bytes()).hexdigest()
+    raw["manifest_sha256"] = compute_manifest_sha256(raw)
+    manifest = parse_update_manifest(yaml.safe_dump(raw))
+
+    def executor(argv: Sequence[str], cwd: Path, timeout: float) -> CheckResult:
+        if argv[0] == "git":
+            return _hybrid_executor(argv, cwd, timeout)
+        if len(argv) >= 3 and Path(argv[1]).name == "managed_release_health_probe.py":
+            completed = subprocess.run(
+                [sys.executable, *argv[1:]],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=timeout,
+            )
+            return CheckResult(
+                name="raw",
+                argv=tuple(str(part) for part in argv),
+                cwd=str(cwd),
+                returncode=completed.returncode,
+                duration_seconds=0.0,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+            )
+        return CheckResult(
+            name="raw",
+            argv=tuple(str(part) for part in argv),
+            cwd=str(cwd),
+            returncode=0,
+            duration_seconds=0.0,
+        )
+
+    staged = ReleaseBuilder(
+        config,
+        status_verifier=RecordingStatusVerifier(),
+        command_executor=executor,
+    ).stage(manifest)
+
+    assert staged.commit == commit
+    assert not (staged.release_path / "src" / "msos_autobuilder" / "refill_controller.py").exists()
+    probe_check = next(check for check in staged.checks if check.name == "release-health-probe")
+    assert "msos_autobuilder.refill_controller" not in probe_check.stdout
 
 
 def test_public_update_manifest_example_is_canonically_hashed() -> None:

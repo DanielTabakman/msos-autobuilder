@@ -105,8 +105,21 @@ def test_stable_probe_requires_modules_to_resolve_inside_selected_release(
         module.__file__ = str(path)
         return module
 
+    legacy_imported = probe.probe_release(root, importer=importer)
+    assert "msos_autobuilder.refill_controller" not in legacy_imported
+    (root / "src" / "msos_autobuilder" / "refill_controller.py").parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    (root / "src" / "msos_autobuilder" / "refill_controller.py").write_text(
+        "# fixture\n",
+        encoding="utf-8",
+    )
     imported = probe.probe_release(root, importer=importer)
     assert set(imported) == set(probe.MANAGED_MODULES)
+    assert set(probe.probe_release(root, "host", importer=importer)) == {
+        "msos_autobuilder.persistent_host"
+    }
 
     outside = tmp_path / "outside.py"
     outside.write_text("# outside\n", encoding="utf-8")
@@ -123,7 +136,7 @@ def test_stable_probe_requires_modules_to_resolve_inside_selected_release(
 def test_task_controller_can_touch_only_explicit_task_names() -> None:
     script = TASK_CONTROL.read_text(encoding="utf-8")
 
-    assert '[ValidateSet("stop", "start", "states")]' in script
+    assert '[ValidateSet("stop", "start", "disable", "states")]' in script
     assert "[Console]::In.ReadToEnd()" in script
     assert "$TaskNamesJson | ConvertFrom-Json" in script
     assert "Get-ScheduledTask -TaskName $Name" in script
@@ -301,6 +314,9 @@ def _build_stable_bootstrap_handoff_fixture(
                 f"'{(live_bootstrap / 'windows_self_update_task_control.ps1').as_posix()}'",
                 "release_probe_script: "
                 f"'{(live_bootstrap / 'managed_release_health_probe.py').as_posix()}'",
+                "health_timeout_seconds: 5",
+                "health_poll_seconds: 0.1",
+                "health_stability_seconds: 0",
                 "managed_tasks:",
                 "  - service: host",
                 "    task_name: 'MSOS Autobuilder Host'",
@@ -386,6 +402,40 @@ def _convert_installed_bootstrap_to_crlf(fixture: dict[str, object]) -> None:
         path.write_bytes(original.replace(b"\n", b"\r\n"))
 
 
+def _convert_installed_bootstrap_to_six_service_baseline(fixture: dict[str, object]) -> None:
+    live_bootstrap = fixture["live_bootstrap"]
+    assert isinstance(live_bootstrap, Path)
+    supervisor_yaml = live_bootstrap / "supervisor.yaml"
+    supervisor_text = supervisor_yaml.read_text(encoding="utf-8")
+    supervisor_text = supervisor_text.replace(
+        "  - service: publisher\n    task_name: 'MSOS Autobuilder Controlled Publisher'\n",
+        "  - service: publisher\n"
+        "    task_name: 'MSOS Autobuilder Controlled Publisher'\n"
+        "  - service: refill\n"
+        "    task_name: 'MSOS Autobuilder Capacity-One Refill'\n",
+    )
+    supervisor_yaml.write_text(supervisor_text, encoding="utf-8")
+
+    services_path = live_bootstrap / "managed-services.json"
+    services = json.loads(services_path.read_text(encoding="utf-8"))
+    services["services"]["refill"] = {
+        "argv": [
+            "-m",
+            "msos_autobuilder",
+            "refill-run",
+            "--service-config",
+            "{host_root}/service.yaml",
+            "--interval-seconds",
+            "30",
+        ],
+        "log_file": "{host_root}/logs/capacity-one-refill.log",
+    }
+    services_path.write_text(
+        json.dumps(services, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _read_handoff_report(fixture: dict[str, object]) -> dict[str, object]:
     supervisor = fixture["supervisor"]
     assert isinstance(supervisor, Path)
@@ -436,13 +486,61 @@ def _stubbed_task_control_script(
         [
             "$CallsPath = $env:MSOS_STUBBED_TASK_CALLS_PATH",
             "if (-not $CallsPath) { throw 'MSOS_STUBBED_TASK_CALLS_PATH is required.' }",
+            "$StubbedSupervisorRoot = $env:MSOS_STUBBED_SUPERVISOR_ROOT",
+            "$script:StubbedStartCount = 0",
             "function Add-Call([string]$Action, [string]$Name) {",
             "    [pscustomobject]@{ action = $Action; name = $Name } |",
             "        ConvertTo-Json -Compress |",
             "        Add-Content -Path $CallsPath -Encoding UTF8",
             "}",
+            "function Get-ServiceName([string]$TaskName) {",
+            "    if ($TaskName -eq 'MSOS Autobuilder Host') { return 'host' }",
+            "    if ($TaskName -eq 'MSOS Autobuilder Result Relay') { return 'relay' }",
+            "    if ($TaskName -eq 'MSOS Autobuilder Candidate Gate') { return 'gate' }",
+            "    if ($TaskName -eq 'MSOS Autobuilder Revision Loop') { return 'revision' }",
+            "    if ($TaskName -eq 'MSOS Autobuilder Controlled Publisher') { return 'publisher' }",
+            "    if ($TaskName -eq 'MSOS Autobuilder Capacity-One Refill') { return 'refill' }",
+            "    return $null",
+            "}",
+            "function Get-RefillDisabledMarker {",
+            "    if (-not $StubbedSupervisorRoot) { return $null }",
+            "    $StateRoot = Join-Path $StubbedSupervisorRoot 'state'",
+            "    return Join-Path $StateRoot 'refill-disabled.marker'",
+            "}",
+            "function Write-StubbedWitness([string]$TaskName) {",
+            "    if (-not $StubbedSupervisorRoot) { return }",
+            "    $Service = Get-ServiceName $TaskName",
+            "    if (-not $Service) { return }",
+            "    $StateRoot = Join-Path $StubbedSupervisorRoot 'state'",
+            "    $ActivePath = Join-Path $StateRoot 'active-release.json'",
+            "    if (-not (Test-Path $ActivePath -PathType Leaf)) { return }",
+            "    $Active = Get-Content -Raw $ActivePath | ConvertFrom-Json",
+            "    $WitnessRoot = Join-Path $StateRoot 'service-witnesses'",
+            "    New-Item -ItemType Directory -Force -Path $WitnessRoot | Out-Null",
+            "    $Json = (@{",
+            "        version = 1",
+            "        service = $Service",
+            "        state = 'running'",
+            "        release_commit = [string]$Active.commit",
+            "        child_pid = 1",
+            "        started_at = [DateTimeOffset]::UtcNow.ToString('o')",
+            "    } | ConvertTo-Json -Depth 10) + [Environment]::NewLine",
+            "    $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)",
+            "    $WitnessPath = Join-Path $WitnessRoot ($Service + '.json')",
+            "    [System.IO.File]::WriteAllText($WitnessPath, $Json, $Utf8NoBom)",
+            "}",
             "function Get-ScheduledTask {",
             "    param([string]$TaskName, [object]$ErrorAction)",
+            "    $Marker = Get-RefillDisabledMarker",
+            "    if (",
+            "        $TaskName -eq 'MSOS Autobuilder Capacity-One Refill' -and",
+            "        $Marker -and",
+            "        (Test-Path $Marker -PathType Leaf)",
+            "    ) {",
+            "        Add-Call -Action 'get' -Name $TaskName",
+            "        [pscustomobject]@{ TaskName = $TaskName; State = 'Disabled' }",
+            "        return",
+            "    }",
             get_body.rstrip(),
             "}",
             "function Stop-ScheduledTask {",
@@ -453,9 +551,28 @@ def _stubbed_task_control_script(
             "    param([string]$TaskName, [object]$ErrorAction)",
             "    Add-Call -Action 'enable' -Name $TaskName",
             "}",
+            "function Disable-ScheduledTask {",
+            "    param([string]$TaskName, [object]$ErrorAction)",
+            "    Add-Call -Action 'disable' -Name $TaskName",
+            "    $Marker = Get-RefillDisabledMarker",
+            "    if ($TaskName -eq 'MSOS Autobuilder Capacity-One Refill' -and $Marker) {",
+            "        $MarkerParent = Split-Path -Parent $Marker",
+            "        New-Item -ItemType Directory -Force -Path $MarkerParent | Out-Null",
+            "        Set-Content -Path $Marker -Value 'disabled' -Encoding UTF8",
+            "    }",
+            "}",
             "function Start-ScheduledTask {",
             "    param([string]$TaskName, [object]$ErrorAction)",
             "    Add-Call -Action 'start' -Name $TaskName",
+            "    $FailAfter = [int]($env:MSOS_STUBBED_FAIL_START_AFTER_COUNT -as [int])",
+            "    if ($FailAfter -gt 0 -and (Get-ServiceName $TaskName) -and "
+            "$TaskName -ne 'MSOS Autobuilder Capacity-One Refill') {",
+            "        $script:StubbedStartCount += 1",
+            "        if ($script:StubbedStartCount -ge $FailAfter) {",
+            "            throw 'simulated restart witness start failure'",
+            "        }",
+            "    }",
+            "    Write-StubbedWitness $TaskName",
             "}",
             "",
         ]
@@ -495,6 +612,35 @@ function Add-Call([string]$Action, [string]$Name) {{
         ConvertTo-Json -Compress |
         Add-Content -Path $CallsPath -Encoding UTF8
 }}
+function Get-ServiceName([string]$TaskName) {{
+    if ($TaskName -eq 'MSOS Autobuilder Host') {{ return 'host' }}
+    if ($TaskName -eq 'MSOS Autobuilder Result Relay') {{ return 'relay' }}
+    if ($TaskName -eq 'MSOS Autobuilder Candidate Gate') {{ return 'gate' }}
+    if ($TaskName -eq 'MSOS Autobuilder Revision Loop') {{ return 'revision' }}
+    if ($TaskName -eq 'MSOS Autobuilder Controlled Publisher') {{ return 'publisher' }}
+    if ($TaskName -eq 'MSOS Autobuilder Capacity-One Refill') {{ return 'refill' }}
+    return $null
+}}
+function Write-OuterStubbedWitness([string]$TaskName) {{
+    $Service = Get-ServiceName $TaskName
+    if (-not $Service) {{ return }}
+    $ActivePath = Join-Path (Join-Path '{supervisor.as_posix()}' 'state') 'active-release.json'
+    if (-not (Test-Path $ActivePath -PathType Leaf)) {{ return }}
+    $Active = Get-Content -Raw $ActivePath | ConvertFrom-Json
+    $WitnessRoot = Join-Path (Join-Path '{supervisor.as_posix()}' 'state') 'service-witnesses'
+    New-Item -ItemType Directory -Force -Path $WitnessRoot | Out-Null
+    $Json = (@{{
+        version = 1
+        service = $Service
+        state = 'running'
+        release_commit = [string]$Active.commit
+        child_pid = 1
+        started_at = [DateTimeOffset]::UtcNow.ToString('o')
+    }} | ConvertTo-Json -Depth 10) + [Environment]::NewLine
+    $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $WitnessPath = Join-Path $WitnessRoot ($Service + '.json')
+    [System.IO.File]::WriteAllText($WitnessPath, $Json, $Utf8NoBom)
+}}
 function Get-ScheduledTask {{
     param([string]$TaskName, [object]$ErrorAction)
     Add-Call -Action 'get' -Name $TaskName
@@ -515,7 +661,10 @@ function Get-ScheduledTask {{
         $Execute = 'pwsh'
         $Arguments = '-NoProfile -File invoke_windows_self_update.ps1'
     }} else {{
-        $State = 'Ready'
+        if (-not $global:ManagedTaskStates.ContainsKey($TaskName)) {{
+            $global:ManagedTaskStates[$TaskName] = 'Ready'
+        }}
+        $State = $global:ManagedTaskStates[$TaskName]
         $Execute = 'pwsh'
         $Arguments = '-NoProfile -File run_windows_managed_service.ps1 -ServiceName host'
     }}
@@ -546,6 +695,9 @@ function Stop-ScheduledTask {{
     param([string]$TaskName, [object]$ErrorAction)
     Add-Call -Action 'stop' -Name $TaskName
     if ($TaskName -eq 'MSOS Autobuilder Update Supervisor') {{ $global:UpdateTaskState = 'Ready' }}
+    if (Get-ServiceName $TaskName) {{
+        $global:ManagedTaskStates[$TaskName] = 'Ready'
+    }}
 }}
 function Disable-ScheduledTask {{
     param([string]$TaskName, [object]$ErrorAction)
@@ -560,12 +712,24 @@ function Enable-ScheduledTask {{
     param([string]$TaskName, [object]$ErrorAction)
     Add-Call -Action 'enable' -Name $TaskName
     if ($TaskName -eq 'MSOS Autobuilder Update Supervisor') {{ $global:UpdateTaskState = 'Ready' }}
+    if (Get-ServiceName $TaskName) {{
+        $global:ManagedTaskStates[$TaskName] = 'Ready'
+    }}
     [pscustomobject]@{{ TaskName = $TaskName; State = 'Ready' }}
+}}
+function Start-ScheduledTask {{
+    param([string]$TaskName, [object]$ErrorAction)
+    Add-Call -Action 'start' -Name $TaskName
+    if (Get-ServiceName $TaskName) {{
+        $global:ManagedTaskStates[$TaskName] = 'Running'
+    }}
+    Write-OuterStubbedWitness $TaskName
 }}
 $global:RefillRegistered = $false
 $global:RefillState = 'Ready'
 $global:RefillAction = $null
 $global:UpdateTaskState = 'Ready'
+$global:ManagedTaskStates = @{{}}
 $global:UpdateTaskXml = @'
 <Task><RegistrationInfo><URI>\\MSOS Autobuilder Update Supervisor</URI></RegistrationInfo></Task>
 '@
@@ -630,6 +794,7 @@ function Register-ScheduledTask {{
     }}
 }}
 $env:MSOS_STUBBED_TASK_CALLS_PATH = '{nested_calls_path.as_posix()}'
+$env:MSOS_STUBBED_SUPERVISOR_ROOT = '{supervisor.as_posix()}'
 {before_script}
 & '{BOOTSTRAP_HANDOFF.as_posix()}' `
     -Commit '{new_commit}' `
@@ -760,7 +925,9 @@ def test_stable_bootstrap_handoff_runs_with_temp_root_and_stubbed_tasks(
         .read_text(encoding="utf-8-sig")
         .splitlines()
     ]
-    assert [call["name"] for call in nested_calls if call["action"] == "get"] == MANAGED_TASK_NAMES
+    assert [call["name"] for call in nested_calls if call["action"] == "get"][
+        : len(MANAGED_TASK_NAMES)
+    ] == MANAGED_TASK_NAMES
     assert any(
         call["action"] == "register" and call["name"] == "MSOS Autobuilder Capacity-One Refill"
         for call in calls
@@ -869,6 +1036,158 @@ $global:UpdateTaskXml = '{preflight_xml}'
     ]
     assert "register" in refill_actions
     assert "disable" in refill_actions
+
+
+def test_stable_bootstrap_handoff_repairs_current_six_task_state_without_reregistering_refill(
+    tmp_path: Path,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    host_root = fixture["host_root"]
+    assert isinstance(host_root, Path)
+    before_script = f"""
+$global:RefillRegistered = $true
+$global:RefillState = 'Disabled'
+$global:RefillAction = [pscustomobject]@{{
+    Execute = 'pwsh'
+    Arguments = (
+        '-NoProfile -File run_windows_managed_service.ps1 ' +
+        '-ServiceName refill -HostRoot "{host_root.as_posix()}"'
+    )
+}}
+"""
+
+    result, calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=before_script,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    report = _read_handoff_report(fixture)
+    assert report["outcome"] == "success"
+    assert report["scheduled_tasks"]["baseline_mode"] == "six-task-disabled-refill"
+    assert report["scheduled_tasks"]["preflight"]["MSOS Autobuilder Capacity-One Refill"][
+        "state"
+    ] == "Disabled"
+    assert report["service_configuration"]["staged_generation"]["semantic_change"] == {
+        "added_service": None,
+        "added_task": None,
+        "mode": "preserve-six-service-baseline",
+    }
+    restart = report["activation"]["legacy_restart_witness"]
+    assert restart["selected_services"] == ["host", "relay", "gate", "revision", "publisher"]
+    assert restart["disabled_services"] == ["refill"]
+    assert restart["health"]["disabled_task_states"] == {"refill": "Disabled"}
+    assert restart["health"]["service_set"] == [
+        "host",
+        "relay",
+        "gate",
+        "revision",
+        "publisher",
+    ]
+
+    calls = [
+        json.loads(line)
+        for line in calls_path.read_text(encoding="utf-8-sig").splitlines()
+    ]
+    refill_actions = [
+        call["action"]
+        for call in calls
+        if call["name"] == "MSOS Autobuilder Capacity-One Refill"
+    ]
+    assert "register" not in refill_actions
+    assert "unregister" not in refill_actions
+
+
+def test_stable_bootstrap_handoff_recovers_legacy_services_after_restart_witness_failure(
+    tmp_path: Path,
+) -> None:
+    if sys.platform != "win32":
+        pytest.skip("restart-witness recovery regression targets Windows Scheduled Task semantics")
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    live_bootstrap = fixture["live_bootstrap"]
+    host_root = fixture["host_root"]
+    supervisor = fixture["supervisor"]
+    assert isinstance(live_bootstrap, Path)
+    assert isinstance(host_root, Path)
+    assert isinstance(supervisor, Path)
+    old_bytes = _live_bootstrap_bytes(fixture)
+    before_script = f"""
+$global:RefillRegistered = $true
+$global:RefillState = 'Disabled'
+$global:RefillAction = [pscustomobject]@{{
+    Execute = 'pwsh'
+    Arguments = (
+        '-NoProfile -File run_windows_managed_service.ps1 ' +
+        '-ServiceName refill -HostRoot "{host_root.as_posix()}"'
+    )
+}}
+$env:MSOS_STUBBED_FAIL_START_AFTER_COUNT = '2'
+"""
+
+    result, calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=before_script,
+    )
+
+    assert result.returncode != 0
+    assert all(
+        (live_bootstrap / target).read_bytes() == content
+        for target, content in old_bytes.items()
+    )
+    report = _read_handoff_report(fixture)
+    assert report["outcome"] == "rolled_back"
+    assert report["rollback"]["performed"] is True
+    assert report["rollback"]["service_recovery_passed"] is True
+    recovery = report["rollback"]["service_recovery"]
+    expected_services = ["host", "relay", "gate", "revision", "publisher"]
+    assert recovery["selected_services"] == expected_services
+    assert recovery["disabled_services"] == ["refill"]
+    assert recovery["disabled_task_states"] == {"refill": "Disabled"}
+    assert recovery["active_commit"] == fixture["old_commit"]
+    assert recovery["task_states"]["MSOS Autobuilder Capacity-One Refill"] == "Disabled"
+    assert all(recovery["task_states"][task] == "Running" for task in MANAGED_TASK_NAMES[:-1])
+    assert sorted(recovery["witnesses"]) == sorted(expected_services)
+    for service in expected_services:
+        witness_path = supervisor / "state" / "service-witnesses" / f"{service}.json"
+        witness = json.loads(witness_path.read_text(encoding="utf-8-sig"))
+        assert witness["state"] == "running"
+        assert witness["release_commit"] == fixture["old_commit"]
+
+    outer_calls = [
+        json.loads(line)
+        for line in calls_path.read_text(encoding="utf-8-sig").splitlines()
+    ]
+    assert [call["name"] for call in outer_calls if call["action"] == "start"][-5:] == (
+        MANAGED_TASK_NAMES[:-1]
+    )
+    assert any(
+        call["action"] == "disable"
+        and call["name"] == "MSOS Autobuilder Capacity-One Refill"
+        for call in outer_calls
+    )
+    nested_calls = [
+        json.loads(line)
+        for line in (tmp_path / "nested-scheduled-task-calls.jsonl")
+        .read_text(encoding="utf-8-sig")
+        .splitlines()
+    ]
+    assert [call["name"] for call in nested_calls if call["action"] == "start"] == (
+        MANAGED_TASK_NAMES[:2]
+    )
 
 
 def test_stable_bootstrap_handoff_runs_with_spaced_fixture_and_probe_paths(
@@ -1267,7 +1586,7 @@ function Enable-ScheduledTask {
     )
 
 
-def test_stable_bootstrap_handoff_fails_closed_when_refill_task_preexists(
+def test_stable_bootstrap_handoff_fails_closed_when_refill_task_preexists_enabled(
     tmp_path: Path,
 ) -> None:
     powershell = shutil.which("powershell") or shutil.which("pwsh")
@@ -1275,7 +1594,7 @@ def test_stable_bootstrap_handoff_fails_closed_when_refill_task_preexists(
         pytest.skip("PowerShell is not installed on this runner")
 
     fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
-    before_script = "$global:RefillRegistered = $true"
+    before_script = "$global:RefillRegistered = $true; $global:RefillState = 'Ready'"
 
     result, calls_path = _run_handoff_fixture(
         fixture,
@@ -1286,7 +1605,7 @@ def test_stable_bootstrap_handoff_fails_closed_when_refill_task_preexists(
 
     assert result.returncode != 0
     report = _read_handoff_report(fixture)
-    assert "baseline must be exactly the reviewed five tasks with refill absent" in json.dumps(
+    assert "baseline requires refill to be absent or exactly Disabled" in json.dumps(
         report
     )
     calls = [
@@ -1322,6 +1641,7 @@ def test_task_controller_round_trips_task_names_through_powershell_stdin(
     try:
         controller.stop(task_names)
         controller.start(task_names)
+        controller.disable([task_names[-1]])
         states = controller.states(task_names)
     finally:
         if previous_calls_path is None:
@@ -1334,12 +1654,19 @@ def test_task_controller_round_trips_task_names_through_powershell_stdin(
         json.loads(line)
         for line in calls_path.read_text(encoding="utf-8-sig").splitlines()
     ]
-    assert [call["name"] for call in calls if call["action"] == "stop"] == task_names
+    assert [call["name"] for call in calls if call["action"] == "stop"] == [
+        *task_names,
+        task_names[-1],
+    ]
     assert [call["name"] for call in calls if call["action"] == "enable"] == task_names
     assert [call["name"] for call in calls if call["action"] == "start"] == task_names
+    assert [call["name"] for call in calls if call["action"] == "disable"] == [
+        task_names[-1]
+    ]
     assert [call["name"] for call in calls if call["action"] == "get"] == [
         *task_names,
         *task_names,
+        task_names[-1],
         *task_names,
     ]
 

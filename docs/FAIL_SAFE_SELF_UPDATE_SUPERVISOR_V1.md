@@ -37,7 +37,7 @@ The installer re-registers exactly these six existing tasks behind one stable ru
 5. `MSOS Autobuilder Controlled Publisher`
 6. `MSOS Autobuilder Capacity-One Refill`
 
-Each runner resolves `state/active-release.json`, verifies the selected release marker, runs the external stable health probe with the selected release's Python, writes a release-bound service witness, and then invokes the service. The probe requires every managed module, including `msos_autobuilder.refill_controller`, to import from inside the selected exact release.
+Each runner resolves `state/active-release.json`, verifies the selected release marker, runs the external stable health probe with the selected release's Python, writes a release-bound service witness, and then invokes the service. The probe validates the module contract required by the selected service. Legacy releases that do not contain `src/msos_autobuilder/refill_controller.py` are treated as five-service releases; refill-capable releases are treated as six-service releases.
 
 The task-control helper accepts only the explicit configured task-name list. It cannot discover, register, unregister, or modify unrelated scheduled tasks.
 
@@ -69,7 +69,7 @@ Before any live task stops, the external supervisor:
 6. installs `.[dev]` into that environment;
 7. runs Ruff;
 8. runs the full pytest suite;
-9. runs the external stable managed-entry-point health probe;
+9. runs the external stable managed-entry-point health probe for the staged release;
 10. on Windows, parses every PowerShell script with the PowerShell AST parser;
 11. re-verifies required GitHub status/check contexts immediately before eligibility;
 12. atomically writes `release.json` as the completion marker inside `versions/<commit>`.
@@ -81,12 +81,12 @@ The version environment is built at its final exact-commit path so virtualenv an
 After staging passes:
 
 1. the current active pointer is preserved as `previous-release.json`;
-2. all six explicit managed tasks stop;
+2. the explicit managed tasks supported by the current release stop;
 3. `active-release.json` is atomically replaced with the staged release pointer;
-4. all six tasks restart;
-5. the supervisor requires every task to be `Running` and every service witness to be fresh, `running`, bound to the requested commit, and continuously healthy through the configured stability window;
+4. the explicit managed tasks supported by the staged release restart, while configured tasks unsupported by that release are stopped and Disabled;
+5. the supervisor requires every selected task to be `Running`, every selected service witness to be fresh, `running`, bound to the requested commit, and continuously healthy through the configured stability window; unsupported configured tasks must remain Disabled;
 6. if health passes, the exact commit is recorded as successful in the repeat-safe ledger;
-7. if health fails, all six tasks stop, the previous pointer is restored, the tasks restart, and the previous commit must produce a fresh complete health witness;
+7. if health fails, the staged release's selected tasks stop, the previous pointer is restored, the previous release's selected tasks restart, unsupported configured tasks are Disabled, and the previous commit must produce a fresh complete health witness for its own selected service set;
 8. a release that required rollback is ledger-blocked from repeated automatic cutovers.
 
 The stable manual rollback entry point is:

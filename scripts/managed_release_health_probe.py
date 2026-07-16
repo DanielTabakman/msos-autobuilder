@@ -9,18 +9,21 @@ from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 
-MANAGED_MODULES = (
-    "msos_autobuilder.persistent_host",
-    "msos_autobuilder.results_relay",
-    "msos_autobuilder.candidate_gate_revisions",
-    "msos_autobuilder.revision_loop",
-    "msos_autobuilder.controlled_publisher",
-    "msos_autobuilder.refill_controller",
-)
+SERVICE_MODULES = {
+    "host": ("msos_autobuilder.persistent_host",),
+    "relay": ("msos_autobuilder.results_relay",),
+    "gate": ("msos_autobuilder.candidate_gate_revisions",),
+    "revision": ("msos_autobuilder.revision_loop",),
+    "publisher": ("msos_autobuilder.controlled_publisher",),
+    "refill": ("msos_autobuilder.refill_controller",),
+}
+
+MANAGED_MODULES = tuple(module for modules in SERVICE_MODULES.values() for module in modules)
 
 
 def probe_release(
     release_root: str | Path,
+    service_name: str | None = None,
     *,
     importer: Callable[[str], ModuleType] = importlib.import_module,
 ) -> dict[str, str]:
@@ -29,9 +32,18 @@ def probe_release(
         raise RuntimeError("managed release is missing pyproject.toml")
     source_root = root / "src"
     sys.path.insert(0, str(source_root))
+    if service_name is None:
+        services = ["host", "relay", "gate", "revision", "publisher"]
+        if (root / "src" / "msos_autobuilder" / "refill_controller.py").is_file():
+            services.append("refill")
+        modules = tuple(module for service in services for module in SERVICE_MODULES[service])
+    else:
+        modules = SERVICE_MODULES.get(service_name)
+        if modules is None:
+            raise RuntimeError(f"unknown managed service for health probe: {service_name}")
     imported: dict[str, str] = {}
     try:
-        for module_name in MANAGED_MODULES:
+        for module_name in modules:
             module = importer(module_name)
             module_file = getattr(module, "__file__", None)
             if not module_file:
@@ -52,9 +64,9 @@ def probe_release(
 
 def main(argv: list[str] | None = None) -> int:
     args = list(argv or sys.argv[1:])
-    if len(args) != 1:
-        raise SystemExit("usage: managed_release_health_probe.py <release-root>")
-    imported = probe_release(args[0])
+    if len(args) not in {1, 2}:
+        raise SystemExit("usage: managed_release_health_probe.py <release-root> [service-name]")
+    imported = probe_release(args[0], args[1] if len(args) == 2 else None)
     print(json.dumps({"version": 1, "state": "healthy", "modules": imported}, sort_keys=True))
     return 0
 

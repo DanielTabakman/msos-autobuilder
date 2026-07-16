@@ -28,15 +28,16 @@ The stable bootstrap is copied outside `versions`. A managed release may contain
 
 ## Managed services
 
-The installer re-registers exactly these five existing tasks behind one stable runner:
+The installer re-registers exactly these six existing tasks behind one stable runner:
 
 1. `MSOS Autobuilder Host`
 2. `MSOS Autobuilder Result Relay`
 3. `MSOS Autobuilder Candidate Gate`
 4. `MSOS Autobuilder Revision Loop`
 5. `MSOS Autobuilder Controlled Publisher`
+6. `MSOS Autobuilder Capacity-One Refill`
 
-Each runner resolves `state/active-release.json`, verifies the selected release marker, runs the external stable health probe with the selected release's Python, writes a release-bound service witness, and then invokes the service. The probe requires every managed module to import from inside the selected exact release.
+Each runner resolves `state/active-release.json`, verifies the selected release marker, runs the external stable health probe with the selected release's Python, writes a release-bound service witness, and then invokes the service. The probe requires every managed module, including `msos_autobuilder.refill_controller`, to import from inside the selected exact release.
 
 The task-control helper accepts only the explicit configured task-name list. It cannot discover, register, unregister, or modify unrelated scheduled tasks.
 
@@ -80,12 +81,12 @@ The version environment is built at its final exact-commit path so virtualenv an
 After staging passes:
 
 1. the current active pointer is preserved as `previous-release.json`;
-2. all five explicit managed tasks stop;
+2. all six explicit managed tasks stop;
 3. `active-release.json` is atomically replaced with the staged release pointer;
-4. all five tasks restart;
+4. all six tasks restart;
 5. the supervisor requires every task to be `Running` and every service witness to be fresh, `running`, bound to the requested commit, and continuously healthy through the configured stability window;
 6. if health passes, the exact commit is recorded as successful in the repeat-safe ledger;
-7. if health fails, all five tasks stop, the previous pointer is restored, the tasks restart, and the previous commit must produce a fresh complete health witness;
+7. if health fails, all six tasks stop, the previous pointer is restored, the tasks restart, and the previous commit must produce a fresh complete health witness;
 8. a release that required rollback is ledger-blocked from repeated automatic cutovers.
 
 The stable manual rollback entry point is:

@@ -15,6 +15,7 @@ MANAGED_MODULES = (
     "msos_autobuilder.candidate_gate_revisions",
     "msos_autobuilder.revision_loop",
     "msos_autobuilder.controlled_publisher",
+    "msos_autobuilder.refill_controller",
 )
 
 

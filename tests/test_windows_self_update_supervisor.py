@@ -27,6 +27,7 @@ MANAGED_TASK_NAMES = [
     "MSOS Autobuilder Candidate Gate",
     "MSOS Autobuilder Revision Loop",
     "MSOS Autobuilder Controlled Publisher",
+    "MSOS Autobuilder Capacity-One Refill",
 ]
 
 
@@ -44,6 +45,8 @@ def test_installer_preserves_external_supervisor_and_atomic_release_boundary() -
     assert "MSOS Autobuilder Candidate Gate" in script
     assert "MSOS Autobuilder Revision Loop" in script
     assert "MSOS Autobuilder Controlled Publisher" in script
+    assert "MSOS Autobuilder Capacity-One Refill" in script
+    assert '"refill-run"' in script
     assert "run_windows_managed_service.ps1" in script
     assert "windows_self_update_task_control.ps1" in script
     assert "managed_release_health_probe.py" in script

@@ -27,6 +27,17 @@ from .persistent_host import (
     sync_git_job_feed,
 )
 from .process_witness import render_process_witness_json, run_process_witness
+from .refill_controller import (
+    RefillConfig,
+    RefillService,
+    keep_one_running_and_reconcile,
+    load_refill_policy,
+    pause_builds_and_reconcile,
+    reconcile_refill,
+    render_refill_report_json,
+    render_refill_service_status_json,
+    resume_builds_and_reconcile,
+)
 from .workspace_witness import render_workspace_witness_json, run_workspace_witness
 
 
@@ -186,6 +197,75 @@ def _build_next_command(args: argparse.Namespace) -> int:
     return 2 if receipt.status == "BLOCKED" else 0
 
 
+def _refill_config(args: argparse.Namespace, *, submit: bool = True) -> RefillConfig:
+    build_config = BuildNextConfig.from_service_config(
+        args.service_config,
+        checkout_root=Path(args.checkout_root) if args.checkout_root else None,
+        max_snapshot_age_seconds=args.max_snapshot_age_seconds,
+        requested_by=args.requested_by,
+        submit=submit,
+    )
+    return RefillConfig(
+        build_next=build_config,
+        policy_path=Path(args.policy_path) if args.policy_path else None,
+        max_host_heartbeat_age_seconds=args.max_host_heartbeat_age_seconds,
+    )
+
+
+def _refill_keep_one_command(args: argparse.Namespace) -> int:
+    report = keep_one_running_and_reconcile(_refill_config(args))
+    _write_or_print(render_refill_report_json(report), args.json_out)
+    return 0 if report.enabled else 2
+
+
+def _refill_pause_command(args: argparse.Namespace) -> int:
+    report = pause_builds_and_reconcile(_refill_config(args))
+    _write_or_print(render_refill_report_json(report), args.json_out)
+    return 0
+
+
+def _refill_resume_command(args: argparse.Namespace) -> int:
+    report = resume_builds_and_reconcile(_refill_config(args))
+    _write_or_print(render_refill_report_json(report), args.json_out)
+    return 2 if report.status in {"BLOCKED", "BACKPRESSURE"} else 0
+
+
+def _refill_reconcile_command(args: argparse.Namespace) -> int:
+    report = reconcile_refill(_refill_config(args, submit=not args.dry_run))
+    _write_or_print(render_refill_report_json(report), args.json_out)
+    return 2 if report.status in {"BLOCKED", "BACKPRESSURE"} else 0
+
+
+def _refill_status_command(args: argparse.Namespace) -> int:
+    config = _refill_config(args, submit=False)
+    policy = load_refill_policy(config)
+    report = reconcile_refill(config)
+    _write_or_print(render_refill_report_json(report), args.json_out)
+    return 0 if policy.enabled else 2
+
+
+def _refill_run_command(args: argparse.Namespace) -> int:
+    service = RefillService(
+        _refill_config(args),
+        interval_seconds=args.interval_seconds,
+    )
+    service.run_forever()
+    return 0
+
+
+def _refill_stop_command(args: argparse.Namespace) -> int:
+    service = RefillService(_refill_config(args, submit=False))
+    path = service.request_stop()
+    _write_or_print(str(path) + "\n", args.output)
+    return 0
+
+
+def _refill_service_status_command(args: argparse.Namespace) -> int:
+    service = RefillService(_refill_config(args, submit=False))
+    _write_or_print(render_refill_service_status_json(service.read_status()), args.json_out)
+    return 0
+
+
 def _workspace_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--source", required=True)
     parser.add_argument("--workspace-root", required=True)
@@ -195,6 +275,16 @@ def _workspace_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _service_config_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--service-config", required=True)
+
+
+def _refill_arguments(parser: argparse.ArgumentParser) -> None:
+    _service_config_argument(parser)
+    parser.add_argument("--checkout-root")
+    parser.add_argument("--policy-path")
+    parser.add_argument("--max-snapshot-age-seconds", type=int, default=600)
+    parser.add_argument("--max-host-heartbeat-age-seconds", type=int, default=300)
+    parser.add_argument("--requested-by", default="capacity-one refill controller")
+    parser.add_argument("--json-out")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -329,6 +419,65 @@ def build_parser() -> argparse.ArgumentParser:
     build_next_parser.add_argument("--dry-run", action="store_true")
     build_next_parser.add_argument("--json-out")
     build_next_parser.set_defaults(func=_build_next_command)
+
+    refill_status = subparsers.add_parser(
+        "refill-status",
+        help="show bounded capacity-one refill state without submitting a job",
+    )
+    _refill_arguments(refill_status)
+    refill_status.set_defaults(func=_refill_status_command)
+
+    refill_keep_one = subparsers.add_parser(
+        "refill-keep-one",
+        help="persist founder intent to keep one approved build running",
+    )
+    _refill_arguments(refill_keep_one)
+    refill_keep_one.set_defaults(func=_refill_keep_one_command)
+
+    refill_pause = subparsers.add_parser(
+        "refill-pause",
+        help="pause new refill dispatch without stopping current workers",
+    )
+    _refill_arguments(refill_pause)
+    refill_pause.set_defaults(func=_refill_pause_command)
+
+    refill_resume = subparsers.add_parser(
+        "refill-resume",
+        help="resume capacity-one refill after reconciling current state",
+    )
+    _refill_arguments(refill_resume)
+    refill_resume.set_defaults(func=_refill_resume_command)
+
+    refill_reconcile = subparsers.add_parser(
+        "refill-reconcile",
+        help="reconcile bounded capacity-one refill and dispatch through build-next if empty",
+    )
+    _refill_arguments(refill_reconcile)
+    refill_reconcile.add_argument("--dry-run", action="store_true")
+    refill_reconcile.set_defaults(func=_refill_reconcile_command)
+
+    refill_run = subparsers.add_parser(
+        "refill-run",
+        help="run the managed capacity-one refill service until gracefully stopped",
+    )
+    _refill_arguments(refill_run)
+    refill_run.add_argument("--interval-seconds", type=float, default=30.0)
+    refill_run.set_defaults(func=_refill_run_command)
+
+    refill_stop = subparsers.add_parser(
+        "refill-stop",
+        help="request graceful stop from the managed refill service",
+    )
+    _refill_arguments(refill_stop)
+    refill_stop.add_argument("--output")
+    refill_stop.set_defaults(func=_refill_stop_command)
+
+    refill_service_status = subparsers.add_parser(
+        "refill-service-status",
+        help="show durable managed refill service heartbeat and last reconciliation",
+    )
+    _refill_arguments(refill_service_status)
+    refill_service_status.set_defaults(func=_refill_service_status_command)
     return parser
 
 

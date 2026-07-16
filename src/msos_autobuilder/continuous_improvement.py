@@ -10,6 +10,7 @@ import json
 import re
 import subprocess
 import tempfile
+from base64 import b64decode
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -88,6 +89,8 @@ class PlannerConfig:
     dry_run: bool = False
     limit_issues: int = 50
     limit_prs: int = 30
+    limit_planner_issues: int = 200
+    max_result_reports: int = 40
     label: str = PHASE_1_LABEL
 
 
@@ -169,15 +172,9 @@ def _classify_issue(issue: Mapping[str, Any], repository: str) -> EvidenceRecord
     rollback_available = False
     escalation = False
 
-    if number == 33 or "continuous-improvement" in text or "continuous improvement" in text:
-        key = "continuous-improvement-phase1"
-        friction = "manual_rescue"
-        component = "docs"
-        severity = "high"
-        manual_steps = 5
-        minutes = 45
-        occurrences = 4
-    elif "rollback_failed" in text or "rollback witness" in text:
+    if number in {33, 61} or "continuous-improvement" in text or "continuous improvement" in text:
+        return None
+    if "rollback_failed" in text or "rollback witness" in text:
         key = "self-update-rollback-gap"
         friction = "rollback_gap"
         component = "self_update"
@@ -193,14 +190,6 @@ def _classify_issue(issue: Mapping[str, Any], repository: str) -> EvidenceRecord
         severity = "high"
         manual_steps = 3
         minutes = 30
-        occurrences = 2
-    elif "duplicate" in text or "stale" in text or "unvalidated" in text:
-        key = "validation-stale-duplicate"
-        friction = "stale_state"
-        component = "gate"
-        severity = "medium"
-        manual_steps = 2
-        minutes = 20
         occurrences = 2
     elif state == "OPEN" and ("founder" in text or "manual" in text or "orchestration" in text):
         key = f"manual-orchestration-{number}"
@@ -229,6 +218,162 @@ def _classify_issue(issue: Mapping[str, Any], repository: str) -> EvidenceRecord
         rollback_available=rollback_available,
         escalation_required=escalation,
     )
+
+
+def _load_github_content_json(client: GitHubClient, repository: str, path: str) -> dict[str, Any]:
+    payload = client.run_json(
+        ["api", f"repos/{repository}/contents/{path}?ref=results"]
+    )
+    if not isinstance(payload, dict) or not isinstance(payload.get("content"), str):
+        raise ContinuousImprovementError(f"results content is missing or malformed: {path}")
+    try:
+        raw = b64decode(payload["content"]).decode("utf-8")
+        data = json.loads(raw)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise ContinuousImprovementError(f"results JSON is invalid: {path}") from exc
+    if not isinstance(data, dict):
+        raise ContinuousImprovementError(f"results JSON must be an object: {path}")
+    return data
+
+
+def _result_url(repository: str, path: str) -> str:
+    display_path = path.removeprefix("results/")
+    return f"https://github.com/{repository}/blob/results/{display_path}"
+
+
+def _classify_gate_report(
+    *,
+    repository: str,
+    path: str,
+    report: Mapping[str, Any],
+) -> EvidenceRecord | None:
+    status = str(report.get("status") or "").lower()
+    state = str(report.get("state") or "").lower()
+    if status not in {"failed", "unvalidated"} and state not in {
+        "candidate_failed",
+        "awaiting_validation",
+    }:
+        return None
+    job_id = str(report.get("job_id") or Path(path).parent.name)
+    errors = report.get("errors") if isinstance(report.get("errors"), list) else []
+    error_text = "; ".join(
+        str(item.get("message") or item) for item in errors if isinstance(item, dict)
+    ) or status
+    return EvidenceRecord(
+        evidence_id=f"gate-report-{_safe_key(job_id)}",
+        observed_at_utc=str(report.get("finished_at") or _utc_now()),
+        source_kind="gate_report",
+        repository=repository,
+        url=_result_url(repository, path),
+        title=f"Gate report for {job_id}",
+        summary=f"Gate {status}/{state} for `{job_id}`: {error_text}",
+        friction_type="stale_state" if status == "unvalidated" else "failure",
+        affected_component="gate",
+        recurrence_key="candidate-gate-result-patterns",
+        severity="medium" if status == "unvalidated" else "high",
+        manual_steps_observed=2,
+        estimated_minutes_per_occurrence=20,
+        occurrences_30d=1,
+        rollback_available=True,
+        escalation_required=False,
+    )
+
+
+def _classify_self_update_report(
+    *,
+    repository: str,
+    path: str,
+    report: Mapping[str, Any],
+) -> EvidenceRecord | None:
+    outcome = str(report.get("outcome") or "").lower()
+    if outcome not in {"rollback_failed", "blocked_after_rollback"}:
+        return None
+    attempt_id = str(report.get("attempt_id") or Path(path).parent.name)
+    return EvidenceRecord(
+        evidence_id=f"self-update-{_safe_key(attempt_id)}",
+        observed_at_utc=str(report.get("attempted_at") or _utc_now()),
+        source_kind="update_report",
+        repository=repository,
+        url=_result_url(repository, path),
+        title=f"Self-update report {attempt_id}",
+        summary=f"Self-update `{attempt_id}` ended with `{outcome}`",
+        friction_type="rollback_gap",
+        affected_component="self_update",
+        recurrence_key="self-update-rollback-gap",
+        severity="critical",
+        manual_steps_observed=4,
+        estimated_minutes_per_occurrence=40,
+        occurrences_30d=1,
+        rollback_available=False,
+        escalation_required=True,
+    )
+
+
+def collect_results_branch_evidence(
+    client: GitHubClient,
+    config: PlannerConfig,
+) -> list[EvidenceRecord]:
+    try:
+        tree = client.run_json(
+            ["api", f"repos/{config.repository}/git/trees/results?recursive=1"]
+        )
+    except ContinuousImprovementError:
+        return []
+    if not isinstance(tree, dict) or not isinstance(tree.get("tree"), list):
+        return []
+    paths = [
+        str(item.get("path") or "")
+        for item in tree["tree"]
+        if isinstance(item, dict) and item.get("type") == "blob"
+    ]
+    reports = [
+        path
+        for path in paths
+        if path.endswith("/gate-report.json") or path.endswith("/update-report.json")
+    ][: config.max_result_reports]
+    evidence: list[EvidenceRecord] = []
+    for path in reports:
+        report = _load_github_content_json(client, config.repository, path)
+        if path.endswith("/gate-report.json"):
+            record = _classify_gate_report(
+                repository=config.repository,
+                path=path,
+                report=report,
+            )
+        else:
+            record = _classify_self_update_report(
+                repository=config.repository,
+                path=path,
+                report=report,
+            )
+        if record is not None:
+            evidence.append(record)
+    return evidence
+
+
+def _planner_owned_issues(client: GitHubClient, config: PlannerConfig) -> list[dict[str, Any]]:
+    try:
+        raw = client.run_json(
+            [
+                "issue",
+                "list",
+                "--repo",
+                config.repository,
+                "--state",
+                "open",
+                "--label",
+                config.label,
+                "--limit",
+                str(config.limit_planner_issues),
+                "--json",
+                "number,title,state,body,comments,url,updatedAt,labels",
+            ]
+        )
+    except ContinuousImprovementError:
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, dict) and FINGERPRINT in _issue_text(item)]
 
 
 def collect_github_evidence(
@@ -272,7 +417,14 @@ def collect_github_evidence(
         for record in [_classify_issue(item, config.repository)]
         if record is not None
     ]
-    return evidence, issues_raw, prs_raw
+    evidence.extend(collect_results_branch_evidence(client, config))
+    planner_owned = _planner_owned_issues(client, config)
+    issue_by_number = {
+        int(item.get("number") or 0): item
+        for item in [*issues_raw, *planner_owned]
+        if isinstance(item, dict)
+    }
+    return evidence, list(issue_by_number.values()), prs_raw
 
 
 def _score(
@@ -303,52 +455,46 @@ def rank_opportunities(evidence: Sequence[EvidenceRecord]) -> list[Opportunity]:
 
     opportunities: list[Opportunity] = []
     for key, records in grouped.items():
-        if key == "continuous-improvement-phase1":
+        if key == "candidate-gate-result-patterns":
             founder_minutes = sum(
                 item.estimated_minutes_per_occurrence * item.occurrences_30d
                 for item in records
             )
-            weighted_total = _score(
-                founder_minutes=founder_minutes,
-                reliability=3,
-                throughput=2,
-                complexity_removed=2,
-                runtime_risk=0,
-                implementation_complexity=2,
-                review_complexity=1,
-            )
-            # The chartered Phase 1 implementation is the enabling proposal slice. Prioritize
-            # it over higher-volume blocker clusters so the planner can start removing the
-            # founder's recurring issue-discovery and handoff work.
-            weighted_total += 100_000
             opportunities.append(
                 Opportunity(
-                    opportunity_id="phase1-proposal-automation",
-                    title="Implement Phase 1 continuous-improvement proposal automation",
+                    opportunity_id="candidate-gate-result-patterns",
+                    title="Summarize recurring candidate-gate result patterns",
                     problem_statement=(
-                        "Daniel still has to notice repeated Autobuilder friction, charter "
-                        "bounded improvements, and coordinate handoffs manually."
+                        "Durable gate reports expose failed and unvalidated candidates, but "
+                        "the planner cannot yet summarize those patterns into founder-ready "
+                        "backlog pressure and reliability evidence."
                     ),
                     evidence_ids=tuple(item.evidence_id for item in records),
-                    dedupe_key="continuous-improvement-phase1",
+                    dedupe_key="candidate-gate-result-patterns",
                     authority_class_required="A1",
                     founder_minutes_saved_30d=founder_minutes,
-                    reliability_gain=3,
+                    reliability_gain=4,
                     throughput_gain=2,
-                    complexity_removed=2,
+                    complexity_removed=3,
                     implementation_complexity=2,
                     review_complexity=1,
                     runtime_risk=0,
-                    weighted_total=weighted_total,
+                    weighted_total=_score(
+                        founder_minutes=founder_minutes,
+                        reliability=4,
+                        throughput=2,
+                        complexity_removed=3,
+                        runtime_risk=0,
+                        implementation_complexity=2,
+                        review_complexity=1,
+                    ),
                     goal=(
-                        "Add a proposal-only planner that reads durable GitHub evidence, "
-                        "ranks one bounded improvement, suppresses duplicates/noise, and "
-                        "creates or updates one GitHub issue with a complete handoff."
+                        "Add a proposal-only gate-result summarizer that reads durable "
+                        "`results` branch gate reports and turns failed/unvalidated patterns "
+                        "into concise planner evidence without dispatching jobs."
                     ),
                     allowed_paths=(
-                        "docs/CONTINUOUS_IMPROVEMENT_PLANNER_V1.md",
                         "src/msos_autobuilder/continuous_improvement.py",
-                        "src/msos_autobuilder/cli.py",
                         "tests/test_continuous_improvement.py",
                     ),
                     forbidden_paths=(
@@ -361,11 +507,11 @@ def rank_opportunities(evidence: Sequence[EvidenceRecord]) -> list[Opportunity]:
                         "updates/**",
                     ),
                     acceptance=(
-                        "collects durable issue/PR evidence through GitHub",
-                        "ranks opportunities primarily by founder time removed",
-                        "deduplicates against open issues and PRs",
-                        "creates or updates at most one issue per run",
-                        "emits a digest only when meaningful state changes",
+                        "reads durable gate reports from the GitHub `results` branch",
+                        "groups failed and unvalidated candidates by failure class",
+                        "estimates founder time removed from repeated manual review",
+                        "does not create jobs, run gates, publish, merge, or deploy",
+                        "adds tests with failed, unvalidated, and passed gate reports",
                     ),
                     validation=(
                         "python -m pytest tests/test_continuous_improvement.py",
@@ -375,11 +521,11 @@ def rank_opportunities(evidence: Sequence[EvidenceRecord]) -> list[Opportunity]:
                     ),
                     non_goals=(
                         "no Phase 2 execution adapter",
-                        "no automatic draft PR production",
+                        "no automatic candidate re-run or draft PR production",
                         "no deployment or release activation",
                         "no #58-owned bootstrap/task/probe path changes",
                     ),
-                    rollback="Revert the proposal-only module, CLI wiring, tests, and doc.",
+                    rollback="Revert the summarizer changes from the Phase 1 planner module.",
                 )
             )
             continue
@@ -435,18 +581,38 @@ def _matches_duplicate(
     prs: Sequence[Mapping[str, Any]],
 ) -> tuple[str, Mapping[str, Any] | None]:
     marker = _fingerprint(opportunity.dedupe_key)
-    title_key = opportunity.dedupe_key.replace("-", " ")
     for issue in issues:
         if str(issue.get("state") or "").upper() != "OPEN":
             continue
         text = f"{issue.get('title') or ''}\n{issue.get('body') or ''}"
-        if marker in text or title_key in text.lower():
+        if marker in text:
             return "issue", issue
+        if _semantic_duplicate(opportunity, text):
+            return "human_issue", issue
     for pr in prs:
         text = f"{pr.get('title') or ''}\n{pr.get('body') or ''}"
-        if marker in text or title_key in text.lower():
+        if marker in text:
             return "pr", pr
+        if _semantic_duplicate(opportunity, text):
+            return "human_pr", pr
     return "none", None
+
+
+def _semantic_duplicate(opportunity: Opportunity, text: str) -> bool:
+    haystack = text.lower()
+    title_key = opportunity.dedupe_key.replace("-", " ")
+    if title_key in haystack:
+        return True
+    if opportunity.dedupe_key == "self-update-rollback-gap":
+        return "rollback" in haystack and (
+            "self-update" in haystack
+            or "self update" in haystack
+            or "supervisor" in haystack
+            or "five-to-six" in haystack
+            or "five service" in haystack
+            or "six-service" in haystack
+        )
+    return False
 
 
 def render_issue_body(opportunity: Opportunity, evidence: Sequence[EvidenceRecord]) -> str:
@@ -552,6 +718,9 @@ def propose_one_improvement(
     for opportunity in opportunities:
         duplicate_kind, duplicate = _matches_duplicate(opportunity, issues, prs)
         if duplicate_kind == "pr":
+            duplicate_count += 1
+            continue
+        if duplicate_kind in {"human_issue", "human_pr"}:
             duplicate_count += 1
             continue
         body = render_issue_body(opportunity, evidence)

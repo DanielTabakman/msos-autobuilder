@@ -1,0 +1,48 @@
+version: 1
+release_id: capacity-one-refill-managed-release-v1
+approved: true
+repository: DanielTabakman/msos-autobuilder
+repo_url: https://github.com/DanielTabakman/msos-autobuilder.git
+commit: self
+required_status_contexts:
+  - test
+  - windows-test
+expected_files:
+  - pyproject.toml
+  - src/msos_autobuilder/__init__.py
+  - src/msos_autobuilder/__main__.py
+  - src/msos_autobuilder/backends/__init__.py
+  - src/msos_autobuilder/backends/base.py
+  - src/msos_autobuilder/backends/codex_cli.py
+  - src/msos_autobuilder/backends/git_clone.py
+  - src/msos_autobuilder/backends/plan_only.py
+  - src/msos_autobuilder/backends/process.py
+  - src/msos_autobuilder/build_next.py
+  - src/msos_autobuilder/candidate_gate.py
+  - src/msos_autobuilder/candidate_gate_revisions.py
+  - src/msos_autobuilder/candidate_gate_windows.py
+  - src/msos_autobuilder/cli.py
+  - src/msos_autobuilder/codex_shadow.py
+  - src/msos_autobuilder/contracts.py
+  - src/msos_autobuilder/controlled_publisher.py
+  - src/msos_autobuilder/inventory.py
+  - src/msos_autobuilder/lanes.py
+  - src/msos_autobuilder/leases.py
+  - src/msos_autobuilder/models.py
+  - src/msos_autobuilder/persistent_host.py
+  - src/msos_autobuilder/process_witness.py
+  - src/msos_autobuilder/refill_controller.py
+  - src/msos_autobuilder/results_relay.py
+  - src/msos_autobuilder/revision_loop.py
+  - src/msos_autobuilder/routing.py
+  - src/msos_autobuilder/scheduler.py
+  - src/msos_autobuilder/self_update_evidence_relay.py
+  - src/msos_autobuilder/self_update_supervisor.py
+  - src/msos_autobuilder/validation_contract.py
+  - src/msos_autobuilder/workspace_witness.py
+  - src/msos_autobuilder/workspaces.py
+  - scripts/managed_release_health_probe.py
+  - scripts/run_windows_managed_service.ps1
+  - scripts/invoke_windows_self_update.ps1
+  - scripts/windows_self_update_task_control.ps1
+supervisor_update: false

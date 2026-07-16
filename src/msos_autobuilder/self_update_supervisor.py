@@ -183,6 +183,8 @@ class TaskController(Protocol):
 
     def start(self, task_names: Sequence[str]) -> None: ...
 
+    def disable(self, task_names: Sequence[str]) -> None: ...
+
     def states(self, task_names: Sequence[str]) -> Mapping[str, str]: ...
 
 
@@ -809,6 +811,10 @@ class PowerShellTaskController:
     def start(self, task_names: Sequence[str]) -> None:
         self._invoke("start", task_names)
 
+    def disable(self, task_names: Sequence[str]) -> None:
+        if task_names:
+            self._invoke("disable", task_names)
+
     def states(self, task_names: Sequence[str]) -> Mapping[str, str]:
         raw = self._invoke("states", task_names)
         if not isinstance(raw, dict):
@@ -823,9 +829,16 @@ class FileHealthVerifier:
         self.config = config
         self.task_controller = task_controller
 
-    def wait_for(self, commit: str, not_before: datetime) -> dict[str, Any]:
+    def wait_for(
+        self,
+        commit: str,
+        not_before: datetime,
+        managed_tasks: Sequence[ManagedTask] | None = None,
+        disabled_tasks: Sequence[ManagedTask] = (),
+    ) -> dict[str, Any]:
+        selected_tasks = tuple(managed_tasks or self.config.managed_tasks)
         deadline = time.monotonic() + self.config.health_timeout_seconds
-        task_names = [task.task_name for task in self.config.managed_tasks]
+        task_names = [task.task_name for task in (*selected_tasks, *disabled_tasks)]
         last_detail: dict[str, Any] = {}
         healthy_since: float | None = None
         while time.monotonic() < deadline:
@@ -833,7 +846,8 @@ class FileHealthVerifier:
             states = dict(self.task_controller.states(task_names))
             witnesses: dict[str, Any] = {}
             healthy = True
-            for task in self.config.managed_tasks:
+            disabled_states: dict[str, str] = {}
+            for task in selected_tasks:
                 state = states.get(task.task_name, "Missing")
                 if state.lower() != "running":
                     healthy = False
@@ -851,14 +865,27 @@ class FileHealthVerifier:
                     or not isinstance(witness.get("child_pid"), int)
                 ):
                     healthy = False
-            last_detail = {"task_states": states, "witnesses": witnesses}
+            for task in disabled_tasks:
+                state = states.get(task.task_name, "Missing")
+                disabled_states[task.service] = state
+                if state.lower() != "disabled":
+                    healthy = False
+            last_detail = {
+                "task_states": states,
+                "witnesses": witnesses,
+                "service_set": [task.service for task in selected_tasks],
+                "disabled_task_states": disabled_states,
+            }
             if healthy:
                 if healthy_since is None:
                     healthy_since = observed_at
                 if observed_at - healthy_since >= self.config.health_stability_seconds:
                     return {
                         **last_detail,
+                        "health_timeout_seconds": self.config.health_timeout_seconds,
+                        "health_poll_seconds": self.config.health_poll_seconds,
                         "stability_seconds": self.config.health_stability_seconds,
+                        "achieved_stability_seconds": observed_at - healthy_since,
                     }
             else:
                 healthy_since = None
@@ -883,6 +910,24 @@ def _read_active_pointer(config: SupervisorConfig) -> dict[str, Any]:
     if marker.get("commit") != commit:
         raise SupervisorError("active release marker does not match active release pointer")
     return raw
+
+
+def _release_supports_refill(release_path: Path) -> bool:
+    return (release_path / "src" / "msos_autobuilder" / "refill_controller.py").is_file()
+
+
+def _release_managed_tasks(
+    config: SupervisorConfig, release_path: Path
+) -> tuple[tuple[ManagedTask, ...], tuple[ManagedTask, ...]]:
+    supports_refill = _release_supports_refill(release_path)
+    selected: list[ManagedTask] = []
+    disabled: list[ManagedTask] = []
+    for task in config.managed_tasks:
+        if task.service == "refill" and not supports_refill:
+            disabled.append(task)
+        else:
+            selected.append(task)
+    return tuple(selected), tuple(disabled)
 
 
 def _write_active_pointer(config: SupervisorConfig, commit: str, release_path: Path) -> None:
@@ -996,18 +1041,25 @@ class UpdateSupervisor:
 
     def _restore_previous_release(
         self,
-        task_names: Sequence[str],
+        active_task_names: Sequence[str],
         previous_commit: str,
         previous_release_path: Path,
     ) -> tuple[dict[str, Any], list[str]]:
         started = _utc_now()
         errors: list[str] = []
+        previous_tasks, previous_disabled_tasks = _release_managed_tasks(
+            self.config, previous_release_path
+        )
+        previous_task_names = [task.task_name for task in previous_tasks]
+        disabled_task_names = [task.task_name for task in previous_disabled_tasks]
         evidence: dict[str, Any] = {
             "performed": True,
             "restored_commit": previous_commit,
+            "service_set": [task.service for task in previous_tasks],
+            "disabled_services": [task.service for task in previous_disabled_tasks],
         }
         try:
-            self.task_controller.stop(task_names)
+            self.task_controller.stop(active_task_names)
         except Exception as exc:
             errors.append(f"rollback stop failed: {exc}")
         try:
@@ -1017,13 +1069,22 @@ class UpdateSupervisor:
             errors.append(f"rollback pointer restore failed: {exc}")
             evidence["pointer_restored"] = False
         try:
-            self.task_controller.start(task_names)
+            self.task_controller.start(previous_task_names)
+            if disabled_task_names:
+                self.task_controller.disable(disabled_task_names)
             evidence["tasks_started"] = True
         except Exception as exc:
             errors.append(f"rollback start failed: {exc}")
             evidence["tasks_started"] = False
         try:
-            evidence.update(self.health_verifier.wait_for(previous_commit, started))
+            evidence.update(
+                self.health_verifier.wait_for(
+                    previous_commit,
+                    started,
+                    previous_tasks,
+                    previous_disabled_tasks,
+                )
+            )
         except Exception as exc:
             errors.append(f"rollback health failed: {exc}")
         evidence["passed"] = not errors
@@ -1119,7 +1180,15 @@ class UpdateSupervisor:
                     asdict(check) | {"passed": check.passed} for check in staged.checks
                 ]
 
-                task_names = [task.task_name for task in self.config.managed_tasks]
+                previous_tasks, previous_disabled_tasks = _release_managed_tasks(
+                    self.config, previous_release_path
+                )
+                staged_tasks, staged_disabled_tasks = _release_managed_tasks(
+                    self.config, staged.release_path
+                )
+                previous_task_names = [task.task_name for task in previous_tasks]
+                staged_task_names = [task.task_name for task in staged_tasks]
+                staged_disabled_task_names = [task.task_name for task in staged_disabled_tasks]
                 cutover_started = _utc_now()
                 _atomic_write_json(self.config.previous_pointer, active)
                 report.cutover = {
@@ -1127,16 +1196,25 @@ class UpdateSupervisor:
                     "at": _timestamp(cutover_started),
                     "from_commit": previous_commit,
                     "to_commit": staged.commit,
+                    "from_service_set": [task.service for task in previous_tasks],
+                    "to_service_set": [task.service for task in staged_tasks],
                     "pointer_swapped": False,
                     "tasks_started": False,
                 }
                 try:
-                    self.task_controller.stop(task_names)
+                    self.task_controller.stop(previous_task_names)
                     _write_active_pointer(self.config, staged.commit, staged.release_path)
                     report.cutover["pointer_swapped"] = True
-                    self.task_controller.start(task_names)
+                    self.task_controller.start(staged_task_names)
+                    if staged_disabled_task_names:
+                        self.task_controller.disable(staged_disabled_task_names)
                     report.cutover["tasks_started"] = True
-                    health = self.health_verifier.wait_for(staged.commit, cutover_started)
+                    health = self.health_verifier.wait_for(
+                        staged.commit,
+                        cutover_started,
+                        staged_tasks,
+                        staged_disabled_tasks,
+                    )
                     report.health = {"passed": True, **health}
                     report.rollback = {"performed": False}
                     report.outcome = "success"
@@ -1150,7 +1228,7 @@ class UpdateSupervisor:
                     report.cutover["error"] = str(cutover_exc)
                     report.health = {"passed": False, "error": str(cutover_exc)}
                     rollback, rollback_errors = self._restore_previous_release(
-                        task_names, previous_commit, previous_release_path
+                        staged_task_names, previous_commit, previous_release_path
                     )
                     report.rollback = rollback
                     report.outcome = "rolled_back" if not rollback_errors else "rollback_failed"
@@ -1209,12 +1287,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         previous_path = Path(str(previous.get("release_path") or ""))
         if not _COMMIT_RE.fullmatch(previous_commit) or not previous_path.is_dir():
             raise SupervisorError("no valid previous release is recorded for manual rollback")
-        task_names = [task.task_name for task in config.managed_tasks]
+        previous_tasks, previous_disabled_tasks = _release_managed_tasks(config, previous_path)
+        active_tasks, _active_disabled_tasks = _release_managed_tasks(
+            config, Path(str(active["release_path"]))
+        )
+        task_names = [task.task_name for task in previous_tasks]
+        active_task_names = [task.task_name for task in active_tasks]
+        disabled_task_names = [task.task_name for task in previous_disabled_tasks]
         started = _utc_now()
-        task_controller.stop(task_names)
+        task_controller.stop(active_task_names)
         _write_active_pointer(config, previous_commit, previous_path)
         task_controller.start(task_names)
-        health = health_verifier.wait_for(previous_commit, started)
+        if disabled_task_names:
+            task_controller.disable(disabled_task_names)
+        health = health_verifier.wait_for(
+            previous_commit,
+            started,
+            previous_tasks,
+            previous_disabled_tasks,
+        )
         _atomic_write_json(config.previous_pointer, active)
         print(
             json.dumps(

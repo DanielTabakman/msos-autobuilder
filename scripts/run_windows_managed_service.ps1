@@ -104,7 +104,7 @@ $Arguments = @($Service.argv | ForEach-Object { Expand-ServiceArgument ([string]
 
 # The stable wrapper, not managed supervisor code, proves every managed entry point imports
 # from the selected exact release before emitting a running witness.
-& $Python $ProbeScript $ReleasePath *>> $LogPath
+& $Python $ProbeScript $ReleasePath $ServiceName *>> $LogPath
 if ($LASTEXITCODE -ne 0) {
     Write-Utf8AtomicJson -Path $WitnessPath -Value @{
         version = 1

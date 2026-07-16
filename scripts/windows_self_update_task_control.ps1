@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("stop", "start", "states")]
+    [ValidateSet("stop", "start", "disable", "states")]
     [string]$Action
 )
 
@@ -30,6 +30,13 @@ switch ($Action) {
             $Task = Get-ScheduledTask -TaskName $Name -ErrorAction Stop
             Enable-ScheduledTask -TaskName $Task.TaskName -ErrorAction Stop | Out-Null
             Start-ScheduledTask -TaskName $Task.TaskName -ErrorAction Stop
+        }
+    }
+    "disable" {
+        foreach ($Name in $TaskNames) {
+            $Task = Get-ScheduledTask -TaskName $Name -ErrorAction Stop
+            Stop-ScheduledTask -TaskName $Task.TaskName -ErrorAction SilentlyContinue
+            Disable-ScheduledTask -TaskName $Task.TaskName -ErrorAction Stop | Out-Null
         }
     }
     "states" {

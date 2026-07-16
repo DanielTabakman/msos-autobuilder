@@ -189,6 +189,7 @@ class RefillConfig:
     build_next: BuildNextConfig
     policy_path: Path | None = None
     max_host_heartbeat_age_seconds: int = 300
+    supervisor_root: Path | None = None
 
     @classmethod
     def from_service_config(
@@ -287,6 +288,11 @@ def save_refill_policy(config: RefillConfig, policy: RefillPolicy) -> RefillPoli
 
 
 def keep_one_running(config: RefillConfig) -> RefillPolicy:
+    with ReconcileFileLock(_reconcile_lock_path(config)):
+        return _keep_one_running_locked(config)
+
+
+def _keep_one_running_locked(config: RefillConfig) -> RefillPolicy:
     policy = load_refill_policy(config)
     updated = RefillPolicy(
         enabled=True,
@@ -301,6 +307,11 @@ def keep_one_running(config: RefillConfig) -> RefillPolicy:
 
 
 def pause_builds(config: RefillConfig) -> RefillPolicy:
+    with ReconcileFileLock(_reconcile_lock_path(config)):
+        return _pause_builds_locked(config)
+
+
+def _pause_builds_locked(config: RefillConfig) -> RefillPolicy:
     policy = load_refill_policy(config)
     resume_capacity = (
         policy.desired_capacity if policy.desired_capacity > 0 else policy.resume_desired_capacity
@@ -318,6 +329,11 @@ def pause_builds(config: RefillConfig) -> RefillPolicy:
 
 
 def resume_builds(config: RefillConfig) -> RefillPolicy:
+    with ReconcileFileLock(_reconcile_lock_path(config)):
+        return _resume_builds_locked(config)
+
+
+def _resume_builds_locked(config: RefillConfig) -> RefillPolicy:
     path = _policy_path(config)
     if not path.exists():
         raise RefillControllerError("cannot resume refill without a prior founder target")
@@ -339,12 +355,36 @@ def resume_builds(config: RefillConfig) -> RefillPolicy:
     return save_refill_policy(config, updated)
 
 
+def keep_one_running_and_reconcile(config: RefillConfig) -> RefillReport:
+    with ReconcileFileLock(_reconcile_lock_path(config)):
+        _keep_one_running_locked(config)
+        return _reconcile_refill_locked(config)
+
+
+def pause_builds_and_reconcile(config: RefillConfig) -> RefillReport:
+    with ReconcileFileLock(_reconcile_lock_path(config)):
+        _pause_builds_locked(config)
+        return _reconcile_refill_locked(config)
+
+
+def resume_builds_and_reconcile(config: RefillConfig) -> RefillReport:
+    with ReconcileFileLock(_reconcile_lock_path(config)):
+        _resume_builds_locked(config)
+        return _reconcile_refill_locked(config)
+
+
 def _host_paths(config: RefillConfig) -> HostPaths:
     if config.build_next.host_root is None:
         raise RefillControllerError("refill controller requires host_root")
     paths = HostPaths.from_root(config.build_next.host_root)
     paths.ensure()
     return paths
+
+
+def _supervisor_root(config: RefillConfig, paths: HostPaths) -> Path:
+    if config.supervisor_root is not None:
+        return config.supervisor_root.expanduser().resolve()
+    return paths.root.parent / ".msos-autobuilder-supervisor"
 
 
 def _queue_counts(paths: HostPaths) -> tuple[int, int]:
@@ -372,16 +412,22 @@ def _terminal_local_job_ids(paths: HostPaths) -> set[str]:
     }
 
 
-def _feed_awaiting_import(config: RefillConfig, paths: HostPaths) -> tuple[int, list[str]]:
+def _feed_awaiting_import(
+    config: RefillConfig, paths: HostPaths
+) -> tuple[int, list[str], dict[str, Any]]:
+    check: dict[str, Any] = {"ok": True, "job_ids": [], "error": None}
     if not config.build_next.submit:
-        return 0, []
+        check["skipped"] = "feed submission disabled"
+        return 0, [], check
     try:
         checkout = _prepare_feed_checkout(config.build_next)
-    except BaseException:
-        return 0, []
+    except Exception as exc:
+        check.update({"ok": False, "error": str(exc)})
+        return 0, [], check
     root = checkout / config.build_next.jobs_path
     if not root.exists():
-        return 0, []
+        check["path"] = str(root)
+        return 0, [], check
     known = _active_local_job_ids(paths) | _terminal_local_job_ids(paths)
     pending: list[str] = []
     for source in sorted(root.glob("*.yaml")):
@@ -391,7 +437,8 @@ def _feed_awaiting_import(config: RefillConfig, paths: HostPaths) -> tuple[int, 
             continue
         if job.approved and job.job_id not in known:
             pending.append(job.job_id)
-    return len(pending), pending
+    check.update({"path": str(root), "job_ids": list(pending)})
+    return len(pending), pending, check
 
 
 def _gate_report_repository(job: Mapping[str, Any], report: Mapping[str, Any]) -> str | None:
@@ -454,6 +501,88 @@ def _awaiting_review_counts(paths: HostPaths) -> dict[str, int]:
     return counts
 
 
+def _active_release_evidence(path: Path) -> dict[str, Any]:
+    evidence: dict[str, Any] = {"ok": False, "path": str(path)}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        evidence["error"] = str(exc)
+        return evidence
+    if not isinstance(raw, dict):
+        evidence["error"] = "active release pointer must be a JSON object"
+        return evidence
+    commit = str(raw.get("commit") or "")
+    release_path = Path(str(raw.get("release_path") or "")).expanduser()
+    evidence.update(
+        {
+            "commit": commit,
+            "release_path": str(release_path),
+            "activated_at": raw.get("activated_at"),
+        }
+    )
+    if not commit or len(commit) != 40 or any(c not in "0123456789abcdef" for c in commit):
+        evidence["error"] = "active release commit is not an exact lowercase SHA"
+        return evidence
+    try:
+        marker_raw = json.loads((release_path / "release.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        evidence["error"] = f"active release marker is missing or invalid: {exc}"
+        return evidence
+    if not isinstance(marker_raw, dict) or marker_raw.get("commit") != commit:
+        evidence["error"] = "active release marker does not match active pointer"
+        return evidence
+    evidence["ok"] = True
+    return evidence
+
+
+def _managed_service_evidence(
+    supervisor: Path,
+    *,
+    expected_commit: Any,
+    activated_at: Any,
+) -> dict[str, Any]:
+    services = ("host", "relay", "gate", "revision", "publisher", "refill")
+    root = supervisor / "state" / "service-witnesses"
+    activated = _parse_utc(activated_at)
+    checks: dict[str, Any] = {"ok": True, "path": str(root), "services": {}}
+    for service in services:
+        path = root / f"{service}.json"
+        item: dict[str, Any] = {"ok": False, "path": str(path)}
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            item["error"] = str(exc)
+            checks["ok"] = False
+            checks["services"][service] = item
+            continue
+        if not isinstance(raw, dict):
+            item["error"] = "service witness must be a JSON object"
+            checks["ok"] = False
+            checks["services"][service] = item
+            continue
+        started = _parse_utc(raw.get("started_at"))
+        item.update(
+            {
+                "state": raw.get("state"),
+                "release_commit": raw.get("release_commit"),
+                "pid": raw.get("child_pid") or raw.get("pid") or raw.get("wrapper_pid"),
+                "started_at": raw.get("started_at"),
+            }
+        )
+        if raw.get("state") != "running":
+            item["error"] = "service witness is not running"
+        elif expected_commit and raw.get("release_commit") != expected_commit:
+            item["error"] = "service witness does not match active release"
+        elif activated is not None and (started is None or started < activated):
+            item["error"] = "service witness predates active release"
+        else:
+            item["ok"] = True
+        if not item["ok"]:
+            checks["ok"] = False
+        checks["services"][service] = item
+    return checks
+
+
 def _health_snapshot(config: RefillConfig, paths: HostPaths) -> dict[str, Any]:
     health: dict[str, Any] = {
         "checked_at": _utc_now(),
@@ -490,22 +619,40 @@ def _health_snapshot(config: RefillConfig, paths: HostPaths) -> dict[str, Any]:
     }
     if not checks["feed_configuration"]["ok"]:
         health["ok"] = False
-    checks["results_checkout"] = {
-        "ok": (paths.state / "candidate-gate-results-repo").exists(),
-        "path": str(paths.state / "candidate-gate-results-repo"),
-    }
+    results_checkout = paths.state / "candidate-gate-results-repo"
+    checks["results_checkout"] = {"ok": results_checkout.exists(), "path": str(results_checkout)}
+    if not checks["results_checkout"]["ok"]:
+        health["ok"] = False
+    supervisor = _supervisor_root(config, paths)
+    active_release = _active_release_evidence(supervisor / "state" / "active-release.json")
+    checks["active_release"] = active_release
+    if not active_release["ok"]:
+        health["ok"] = False
+    service_checks = _managed_service_evidence(
+        supervisor,
+        expected_commit=active_release.get("commit"),
+        activated_at=active_release.get("activated_at"),
+    )
+    checks["managed_services"] = service_checks
+    if not service_checks["ok"]:
+        health["ok"] = False
     checks["publisher_state"] = {
-        "ok": True,
+        "ok": not (paths.state / "controlled-publisher-error.json").exists(),
         "ledger": str(paths.state / "controlled-publisher-seen.json"),
         "error": str(paths.state / "controlled-publisher-error.json"),
     }
+    if not checks["publisher_state"]["ok"]:
+        health["ok"] = False
     return health
 
 
 def _capacity_snapshot(config: RefillConfig, paths: HostPaths) -> CapacitySnapshot:
     running, queued = _queue_counts(paths)
-    feed_count, feed_ids = _feed_awaiting_import(config, paths)
+    feed_count, feed_ids, feed_check = _feed_awaiting_import(config, paths)
     health = _health_snapshot(config, paths)
+    health["checks"]["feed_checkout"] = feed_check
+    if not feed_check["ok"]:
+        health["ok"] = False
     return CapacitySnapshot(
         running=running,
         queued=queued,

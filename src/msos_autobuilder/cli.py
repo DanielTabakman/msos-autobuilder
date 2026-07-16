@@ -30,13 +30,13 @@ from .process_witness import render_process_witness_json, run_process_witness
 from .refill_controller import (
     RefillConfig,
     RefillService,
-    keep_one_running,
+    keep_one_running_and_reconcile,
     load_refill_policy,
-    pause_builds,
+    pause_builds_and_reconcile,
     reconcile_refill,
     render_refill_report_json,
     render_refill_service_status_json,
-    resume_builds,
+    resume_builds_and_reconcile,
 )
 from .workspace_witness import render_workspace_witness_json, run_workspace_witness
 
@@ -213,22 +213,19 @@ def _refill_config(args: argparse.Namespace, *, submit: bool = True) -> RefillCo
 
 
 def _refill_keep_one_command(args: argparse.Namespace) -> int:
-    policy = keep_one_running(_refill_config(args))
-    report = reconcile_refill(_refill_config(args))
+    report = keep_one_running_and_reconcile(_refill_config(args))
     _write_or_print(render_refill_report_json(report), args.json_out)
-    return 0 if policy.enabled else 2
+    return 0 if report.enabled else 2
 
 
 def _refill_pause_command(args: argparse.Namespace) -> int:
-    pause_builds(_refill_config(args))
-    report = reconcile_refill(_refill_config(args))
+    report = pause_builds_and_reconcile(_refill_config(args))
     _write_or_print(render_refill_report_json(report), args.json_out)
     return 0
 
 
 def _refill_resume_command(args: argparse.Namespace) -> int:
-    resume_builds(_refill_config(args))
-    report = reconcile_refill(_refill_config(args))
+    report = resume_builds_and_reconcile(_refill_config(args))
     _write_or_print(render_refill_report_json(report), args.json_out)
     return 2 if report.status in {"BLOCKED", "BACKPRESSURE"} else 0
 

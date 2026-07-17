@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -373,6 +374,647 @@ def test_publisher_error_state_blocks_dispatch(tmp_path: Path) -> None:
     assert report.status == "BLOCKED"
     publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
     assert publisher["ok"] is False
+
+
+def _write_error_marker(
+    config: RefillConfig,
+    name: str,
+    payload: dict[str, object],
+) -> Path:
+    assert config.build_next.host_root is not None
+    path = config.build_next.host_root / "state" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def _write_state_json(config: RefillConfig, name: str, payload: dict[str, object]) -> Path:
+    assert config.build_next.host_root is not None
+    path = config.build_next.host_root / "state" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def _generation_id(
+    *,
+    release_commit: str = EXACT_RELEASE,
+    started_at: str = "2999-01-01T00:00:00+00:00",
+    pid: int = 123,
+) -> str:
+    return hashlib.sha256(f"{release_commit}\n{started_at}\n{pid}\n".encode()).hexdigest()
+
+
+def test_historical_publisher_error_after_later_exact_release_start_does_not_block(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    _write_error_marker(
+        config,
+        "controlled-publisher-error.json",
+        {
+            "recorded_at": "2026-07-16T23:46:31.078266+00:00",
+            "error_type": "PublisherError",
+            "message": "GitHub API 503",
+            "draft_pr_publication_enabled": True,
+            "merge_enabled": False,
+            "main_write_enabled": False,
+        },
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "QUEUED"
+    publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
+    assert publisher["ok"] is True
+    assert publisher["state"] == "superseded"
+    assert publisher["superseded_by"] == "later_healthy_exact_release_service_start"
+
+
+def test_current_generation_publisher_error_after_current_start_blocks(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    _write_error_marker(
+        config,
+        "controlled-publisher-error.json",
+        {
+            "service": "publisher",
+            "release_commit": EXACT_RELEASE,
+            "witness_started_at": "2999-01-01T00:00:00+00:00",
+            "recorded_at": "2999-01-01T00:00:01+00:00",
+            "error_type": "PublisherError",
+            "message": "current failure",
+            "draft_pr_publication_enabled": True,
+            "merge_enabled": False,
+            "main_write_enabled": False,
+        },
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
+    assert publisher["ok"] is False
+    assert "current-generation" in publisher["error"]
+
+
+def test_current_generation_error_followed_by_same_generation_success_is_superseded(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    generation = _generation_id()
+    _write_error_marker(
+        config,
+        "controlled-publisher-error.json",
+        {
+            "service": "publisher",
+            "release_commit": EXACT_RELEASE,
+            "witness_started_at": "2999-01-01T00:00:00+00:00",
+            "witness_pid": 123,
+            "generation_id": generation,
+            "recorded_at": "2999-01-01T00:00:01+00:00",
+            "error_type": "PublisherError",
+            "message": "current failure",
+            "draft_pr_publication_enabled": True,
+            "merge_enabled": False,
+            "main_write_enabled": False,
+        },
+    )
+    _write_state_json(
+        config,
+        "publisher-service-success.json",
+        {
+            "version": 1,
+            "service": "publisher",
+            "release_commit": EXACT_RELEASE,
+            "witness_started_at": "2999-01-01T00:00:00+00:00",
+            "witness_pid": 123,
+            "generation_id": generation,
+            "recorded_at": "2999-01-01T00:00:02+00:00",
+            "cycle_started_at": "2999-01-01T00:00:01.5+00:00",
+            "finished_at": "2999-01-01T00:00:02+00:00",
+            "result": "success",
+            "associated_jobs": [],
+            "terminal_evidence": {"processed_jobs": []},
+        },
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "QUEUED"
+    publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
+    assert publisher["ok"] is True
+    assert publisher["superseded_by"] == "later_same_generation_service_success"
+
+
+def test_idle_revision_success_supersedes_unassociated_same_generation_marker(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    generation = _generation_id()
+    _write_error_marker(
+        config,
+        "revision-loop-error.json",
+        {
+            "service": "revision",
+            "release_commit": EXACT_RELEASE,
+            "witness_started_at": "2999-01-01T00:00:00+00:00",
+            "witness_pid": 123,
+            "generation_id": generation,
+            "recorded_at": "2999-01-01T00:00:01+00:00",
+            "error_type": "RevisionLoopError",
+            "message": "same generation transient",
+            "publication_enabled": False,
+        },
+    )
+    _write_state_json(
+        config,
+        "revision-service-success.json",
+        {
+            "version": 1,
+            "service": "revision",
+            "release_commit": EXACT_RELEASE,
+            "witness_started_at": "2999-01-01T00:00:00+00:00",
+            "witness_pid": 123,
+            "generation_id": generation,
+            "recorded_at": "2999-01-01T00:00:02+00:00",
+            "cycle_started_at": "2999-01-01T00:00:01.5+00:00",
+            "finished_at": "2999-01-01T00:00:02+00:00",
+            "result": "success",
+            "associated_jobs": [],
+            "terminal_evidence": {"revision_jobs": []},
+        },
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "QUEUED"
+    revision = report.decision_evidence["health"]["checks"]["service_error_markers"]["services"][
+        "revision"
+    ]
+    assert revision["ok"] is True
+    assert revision["superseded_by"] == "later_same_generation_service_success"
+
+
+def test_stale_gate_error_superseded_by_later_terminal_gate_evidence(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    _write_state_json(
+        config,
+        "candidate-gate-seen.json",
+        {
+            "job-1": {
+                "source_report_sha256": "2" * 64,
+                "results_commit": "1" * 40,
+                "processed_at": "2026-07-16T23:44:47.562773+00:00",
+                "status": "passed",
+                "state": "candidate_passed",
+            }
+        },
+    )
+    _write_error_marker(
+        config,
+        "candidate-gate-error.json",
+        {
+            "service": "gate",
+            "release_commit": EXACT_RELEASE,
+            "recorded_at": "2026-07-16T23:43:47.562773+00:00",
+            "associated": {"job_id": "job-1"},
+            "error_type": "CandidateGateError",
+            "message": "transient fetch error",
+            "publication_enabled": False,
+        },
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "QUEUED"
+    gate = report.decision_evidence["health"]["checks"]["service_error_markers"]["services"]["gate"]
+    assert gate["ok"] is True
+    assert gate["superseded_by"] == "later_authoritative_terminal_job_evidence"
+
+
+def test_active_gate_error_blocks_refill(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    _write_error_marker(
+        config,
+        "candidate-gate-error.json",
+        {
+            "service": "gate",
+            "release_commit": EXACT_RELEASE,
+            "recorded_at": "2999-01-01T00:00:01+00:00",
+            "error_type": "CandidateGateError",
+            "message": "current gate failure",
+            "publication_enabled": False,
+        },
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    gate = report.decision_evidence["health"]["checks"]["service_error_markers"]["services"]["gate"]
+    assert gate["ok"] is False
+
+
+def test_stale_revision_error_superseded_by_later_successful_revision_state(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    _write_state_json(
+        config,
+        "revision-loop-seen.json",
+        {
+            "test-host/job-1": {
+                "gate_report_sha256": "3" * 64,
+                "revision_job_id": "job-1-revision-1",
+                "jobs_commit": "4" * 40,
+                "queued_at": "2026-07-16T06:32:32.999341+00:00",
+                "source_job_id": "job-1",
+            }
+        },
+    )
+    _write_error_marker(
+        config,
+        "revision-loop-error.json",
+        {
+            "service": "revision",
+            "release_commit": EXACT_RELEASE,
+            "recorded_at": "2026-07-16T06:31:32.999341+00:00",
+            "associated": {"job_id": "job-1-revision-1"},
+            "error_type": "RevisionLoopError",
+            "message": "historical transport failure",
+            "publication_enabled": False,
+        },
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "QUEUED"
+    revision = report.decision_evidence["health"]["checks"]["service_error_markers"]["services"][
+        "revision"
+    ]
+    assert revision["ok"] is True
+    assert revision["superseded_by"] == "later_authoritative_terminal_job_evidence"
+
+
+def test_restart_with_associated_active_job_remains_blocking(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    _write_error_marker(
+        config,
+        "candidate-gate-error.json",
+        {
+            "service": "gate",
+            "recorded_at": "2026-07-16T23:43:47.562773+00:00",
+            "associated": {"job_id": "active-job"},
+            "error_type": "CandidateGateError",
+            "message": "job-specific failure",
+            "publication_enabled": False,
+        },
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    gate = report.decision_evidence["health"]["checks"]["service_error_markers"]["services"]["gate"]
+    assert gate["ok"] is False
+    assert "matching job" in gate["error"] or "terminal" in gate["error"]
+
+
+def test_success_for_other_jobs_does_not_clear_associated_failure(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    generation = _generation_id()
+    _write_error_marker(
+        config,
+        "candidate-gate-error.json",
+        {
+            "service": "gate",
+            "release_commit": EXACT_RELEASE,
+            "witness_started_at": "2999-01-01T00:00:00+00:00",
+            "witness_pid": 123,
+            "generation_id": generation,
+            "recorded_at": "2999-01-01T00:00:01+00:00",
+            "associated": {"job_id": "failed-job", "candidate_id": "failed-job"},
+            "error_type": "CandidateGateError",
+            "message": "job-specific failure",
+            "publication_enabled": False,
+        },
+    )
+    _write_state_json(
+        config,
+        "gate-service-success.json",
+        {
+            "version": 1,
+            "service": "gate",
+            "release_commit": EXACT_RELEASE,
+            "witness_started_at": "2999-01-01T00:00:00+00:00",
+            "witness_pid": 123,
+            "generation_id": generation,
+            "recorded_at": "2999-01-01T00:00:02+00:00",
+            "cycle_started_at": "2999-01-01T00:00:01.5+00:00",
+            "finished_at": "2999-01-01T00:00:02+00:00",
+            "result": "success",
+            "associated_jobs": ["other-job"],
+        },
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    gate = report.decision_evidence["health"]["checks"]["service_error_markers"]["services"]["gate"]
+    assert gate["ok"] is False
+    assert "does not identify" in gate["error"] or "matching job" in gate["error"]
+
+
+def test_restart_with_proven_later_terminal_disposition_is_nonblocking(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    _write_error_marker(
+        config,
+        "controlled-publisher-error.json",
+        {
+            "service": "publisher",
+            "recorded_at": "2026-07-16T23:46:31.078266+00:00",
+            "associated": {"job_id": "published-job"},
+            "error_type": "PublisherError",
+            "message": "historical job failure",
+            "draft_pr_publication_enabled": True,
+            "merge_enabled": False,
+            "main_write_enabled": False,
+        },
+    )
+    _write_state_json(
+        config,
+        "controlled-publisher-seen.json",
+        {
+            "published-job": {
+                "gate_report_sha256": "1" * 64,
+                "source_report_sha256": "2" * 64,
+                "branch": "autobuilder/published-job",
+                "commit_sha": "3" * 40,
+                "pr_number": 12,
+                "pr_url": "https://example.invalid/pull/12",
+                "results_commit": "4" * 40,
+                "published_at": "2026-07-16T23:47:31.078266+00:00",
+                "status": "published-draft",
+            }
+        },
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "QUEUED"
+    publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
+    assert publisher["ok"] is True
+    assert publisher["superseded_by"] == "later_authoritative_terminal_job_evidence"
+
+
+def test_ledger_entry_before_marker_cannot_supersede(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    _write_error_marker(
+        config,
+        "candidate-gate-error.json",
+        {
+            "service": "gate",
+            "recorded_at": "2026-07-16T23:43:47.562773+00:00",
+            "associated": {"job_id": "job-1"},
+            "error_type": "CandidateGateError",
+            "message": "later mutation failure",
+            "publication_enabled": False,
+        },
+    )
+    _write_state_json(
+        config,
+        "candidate-gate-seen.json",
+        {
+            "job-1": {
+                "source_report_sha256": "2" * 64,
+                "results_commit": "1" * 40,
+                "processed_at": "2026-07-16T23:42:47.562773+00:00",
+                "status": "passed",
+            }
+        },
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    gate = report.decision_evidence["health"]["checks"]["service_error_markers"]["services"]["gate"]
+    assert gate["ok"] is False
+    assert "predates" in gate["error"]
+
+
+def test_empty_or_malformed_matching_ledger_entry_remains_blocking(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    _write_error_marker(
+        config,
+        "revision-loop-error.json",
+        {
+            "service": "revision",
+            "recorded_at": "2026-07-16T06:31:32.999341+00:00",
+            "associated": {"job_id": "job-1-revision-1"},
+            "error_type": "RevisionLoopError",
+            "message": "historical transport failure",
+            "publication_enabled": False,
+        },
+    )
+    _write_state_json(
+        config,
+        "revision-loop-seen.json",
+        {"test-host/job-1": {"revision_job_id": "job-1-revision-1"}},
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    revision = report.decision_evidence["health"]["checks"]["service_error_markers"]["services"][
+        "revision"
+    ]
+    assert revision["ok"] is False
+    assert "gate_report_sha256" in revision["error"]
+
+
+def test_malformed_or_ambiguous_marker_blocks_refill(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    assert config.build_next.host_root is not None
+    marker = config.build_next.host_root / "state" / "controlled-publisher-error.json"
+    marker.write_text("{not-json", encoding="utf-8")
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
+    assert publisher["ok"] is False
+    assert "malformed" in publisher["error"]
+
+
+def test_other_release_marker_cannot_clear_current_error(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    _write_error_marker(
+        config,
+        "controlled-publisher-error.json",
+        {
+            "service": "publisher",
+            "release_commit": "b" * 40,
+            "recorded_at": "2999-01-01T00:00:01+00:00",
+            "error_type": "PublisherError",
+            "message": "wrong release current failure",
+            "draft_pr_publication_enabled": True,
+            "merge_enabled": False,
+            "main_write_enabled": False,
+        },
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
+    assert publisher["ok"] is False
+    assert "release contradicts" in publisher["error"]
+
+
+def test_contradictory_witness_generation_metadata_blocks(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    _write_error_marker(
+        config,
+        "controlled-publisher-error.json",
+        {
+            "service": "publisher",
+            "release_commit": EXACT_RELEASE,
+            "witness_started_at": "2999-01-01T00:00:00+00:00",
+            "witness_pid": 999,
+            "recorded_at": "2999-01-01T00:00:01+00:00",
+            "error_type": "PublisherError",
+            "message": "contradictory generation",
+            "draft_pr_publication_enabled": True,
+            "merge_enabled": False,
+            "main_write_enabled": False,
+        },
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
+    assert publisher["ok"] is False
+    assert "generation metadata contradicts" in publisher["error"]
+
+
+def test_stale_marker_restart_recovery_is_deterministic(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    _write_error_marker(
+        config,
+        "controlled-publisher-error.json",
+        {
+            "recorded_at": "2026-07-16T23:46:31.078266+00:00",
+            "error_type": "PublisherError",
+            "message": "historical GitHub 503",
+            "draft_pr_publication_enabled": True,
+            "merge_enabled": False,
+            "main_write_enabled": False,
+        },
+    )
+    keep_one_running(config)
+
+    first = reconcile_refill(config)
+    second = RefillService(config, interval_seconds=0.01).run_once()
+
+    assert first.status == "QUEUED"
+    assert second.status == "QUEUED"
+    assert first.decision_evidence["health"]["checks"]["publisher_state"]["marker_sha256"]
+    assert (
+        first.decision_evidence["health"]["checks"]["publisher_state"]["marker_sha256"]
+        == second.decision_evidence["health"]["checks"]["publisher_state"]["marker_sha256"]
+    )
+
+
+def test_issue_50_observed_stale_marker_class_regression(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(
+        config,
+    )
+    _write_error_marker(
+        config,
+        "controlled-publisher-error.json",
+        {
+            "recorded_at": "2026-07-16T23:46:31.078266+00:00",
+            "error_type": "PublisherError",
+            "message": (
+                "GitHub API GET /repos/DanielTabakman/Probability-prediction-engine/pulls "
+                "failed: 503"
+            ),
+            "draft_pr_publication_enabled": True,
+            "merge_enabled": False,
+            "main_write_enabled": False,
+        },
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "QUEUED"
+    publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
+    assert publisher["ok"] is True
+    assert publisher["preserved"] is True
+
+
+def test_marker_bytes_and_sha_remain_unchanged_after_evaluation(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    marker = _write_error_marker(
+        config,
+        "controlled-publisher-error.json",
+        {
+            "recorded_at": "2026-07-16T23:46:31.078266+00:00",
+            "error_type": "PublisherError",
+            "message": "historical GitHub 503",
+            "draft_pr_publication_enabled": True,
+            "merge_enabled": False,
+            "main_write_enabled": False,
+        },
+    )
+    before = marker.read_bytes()
+    before_sha = hashlib.sha256(before).hexdigest()
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "QUEUED"
+    assert marker.read_bytes() == before
+    assert hashlib.sha256(marker.read_bytes()).hexdigest() == before_sha
+    assert (
+        report.decision_evidence["health"]["checks"]["publisher_state"]["marker_sha256"]
+        == before_sha
+    )
 
 
 def test_healthy_exact_release_witnesses_allow_refill(tmp_path: Path) -> None:

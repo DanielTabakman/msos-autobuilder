@@ -259,6 +259,32 @@ def test_controlled_publisher_creates_one_draft_pr_and_is_repeat_safe(tmp_path: 
     assert len(client.pulls) == 1
 
 
+def test_controlled_publisher_ledger_save_failure_records_job_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path, product_bare, _, job_id = make_fixture(tmp_path)
+    config = load_publisher_config(config_path)
+    publisher = ControlledPublisher(config, github_client=FakeGitHubClient(product_bare))
+
+    def fail_save(*_args: object, **_kwargs: object) -> None:
+        raise OSError("publisher ledger save failed")
+
+    monkeypatch.setattr(publisher, "_save_ledger", fail_save)
+
+    with pytest.raises(OSError, match="publisher ledger save failed"):
+        publisher.run_once()
+
+    marker = json.loads(
+        (config.host_root / "state" / "controlled-publisher-error.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert marker["service"] == "publisher"
+    assert marker["associated"]["job_id"] == job_id
+    assert marker["associated"]["repository"] == "owner/product"
+
+
 def test_controlled_publisher_rejects_overlapping_product_main_change(tmp_path: Path) -> None:
     config_path, product_bare, _, job_id = make_fixture(tmp_path, overlap=True)
     config = load_publisher_config(config_path)
@@ -266,6 +292,14 @@ def test_controlled_publisher_rejects_overlapping_product_main_change(tmp_path: 
 
     with pytest.raises(PublisherError, match="changed candidate paths"):
         publisher.run_once()
+    marker = json.loads(
+        (config.host_root / "state" / "controlled-publisher-error.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert marker["service"] == "publisher"
+    assert marker["associated"]["job_id"] == job_id
+    assert marker["associated"]["repository"] == "owner/product"
     proc = subprocess.run(
         [
             "git",

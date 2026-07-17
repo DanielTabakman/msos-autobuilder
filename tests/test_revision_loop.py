@@ -238,6 +238,93 @@ def test_revision_loop_writes_only_jobs_branch_and_is_repeat_safe(tmp_path: Path
     assert not list(results_review.rglob(f"{TARGET_TASK_ID}-revision-1.yaml"))
 
 
+def test_revision_loop_job_yaml_parse_failure_records_source_identity(tmp_path: Path) -> None:
+    remote = _create_remote(tmp_path)
+    editor = tmp_path / "editor"
+    _git(None, "clone", "-q", "--branch", "results", str(remote), str(editor))
+    _git(editor, "config", "user.email", "test@example.com")
+    _git(editor, "config", "user.name", "Test")
+    job_path = editor / "results" / "test-host" / ROOT_JOB_ID / "job.yaml"
+    job_path.write_text("[", encoding="utf-8")
+    _git(editor, "add", ".")
+    _git(editor, "commit", "-qm", "break job yaml")
+    _git(editor, "push", "-q", "origin", "results")
+    config = RevisionLoopConfig(
+        host_root=tmp_path / "host",
+        repo_url=str(remote),
+        machine_id="test-host",
+        poll_seconds=1,
+        plans={ROOT_JOB_ID: _plan()},
+    )
+    loop = RevisionLoop(config)
+
+    with pytest.raises(yaml.YAMLError):
+        loop.run_once()
+
+    marker = json.loads(
+        (config.host_root / "state" / "revision-loop-error.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert marker["associated"]["job_id"] == ROOT_JOB_ID
+    assert marker["associated"]["source_job_id"] == ROOT_JOB_ID
+    assert "revision_job_id" not in marker["associated"]
+
+
+def test_revision_loop_ledger_save_failure_records_source_and_revision_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    remote = _create_remote(tmp_path)
+    config = RevisionLoopConfig(
+        host_root=tmp_path / "host",
+        repo_url=str(remote),
+        machine_id="test-host",
+        poll_seconds=1,
+        plans={ROOT_JOB_ID: _plan()},
+    )
+    loop = RevisionLoop(config)
+
+    def fail_save(*_args: object, **_kwargs: object) -> None:
+        raise OSError("revision ledger save failed")
+
+    monkeypatch.setattr(loop, "_save_ledger", fail_save)
+
+    with pytest.raises(OSError, match="revision ledger save failed"):
+        loop.run_once()
+
+    marker = json.loads(
+        (config.host_root / "state" / "revision-loop-error.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert marker["associated"]["source_job_id"] == ROOT_JOB_ID
+    assert marker["associated"]["revision_job_id"] == f"{TARGET_TASK_ID}-revision-1"
+
+
+def test_revision_loop_idle_cycle_writes_success_record(tmp_path: Path) -> None:
+    remote = _create_remote(tmp_path)
+    config = RevisionLoopConfig(
+        host_root=tmp_path / "host",
+        repo_url=str(remote),
+        machine_id="missing-host",
+        poll_seconds=1,
+        plans={ROOT_JOB_ID: _plan()},
+    )
+    loop = RevisionLoop(config)
+
+    assert loop.run_once() == ()
+
+    success = json.loads(
+        (config.host_root / "state" / "revision-service-success.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert success["service"] == "revision"
+    assert success["result"] == "success"
+    assert success["associated_jobs"] == []
+
+
 def test_revision_loop_rejects_mutated_gate_evidence(tmp_path: Path) -> None:
     remote = _create_remote(tmp_path)
     config = RevisionLoopConfig(
@@ -264,6 +351,14 @@ def test_revision_loop_rejects_mutated_gate_evidence(tmp_path: Path) -> None:
 
     with pytest.raises(RevisionLoopError, match="changed after revision processing"):
         loop.run_once()
+    marker = json.loads(
+        (config.host_root / "state" / "revision-loop-error.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert marker["service"] == "revision"
+    assert marker["associated"]["job_id"] == ROOT_JOB_ID
+    assert marker["associated"]["source_job_id"] == ROOT_JOB_ID
 
 
 def test_revision_loop_rejects_default_branch_targets(tmp_path: Path) -> None:

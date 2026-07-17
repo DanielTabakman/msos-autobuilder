@@ -29,6 +29,7 @@ from typing import Any
 import yaml
 
 from .candidate_gate import GateCheck, _atomic_write_json, _bounded, _safe_segment, run_check
+from .service_error_lifecycle import record_service_cycle_success, write_service_error_marker
 
 
 class PublisherError(RuntimeError):
@@ -474,6 +475,7 @@ class ControlledPublisher:
         self.ledger_path = self.state / "controlled-publisher-seen.json"
         self.lock_path = self.state / "controlled-publisher.lock"
         self.github_client = github_client
+        self._last_error_marker_written = False
 
     def _client(self) -> GitHubDraftClient:
         if self.github_client is None:
@@ -953,12 +955,19 @@ class ControlledPublisher:
         return publication_report, results_commit
 
     def run_once(self) -> tuple[str, ...]:
+        self._last_error_marker_written = False
         self.state.mkdir(parents=True, exist_ok=True)
+        cycle_started_at = _utc_now()
         with PublisherLock(self.lock_path):
             self.evidence.prepare()
             ledger = self._load_ledger()
             processed: list[str] = []
             for job_id, plan in self.config.plans.items():
+                associated = {
+                    "job_id": job_id,
+                    "repository": self.config.product_repo_full_name,
+                    "machine_id": self.config.machine_id,
+                }
                 job_dir = self.evidence.job_dir(job_id)
                 gate_path = job_dir / "gate-report.json"
                 if not gate_path.exists():
@@ -966,42 +975,74 @@ class ControlledPublisher:
                 gate_sha = _sha256_file(gate_path)
                 existing = ledger.get(job_id)
                 if existing:
-                    self._verify_ledger_entry(
-                        job_id=job_id,
-                        gate_sha=gate_sha,
-                        entry=existing,
-                    )
+                    try:
+                        self._verify_ledger_entry(
+                            job_id=job_id,
+                            gate_sha=gate_sha,
+                            entry=existing,
+                        )
+                    except PublisherError as exc:
+                        self._write_error_marker(exc, associated=associated)
+                        raise
                     continue
-                report, results_commit = self.publish_job(job_id, plan)
-                ledger[job_id] = {
-                    "gate_report_sha256": gate_sha,
-                    "source_report_sha256": report["source_report_sha256"],
-                    "branch": report["product_branch"],
-                    "commit_sha": report["product_commit"],
-                    "pr_number": report["pr_number"],
-                    "pr_url": report["pr_url"],
-                    "results_commit": results_commit,
-                }
-                self._save_ledger(ledger)
-                processed.append(job_id)
+                try:
+                    report, results_commit = self.publish_job(job_id, plan)
+                    ledger[job_id] = {
+                        "gate_report_sha256": gate_sha,
+                        "source_report_sha256": report["source_report_sha256"],
+                        "branch": report["product_branch"],
+                        "commit_sha": report["product_commit"],
+                        "pr_number": report["pr_number"],
+                        "pr_url": report["pr_url"],
+                        "results_commit": results_commit,
+                        "published_at": report["published_at"],
+                        "status": report["status"],
+                    }
+                    self._save_ledger(ledger)
+                    processed.append(job_id)
+                except (PublisherError, OSError, KeyError, TypeError, ValueError) as exc:
+                    self._write_error_marker(exc, associated=associated)
+                    raise
+            record_service_cycle_success(
+                state_root=self.state,
+                host_root=self.host_root,
+                service="publisher",
+                cycle_started_at=cycle_started_at,
+                associated_jobs=processed,
+                terminal_evidence={"processed_jobs": processed},
+            )
             return tuple(processed)
+
+    def _write_error_marker(
+        self,
+        exc: BaseException,
+        *,
+        associated: Mapping[str, Any] | None = None,
+    ) -> None:
+        write_service_error_marker(
+            state_root=self.state,
+            host_root=self.host_root,
+            service="publisher",
+            marker_name="controlled-publisher-error.json",
+            error_type=type(exc).__name__,
+            message=str(exc),
+            associated=associated,
+            extra={
+                "draft_pr_publication_enabled": True,
+                "merge_enabled": False,
+                "main_write_enabled": False,
+            },
+            exception=exc,
+        )
+        self._last_error_marker_written = True
 
     def run_forever(self) -> None:
         while True:
             try:
                 self.run_once()
             except PublisherError as exc:
-                _atomic_write_json(
-                    self.state / "controlled-publisher-error.json",
-                    {
-                        "recorded_at": _utc_now(),
-                        "error_type": type(exc).__name__,
-                        "message": str(exc),
-                        "draft_pr_publication_enabled": True,
-                        "merge_enabled": False,
-                        "main_write_enabled": False,
-                    },
-                )
+                if not self._last_error_marker_written:
+                    self._write_error_marker(exc, associated={"scope": "global"})
             time.sleep(self.config.poll_seconds)
 
 

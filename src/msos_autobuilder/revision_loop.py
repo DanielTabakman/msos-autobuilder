@@ -25,6 +25,8 @@ from typing import Any
 
 import yaml
 
+from .service_error_lifecycle import record_service_cycle_success, write_service_error_marker
+
 
 class RevisionLoopError(RuntimeError):
     """Raised when gate evidence or revision output violates the contract."""
@@ -420,6 +422,7 @@ class RevisionLoop:
             config.jobs_branch,
             writable=True,
         )
+        self._last_error_marker_written = False
 
     def _load_ledger(self) -> dict[str, dict[str, str]]:
         if not self.ledger_path.exists():
@@ -461,16 +464,17 @@ class RevisionLoop:
         return commit
 
     def run_once(self) -> tuple[str, ...]:
+        self._last_error_marker_written = False
         self.state.mkdir(parents=True, exist_ok=True)
+        cycle_started_at = _utc_now()
         self.results.prepare()
         self.jobs.prepare()
         ledger = self._load_ledger()
         processed: list[str] = []
         root = self.results.root / "results" / self.config.machine_id
-        if not root.exists():
-            return ()
         plans = self.config.plans or {}
-        for job_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+        job_dirs = sorted(path for path in root.iterdir() if path.is_dir()) if root.exists() else []
+        for job_dir in job_dirs:
             gate_path = job_dir / "gate-report.json"
             job_path = job_dir / "job.yaml"
             if not gate_path.exists() or not job_path.exists():
@@ -485,42 +489,82 @@ class RevisionLoop:
             _, plan = matched
             gate_sha = _sha256_file(gate_path)
             ledger_key = f"{self.config.machine_id}/{job_id}"
+            associated = {
+                "job_id": job_id,
+                "source_job_id": job_id,
+                "machine_id": self.config.machine_id,
+                "repository": self.config.repo_url,
+            }
             previous = ledger.get(ledger_key)
             if previous:
                 if previous["gate_report_sha256"] != gate_sha:
-                    raise RevisionLoopError(f"gate report changed after revision processing: {job_id}")
+                    exc = RevisionLoopError(
+                        f"gate report changed after revision processing: {job_id}"
+                    )
+                    self._write_error_marker(exc, associated=associated)
+                    raise exc
                 continue
-            job_yaml = yaml.safe_load(job_path.read_text(encoding="utf-8"))
-            manifest = build_revision_manifest(
-                gate_report,
-                _mapping(job_yaml, "job.yaml"),
-                plan,
-                max_revision_depth=self.config.max_revision_depth,
-            )
-            commit = self._publish(manifest)
-            ledger[ledger_key] = {
-                "gate_report_sha256": gate_sha,
-                "revision_job_id": str(manifest["job_id"]),
-                "jobs_commit": commit,
-            }
-            self._save_ledger(ledger)
-            processed.append(str(manifest["job_id"]))
+            try:
+                job_yaml = yaml.safe_load(job_path.read_text(encoding="utf-8"))
+                manifest = build_revision_manifest(
+                    gate_report,
+                    _mapping(job_yaml, "job.yaml"),
+                    plan,
+                    max_revision_depth=self.config.max_revision_depth,
+                )
+                associated = {
+                    **associated,
+                    "revision_job_id": str(manifest["job_id"]),
+                }
+                commit = self._publish(manifest)
+                ledger[ledger_key] = {
+                    "gate_report_sha256": gate_sha,
+                    "revision_job_id": str(manifest["job_id"]),
+                    "jobs_commit": commit,
+                    "queued_at": _utc_now(),
+                    "source_job_id": job_id,
+                }
+                self._save_ledger(ledger)
+                processed.append(str(manifest["job_id"]))
+            except (RevisionLoopError, OSError, ValueError, yaml.YAMLError) as exc:
+                self._write_error_marker(exc, associated=associated)
+                raise
+        record_service_cycle_success(
+            state_root=self.state,
+            host_root=self.host_root,
+            service="revision",
+            cycle_started_at=cycle_started_at,
+            associated_jobs=processed,
+            terminal_evidence={"revision_jobs": processed},
+        )
         return tuple(processed)
+
+    def _write_error_marker(
+        self,
+        exc: BaseException,
+        *,
+        associated: Mapping[str, Any] | None = None,
+    ) -> None:
+        write_service_error_marker(
+            state_root=self.state,
+            host_root=self.host_root,
+            service="revision",
+            marker_name="revision-loop-error.json",
+            error_type=type(exc).__name__,
+            message=str(exc),
+            associated=associated,
+            extra={"publication_enabled": False},
+            exception=exc,
+        )
+        self._last_error_marker_written = True
 
     def run_forever(self) -> None:
         while True:
             try:
                 self.run_once()
             except (RevisionLoopError, json.JSONDecodeError, OSError, ValueError) as exc:
-                _atomic_write_json(
-                    self.state / "revision-loop-error.json",
-                    {
-                        "recorded_at": _utc_now(),
-                        "error_type": type(exc).__name__,
-                        "message": str(exc),
-                        "publication_enabled": False,
-                    },
-                )
+                if not self._last_error_marker_written:
+                    self._write_error_marker(exc, associated={"scope": "global"})
             time.sleep(self.config.poll_seconds)
 
 

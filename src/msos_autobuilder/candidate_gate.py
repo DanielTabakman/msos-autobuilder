@@ -26,6 +26,7 @@ from typing import Any
 
 import yaml
 
+from .service_error_lifecycle import record_service_cycle_success, write_service_error_marker
 from .validation_contract import (
     ValidationContractError,
     load_validation_contract,
@@ -537,6 +538,7 @@ class CandidateGate:
         self.workspace_root = self.state / "candidate-gate-workspaces"
         self.ledger_path = self.state / "candidate-gate-seen.json"
         self.results = ResultsBranch(config)
+        self._last_error_marker_written = False
 
     def _load_ledger(self) -> dict[str, dict[str, str]]:
         if not self.ledger_path.exists():
@@ -984,13 +986,21 @@ class CandidateGate:
         return self.process_job(job_dir, plan)
 
     def run_once(self) -> tuple[str, ...]:
+        self._last_error_marker_written = False
         self.state.mkdir(parents=True, exist_ok=True)
         self.workspace_root.mkdir(parents=True, exist_ok=True)
+        cycle_started_at = _utc_now()
         self.results.prepare()
         ledger = self._load_ledger()
         processed: list[str] = []
         for job_dir in self.results.job_dirs():
             job_id = _safe_segment(job_dir.name, fallback="job")
+            associated = {
+                "job_id": job_id,
+                "candidate_id": job_id,
+                "machine_id": self.config.machine_id,
+                "repository": str(self.config.results_repo_url),
+            }
             report_path = job_dir / "report.json"
             if not report_path.exists():
                 continue
@@ -998,37 +1008,71 @@ class CandidateGate:
             ledger_entry = ledger.get(job_id)
             if ledger_entry:
                 if ledger_entry["source_report_sha256"] != source_sha:
-                    raise CandidateGateError(f"relayed result changed after gate processing: {job_id}")
+                    exc = CandidateGateError(
+                        f"relayed result changed after gate processing: {job_id}"
+                    )
+                    self._write_error_marker(exc, associated=associated)
+                    raise exc
                 continue
-            if job_id in self.config.plans:
-                gate_report, processed_sha = self.process_job(job_dir, self.config.plans[job_id])
-            elif job_id.startswith("build-next-"):
-                gate_report, processed_sha = self.process_generic_job(job_dir)
-            else:
-                continue
-            commit = self.results.publish_report(job_dir, gate_report)
-            ledger[job_id] = {
-                "source_report_sha256": processed_sha or source_sha,
-                "results_commit": commit,
-            }
-            self._save_ledger(ledger)
-            processed.append(job_id)
+            try:
+                if job_id in self.config.plans:
+                    gate_report, processed_sha = self.process_job(
+                        job_dir,
+                        self.config.plans[job_id],
+                    )
+                elif job_id.startswith("build-next-"):
+                    gate_report, processed_sha = self.process_generic_job(job_dir)
+                else:
+                    continue
+                commit = self.results.publish_report(job_dir, gate_report)
+                ledger[job_id] = {
+                    "source_report_sha256": processed_sha or source_sha,
+                    "results_commit": commit,
+                    "processed_at": gate_report["finished_at"],
+                    "status": gate_report["status"],
+                    "state": gate_report.get("state"),
+                }
+                self._save_ledger(ledger)
+                processed.append(job_id)
+            except (CandidateGateError, OSError, KeyError, TypeError, ValueError) as exc:
+                self._write_error_marker(exc, associated=associated)
+                raise
+        record_service_cycle_success(
+            state_root=self.state,
+            host_root=self.host_root,
+            service="gate",
+            cycle_started_at=cycle_started_at,
+            associated_jobs=processed,
+            terminal_evidence={"processed_jobs": processed},
+        )
         return tuple(processed)
+
+    def _write_error_marker(
+        self,
+        exc: BaseException,
+        *,
+        associated: Mapping[str, Any] | None = None,
+    ) -> None:
+        write_service_error_marker(
+            state_root=self.state,
+            host_root=self.host_root,
+            service="gate",
+            marker_name="candidate-gate-error.json",
+            error_type=type(exc).__name__,
+            message=str(exc),
+            associated=associated,
+            extra={"publication_enabled": False},
+            exception=exc,
+        )
+        self._last_error_marker_written = True
 
     def run_forever(self) -> None:
         while True:
             try:
                 self.run_once()
             except CandidateGateError as exc:
-                _atomic_write_json(
-                    self.state / "candidate-gate-error.json",
-                    {
-                        "recorded_at": _utc_now(),
-                        "error_type": type(exc).__name__,
-                        "message": str(exc),
-                        "publication_enabled": False,
-                    },
-                )
+                if not self._last_error_marker_written:
+                    self._write_error_marker(exc, associated={"scope": "global"})
             time.sleep(self.config.poll_seconds)
 
 

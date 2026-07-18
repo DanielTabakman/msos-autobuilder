@@ -21,6 +21,7 @@ import yaml
 
 from . import candidate_gate as gate
 from . import candidate_gate_windows as windows
+from .service_error_lifecycle import exception_has_recorded_marker, write_service_error_marker
 
 
 def _mapping(value: Any, label: str) -> dict[str, Any]:
@@ -91,6 +92,24 @@ def run_once(config_path: Path) -> tuple[str, ...]:
     return gate.CandidateGate(_expanded_config(config_path)).run_once()
 
 
+def _record_global_error_if_needed(config_path: Path, exc: BaseException) -> bool:
+    if exception_has_recorded_marker(exc):
+        return False
+    host_root = gate.load_candidate_gate_config(config_path).host_root
+    write_service_error_marker(
+        state_root=host_root / "state",
+        host_root=host_root,
+        service="gate",
+        marker_name="candidate-gate-error.json",
+        error_type=type(exc).__name__,
+        message=str(exc),
+        associated={"scope": "global"},
+        extra={"publication_enabled": False},
+        exception=exc,
+    )
+    return True
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="msos-autobuilder-candidate-gate-revisions")
     parser.add_argument("--config", required=True)
@@ -124,16 +143,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (gate.CandidateGateError, OSError, ValueError, yaml.YAMLError) as exc:
             delay = 30.0
             try:
-                host_root = gate.load_candidate_gate_config(config_path).host_root
-                gate._atomic_write_json(
-                    host_root / "state" / "candidate-gate-error.json",
-                    {
-                        "recorded_at": gate._utc_now(),
-                        "error_type": type(exc).__name__,
-                        "message": str(exc),
-                        "publication_enabled": False,
-                    },
-                )
+                _record_global_error_if_needed(config_path, exc)
             except Exception:
                 pass
         time.sleep(delay)

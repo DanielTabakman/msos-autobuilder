@@ -478,6 +478,14 @@ def test_candidate_gate_rejects_default_branch_and_mutated_result(tmp_path: Path
 
     with pytest.raises(CandidateGateError, match="changed after gate processing"):
         gate.run_once()
+    marker = json.loads(
+        (tmp_path / "host" / "state" / "candidate-gate-error.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert marker["service"] == "gate"
+    assert marker["associated"]["job_id"] == "job-1"
+    assert marker["associated"]["candidate_id"] == "job-1"
 
 
 def test_candidate_gate_discovers_generic_build_next_contract(tmp_path: Path) -> None:
@@ -527,6 +535,84 @@ def test_candidate_gate_discovers_generic_build_next_contract(tmp_path: Path) ->
     assert report["candidate_environment_removed"] is True
     assert all(check["required"] is True for check in [*report["bootstrap"], *report["checks"]])
     assert _pip_freeze() == packages_before
+
+
+def test_candidate_gate_report_publication_failure_records_job_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _init_repo(tmp_path / "source")
+    source_head = _git(source, "rev-parse", "HEAD")
+    patch, changed_paths = _candidate_patch(source)
+    remote = _results_remote(
+        tmp_path,
+        source_head=source_head,
+        patch=patch,
+        changed_paths=changed_paths,
+    )
+    config_path = _write_config(
+        tmp_path,
+        host_root=tmp_path / "host",
+        source=source,
+        remote=remote,
+        check_code="pass",
+    )
+    gate_runner = CandidateGate(load_candidate_gate_config(config_path))
+
+    def fail_publish(*_args: object, **_kwargs: object) -> str:
+        raise OSError("publish failed")
+
+    monkeypatch.setattr(gate_runner.results, "publish_report", fail_publish)
+
+    with pytest.raises(OSError, match="publish failed"):
+        gate_runner.run_once()
+
+    marker = json.loads(
+        (tmp_path / "host" / "state" / "candidate-gate-error.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert marker["associated"]["job_id"] == "job-1"
+    assert marker["associated"]["candidate_id"] == "job-1"
+
+
+def test_candidate_gate_ledger_save_failure_records_job_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _init_repo(tmp_path / "source")
+    source_head = _git(source, "rev-parse", "HEAD")
+    patch, changed_paths = _candidate_patch(source)
+    remote = _results_remote(
+        tmp_path,
+        source_head=source_head,
+        patch=patch,
+        changed_paths=changed_paths,
+    )
+    config_path = _write_config(
+        tmp_path,
+        host_root=tmp_path / "host",
+        source=source,
+        remote=remote,
+        check_code="pass",
+    )
+    gate_runner = CandidateGate(load_candidate_gate_config(config_path))
+
+    def fail_save(*_args: object, **_kwargs: object) -> None:
+        raise OSError("ledger save failed")
+
+    monkeypatch.setattr(gate_runner, "_save_ledger", fail_save)
+
+    with pytest.raises(OSError, match="ledger save failed"):
+        gate_runner.run_once()
+
+    marker = json.loads(
+        (tmp_path / "host" / "state" / "candidate-gate-error.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert marker["associated"]["job_id"] == "job-1"
+    assert marker["associated"]["candidate_id"] == "job-1"
 
 
 def test_generic_build_next_without_valid_contract_is_unvalidated(tmp_path: Path) -> None:

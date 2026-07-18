@@ -23,6 +23,12 @@ from .build_next import (
     build_next,
 )
 from .persistent_host import HostPaths, HostProcessLock, parse_host_job
+from .service_error_lifecycle import (
+    GATE_ERROR_SPEC,
+    PUBLISHER_ERROR_SPEC,
+    REVISION_ERROR_SPEC,
+    evaluate_service_error_marker,
+)
 
 
 class RefillControllerError(RuntimeError):
@@ -636,12 +642,20 @@ def _health_snapshot(config: RefillConfig, paths: HostPaths) -> dict[str, Any]:
     checks["managed_services"] = service_checks
     if not service_checks["ok"]:
         health["ok"] = False
-    checks["publisher_state"] = {
-        "ok": not (paths.state / "controlled-publisher-error.json").exists(),
-        "ledger": str(paths.state / "controlled-publisher-seen.json"),
-        "error": str(paths.state / "controlled-publisher-error.json"),
+    service_error_checks = {
+        spec.service: evaluate_service_error_marker(
+            state_root=paths.state,
+            service_checks=service_checks,
+            spec=spec,
+        )
+        for spec in (PUBLISHER_ERROR_SPEC, GATE_ERROR_SPEC, REVISION_ERROR_SPEC)
     }
-    if not checks["publisher_state"]["ok"]:
+    checks["service_error_markers"] = {
+        "ok": all(item["ok"] for item in service_error_checks.values()),
+        "services": service_error_checks,
+    }
+    checks["publisher_state"] = service_error_checks["publisher"]
+    if not checks["service_error_markers"]["ok"]:
         health["ok"] = False
     return health
 

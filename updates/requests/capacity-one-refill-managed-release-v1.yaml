@@ -36,6 +36,7 @@ expected_files:
   - src/msos_autobuilder/revision_loop.py
   - src/msos_autobuilder/routing.py
   - src/msos_autobuilder/scheduler.py
+  - src/msos_autobuilder/service_error_lifecycle.py
   - src/msos_autobuilder/self_update_evidence_relay.py
   - src/msos_autobuilder/self_update_supervisor.py
   - src/msos_autobuilder/validation_contract.py

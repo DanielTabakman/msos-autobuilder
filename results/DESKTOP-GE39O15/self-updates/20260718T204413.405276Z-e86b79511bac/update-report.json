@@ -1,0 +1,295 @@
+{
+  "attempt_id": "20260718T204413.405276Z-e86b79511bac",
+  "attempted_at": "2026-07-18T20:44:13.414706+00:00",
+  "checks": [
+    {
+      "argv": [
+        "git",
+        "init",
+        "--quiet"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe",
+      "duration_seconds": 0.10114440001780167,
+      "name": "git-init",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "git",
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/DanielTabakman/msos-autobuilder.git"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe",
+      "duration_seconds": 0.04970889998367056,
+      "name": "git-add-origin",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-c",
+        "core.autocrlf=false",
+        "fetch",
+        "--depth",
+        "1",
+        "origin",
+        "6aab63690017c3c71a98d58e62c520094bfa64fe"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe",
+      "duration_seconds": 0.9344144000206143,
+      "name": "git-fetch-exact-commit",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "From https://github.com/DanielTabakman/msos-autobuilder\n * branch            6aab63690017c3c71a98d58e62c520094bfa64fe -> FETCH_HEAD\n",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-c",
+        "core.autocrlf=false",
+        "checkout",
+        "--detach",
+        "FETCH_HEAD"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe",
+      "duration_seconds": 0.1634467999683693,
+      "name": "git-checkout-exact-commit",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "HEAD is now at 6aab636 Merge pull request #68 from DanielTabakman/codex/service-marker-release-request\n",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe",
+      "duration_seconds": 0.044551300001330674,
+      "name": "git-rev-parse-head",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "6aab63690017c3c71a98d58e62c520094bfa64fe\n"
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\bootstrap-venv\\Scripts\\python.exe",
+        "-m",
+        "venv",
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe\\.venv"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe",
+      "duration_seconds": 9.900750900036655,
+      "name": "create-version-venv",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+        "-e",
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe[dev]"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe",
+      "duration_seconds": 15.604329699999653,
+      "name": "install-release",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "Obtaining file:///C:/Users/USER/.msos-autobuilder-supervisor/versions/6aab63690017c3c71a98d58e62c520094bfa64fe\n  Installing build dependencies: started\n  Installing build dependencies: finished with status 'done'\n  Checking if build backend supports build_editable: started\n  Checking if build backend supports build_editable: finished with status 'done'\n  Getting requirements to build editable: started\n  Getting requirements to build editable: finished with status 'done'\n  Preparing editable metadata (pyproject.toml): started\n  Preparing editable metadata (pyproject.toml): finished with status 'done'\nCollecting PyYAML>=6.0 (from msos-autobuilder==0.1.0)\n  Using cached pyyaml-6.0.3-cp314-cp314-win_amd64.whl.metadata (2.4 kB)\nCollecting pytest>=8.0 (from msos-autobuilder==0.1.0)\n  Using cached pytest-9.1.1-py3-none-any.whl.metadata (7.6 kB)\nCollecting ruff>=0.9 (from msos-autobuilder==0.1.0)\n  Using cached ruff-0.15.22-py3-none-win_amd64.whl.metadata (27 kB)\nCollecting colorama>=0.4 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached colorama-0.4.6-py2.py3-none-any.whl.metadata (17 kB)\nCollecting iniconfig>=1.0.1 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached iniconfig-2.3.0-py3-none-any.whl.metadata (2.5 kB)\nCollecting packaging>=22 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached packaging-26.2-py3-none-any.whl.metadata (3.5 kB)\nCollecting pluggy<2,>=1.5 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached pluggy-1.6.0-py3-none-any.whl.metadata (4.8 kB)\nCollecting pygments>=2.7.2 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached pygments-2.20.0-py3-none-any.whl.metadata (2.5 kB)\nUsing cached pytest-9.1.1-py3-none-any.whl (386 kB)\nUsing cached pluggy-1.6.0-py3-none-any.whl (20 kB)\nUsing cached colorama-0.4.6-py2.py3-none-any.whl (25 kB)\nUsing cached iniconfig-2.3.0-py3-none-any.whl (7.5 kB)\nUsing cached packaging-26.2-py3-none-any.whl (100 kB)\nUsing cached pygments-2.20.0-py3-none-any.whl (1.2 MB)\nUsing cached pyyaml-6.0.3-cp314-cp314-win_amd64.whl (156 kB)\nUsing cached ruff-0.15.22-py3-none-win_amd64.whl (11.9 MB)\nBuilding wheels for collected packages: msos-autobuilder\n  Building editable for msos-autobuilder (pyproject.toml): started\n  Building editable for msos-autobuilder (pyproject.toml): finished with status 'done'\n  Created wheel for msos-autobuilder: filename=msos_autobuilder-0.1.0-0.editable-py3-none-any.whl size=5118 sha256=7045f4a4c37e4bd0766b6215ede51df4885dc43354e24e145a791b078e6f6151\n  Stored in directory: C:\\Users\\USER\\AppData\\Local\\Temp\\pip-ephem-wheel-cache-184cv905\\wheels\\f0\\84\\bc\\116f35c7671a0b3c83a1c2074e36b08c7f4792cac5512ec662\nSuccessfully built msos-autobuilder\nInstalling collected packages: ruff, PyYAML, pygments, pluggy, packaging, iniconfig, colorama, pytest, msos-autobuilder\n\nSuccessfully installed PyYAML-6.0.3 colorama-0.4.6 iniconfig-2.3.0 msos-autobuilder-0.1.0 packaging-26.2 pluggy-1.6.0 pygments-2.20.0 pytest-9.1.1 ruff-0.15.22\n"
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe\\.venv\\Scripts\\python.exe",
+        "-m",
+        "ruff",
+        "check",
+        "."
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe",
+      "duration_seconds": 0.33285879995673895,
+      "name": "ruff",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "All checks passed!\n"
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe",
+      "duration_seconds": 643.6448287999956,
+      "name": "pytest",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "........................................................................ [ 29%]\n........................................................................ [ 58%]\n........................................................................ [ 87%]\n................................                                         [100%]\n248 passed in 641.40s (0:10:41)\n"
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe\\.venv\\Scripts\\python.exe",
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\bootstrap\\managed_release_health_probe.py",
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe",
+      "duration_seconds": 0.6123377000330947,
+      "name": "release-health-probe",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "{\"modules\": {\"msos_autobuilder.candidate_gate_revisions\": \"C:\\\\Users\\\\USER\\\\.msos-autobuilder-supervisor\\\\versions\\\\6aab63690017c3c71a98d58e62c520094bfa64fe\\\\src\\\\msos_autobuilder\\\\candidate_gate_revisions.py\", \"msos_autobuilder.controlled_publisher\": \"C:\\\\Users\\\\USER\\\\.msos-autobuilder-supervisor\\\\versions\\\\6aab63690017c3c71a98d58e62c520094bfa64fe\\\\src\\\\msos_autobuilder\\\\controlled_publisher.py\", \"msos_autobuilder.persistent_host\": \"C:\\\\Users\\\\USER\\\\.msos-autobuilder-supervisor\\\\versions\\\\6aab63690017c3c71a98d58e62c520094bfa64fe\\\\src\\\\msos_autobuilder\\\\persistent_host.py\", \"msos_autobuilder.refill_controller\": \"C:\\\\Users\\\\USER\\\\.msos-autobuilder-supervisor\\\\versions\\\\6aab63690017c3c71a98d58e62c520094bfa64fe\\\\src\\\\msos_autobuilder\\\\refill_controller.py\", \"msos_autobuilder.results_relay\": \"C:\\\\Users\\\\USER\\\\.msos-autobuilder-supervisor\\\\versions\\\\6aab63690017c3c71a98d58e62c520094bfa64fe\\\\src\\\\msos_autobuilder\\\\results_relay.py\", \"msos_autobuilder.revision_loop\": \"C:\\\\Users\\\\USER\\\\.msos-autobuilder-supervisor\\\\versions\\\\6aab63690017c3c71a98d58e62c520094bfa64fe\\\\src\\\\msos_autobuilder\\\\revision_loop.py\"}, \"state\": \"healthy\", \"version\": 1}\n"
+    },
+    {
+      "argv": [
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "-NoProfile",
+        "-Command",
+        "$ErrorActionPreference='Stop'; $failed=@(); Get-ChildItem -Path . -Recurse -Filter *.ps1 | ForEach-Object { $tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile($_.FullName,[ref]$tokens,[ref]$errors) | Out-Null; if($errors.Count -gt 0){$failed += $_.FullName} }; if($failed.Count -gt 0){$failed | Write-Error; exit 1}"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe",
+      "duration_seconds": 0.5119556999998167,
+      "name": "powershell-parser",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": ""
+    }
+  ],
+  "cutover": {
+    "at": "2026-07-18T20:55:26.206567+00:00",
+    "from_commit": "50ef01dacdb254ef791b27958fbd316737e66fb4",
+    "from_service_set": [
+      "host",
+      "relay",
+      "gate",
+      "revision",
+      "publisher",
+      "refill"
+    ],
+    "performed": true,
+    "pointer_swapped": true,
+    "tasks_started": true,
+    "to_commit": "6aab63690017c3c71a98d58e62c520094bfa64fe",
+    "to_service_set": [
+      "host",
+      "relay",
+      "gate",
+      "revision",
+      "publisher",
+      "refill"
+    ]
+  },
+  "errors": [],
+  "health": {
+    "achieved_stability_seconds": 12.21918460004963,
+    "disabled_task_states": {},
+    "health_poll_seconds": 2.0,
+    "health_timeout_seconds": 90.0,
+    "passed": true,
+    "service_set": [
+      "host",
+      "relay",
+      "gate",
+      "revision",
+      "publisher",
+      "refill"
+    ],
+    "stability_seconds": 10.0,
+    "task_states": {
+      "MSOS Autobuilder Candidate Gate": "Running",
+      "MSOS Autobuilder Capacity-One Refill": "Running",
+      "MSOS Autobuilder Controlled Publisher": "Running",
+      "MSOS Autobuilder Host": "Running",
+      "MSOS Autobuilder Result Relay": "Running",
+      "MSOS Autobuilder Revision Loop": "Running"
+    },
+    "witnesses": {
+      "gate": {
+        "child_pid": 16096,
+        "release_commit": "6aab63690017c3c71a98d58e62c520094bfa64fe",
+        "release_path": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe",
+        "service": "gate",
+        "started_at": "2026-07-18T20:55:34.3258404+00:00",
+        "state": "running",
+        "version": 1
+      },
+      "host": {
+        "child_pid": 19888,
+        "release_commit": "6aab63690017c3c71a98d58e62c520094bfa64fe",
+        "release_path": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe",
+        "service": "host",
+        "started_at": "2026-07-18T20:55:33.5286030+00:00",
+        "state": "running",
+        "version": 1
+      },
+      "publisher": {
+        "child_pid": 25724,
+        "release_commit": "6aab63690017c3c71a98d58e62c520094bfa64fe",
+        "release_path": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe",
+        "service": "publisher",
+        "started_at": "2026-07-18T20:55:36.0483176+00:00",
+        "state": "running",
+        "version": 1
+      },
+      "refill": {
+        "child_pid": 3748,
+        "release_commit": "6aab63690017c3c71a98d58e62c520094bfa64fe",
+        "release_path": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe",
+        "service": "refill",
+        "started_at": "2026-07-18T20:55:36.3693165+00:00",
+        "state": "running",
+        "version": 1
+      },
+      "relay": {
+        "child_pid": 5396,
+        "release_commit": "6aab63690017c3c71a98d58e62c520094bfa64fe",
+        "release_path": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe",
+        "service": "relay",
+        "started_at": "2026-07-18T20:55:33.5906031+00:00",
+        "state": "running",
+        "version": 1
+      },
+      "revision": {
+        "child_pid": 14472,
+        "release_commit": "6aab63690017c3c71a98d58e62c520094bfa64fe",
+        "release_path": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe",
+        "service": "revision",
+        "started_at": "2026-07-18T20:55:35.0663292+00:00",
+        "state": "running",
+        "version": 1
+      }
+    }
+  },
+  "manifest_sha256": "ff94bb27ac516584eaed99a6393368ff6181d6834a553e5eca6a1b4846956220",
+  "outcome": "success",
+  "previous_commit": "50ef01dacdb254ef791b27958fbd316737e66fb4",
+  "previous_release_path": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\50ef01dacdb254ef791b27958fbd316737e66fb4",
+  "release_id": "capacity-one-refill-managed-release-v1",
+  "requested_commit": "6aab63690017c3c71a98d58e62c520094bfa64fe",
+  "rollback": {
+    "performed": false
+  },
+  "staged_release_path": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\6aab63690017c3c71a98d58e62c520094bfa64fe",
+  "version": 1
+}

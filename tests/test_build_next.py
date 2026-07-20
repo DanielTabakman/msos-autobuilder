@@ -12,6 +12,7 @@ import yaml
 
 from msos_autobuilder.build_next import (
     BuildNextConfig,
+    RefillAttemptContext,
     _normalize_github_repository,
     build_next,
 )
@@ -148,9 +149,10 @@ def _snapshot(
     as_of: str | None = None,
     prerequisite_status: str = "complete",
     include_prerequisites: bool = True,
+    work_item_id: str = "fixture_work",
 ) -> dict[str, Any]:
     work = {
-        "work_item_id": "fixture_work",
+        "work_item_id": work_item_id,
         "title": "[HIGH] Fixture work",
         "native_state": "READY",
         "state": work_state,
@@ -213,7 +215,7 @@ def _snapshot(
                 "state": "READY_TO_BUILD",
                 "action_type": "build",
                 "summary": "[HIGH] Fixture work",
-                "work_item_id": "fixture_work",
+                "work_item_id": work_item_id,
                 "selection_explanation": {"rank_tuple": [1, "ppe", "fixture_work"]},
             }
             if state == "READY_TO_BUILD"
@@ -232,9 +234,28 @@ def _write_ppe(
     repo = _init_repo(root)
     (repo / "scripts").mkdir()
     (repo / "scripts" / "founder_portfolio.py").write_text(
-        "import json, pathlib\n"
+        "import json, pathlib, sys\n"
         "root = pathlib.Path(__file__).resolve().parents[1]\n"
-        "print(json.dumps(json.loads((root / 'snapshot.json').read_text())))\n",
+        "excluded = []\n"
+        "args = sys.argv[1:]\n"
+        "for index, arg in enumerate(args):\n"
+        "    if arg == '--exclude-work-item-id' and index + 1 < len(args):\n"
+        "        excluded.append(args[index + 1])\n"
+        "payload = json.loads((root / 'snapshot.json').read_text())\n"
+        "payload['selection_context'] = {\n"
+        "    'scope': 'request',\n"
+        "    'requested_exclusions': excluded,\n"
+        "}\n"
+        "ready = payload['pipelines'][0].get('ready_work') or []\n"
+        "payload['pipelines'][0]['ready_work'] = [\n"
+        "    item for item in ready if item.get('work_item_id') not in excluded\n"
+        "]\n"
+        "rec = payload.get('recommended_next_action') or {}\n"
+        "if rec.get('work_item_id') in excluded and payload['pipelines'][0]['ready_work']:\n"
+        "    next_item = payload['pipelines'][0]['ready_work'][0]\n"
+        "    rec['work_item_id'] = next_item['work_item_id']\n"
+        "    payload['recommended_next_action'] = rec\n"
+        "print(json.dumps(payload))\n",
         encoding="utf-8",
     )
     (repo / "config").mkdir()
@@ -817,3 +838,83 @@ def test_no_product_main_write_or_merge_authority_is_introduced(tmp_path: Path) 
         "merge_enabled": False,
         "product_main_write_enabled": False,
     }
+
+
+def test_manual_build_next_without_attempt_context_keeps_deterministic_id(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    manual = build_next(_config(tmp_path / "manual", ppe, feed))
+    refill = build_next(
+        BuildNextConfig(
+            ppe_repo=ppe,
+            feed_repo_url=str(feed),
+            checkout_root=tmp_path / "refill-checkout",
+            host_root=tmp_path / "host",
+            allow_test_local_source_remote=True,
+            refill_attempt=RefillAttemptContext(
+                generation_id="refill-generation-1",
+                attempt_ordinal=1,
+                selected_work_item_id="fixture_work",
+            ),
+        )
+    )
+
+    expected = (
+        "build-next-ppe-fixture_work-Fixture-Product-Slice002-"
+        f"{manual.source_commit[:12]}"
+    )
+    assert manual.job_id == expected
+    assert refill.job_id != manual.job_id
+
+
+def test_exclusions_are_passed_to_ppe_and_echoed_in_selection_context(tmp_path: Path) -> None:
+    snapshot = _snapshot()
+    second = dict(snapshot["pipelines"][0]["ready_work"][0])
+    second["work_item_id"] = "fixture_work_b"
+    snapshot["pipelines"][0]["ready_work"].append(second)
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(
+        BuildNextConfig(
+            ppe_repo=ppe,
+            feed_repo_url=str(feed),
+            checkout_root=tmp_path / "checkout",
+            allow_test_local_source_remote=True,
+            exclude_work_item_ids=("fixture_work",),
+        )
+    )
+
+    assert receipt.status == "QUEUED"
+    assert receipt.work_item_id == "fixture_work_b"
+    assert receipt.evidence["requested_exclusions"] == ["fixture_work"]
+
+
+def test_malformed_or_mismatched_selection_context_fails_closed(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    script = ppe / "scripts" / "founder_portfolio.py"
+    script.write_text(
+        "import json, pathlib\n"
+        "root = pathlib.Path(__file__).resolve().parents[1]\n"
+        "payload = json.loads((root / 'snapshot.json').read_text())\n"
+        "payload['selection_context'] = {'scope': 'global', 'requested_exclusions': []}\n"
+        "print(json.dumps(payload))\n",
+        encoding="utf-8",
+    )
+    _commit_all(ppe, "bad selector context")
+    _git(ppe, "push", "-q", "origin", "main")
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(
+        BuildNextConfig(
+            ppe_repo=ppe,
+            feed_repo_url=str(feed),
+            checkout_root=tmp_path / "checkout",
+            allow_test_local_source_remote=True,
+            exclude_work_item_ids=("fixture_work",),
+        )
+    )
+
+    assert receipt.status == "BLOCKED"
+    assert "selection_context" in receipt.message

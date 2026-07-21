@@ -624,6 +624,193 @@ def _job_in_feed(config: RefillConfig, job_id: str) -> bool:
     return feed_job.exists()
 
 
+def _read_job_yaml(path: Path) -> dict[str, Any] | None:
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def _job_yaml_sources(
+    config: RefillConfig,
+    paths: HostPaths,
+) -> list[tuple[str, Path, dict[str, Any]]]:
+    sources: list[tuple[str, Path, dict[str, Any]]] = []
+    if config.build_next.submit:
+        checkout = config.build_next.checkout_root or (
+            Path(tempfile.gettempdir()) / "msos-autobuilder-build-next-feed"
+        )
+        feed_root = checkout.expanduser().resolve() / config.build_next.jobs_path
+        if feed_root.exists():
+            for path in sorted(feed_root.glob("*.yaml")):
+                payload = _read_job_yaml(path)
+                if payload is not None:
+                    sources.append(("feed", path, payload))
+    for stage, root in (("pending", paths.pending), ("running", paths.running)):
+        for path in sorted(root.glob("*.yaml")):
+            payload = _read_job_yaml(path)
+            if payload is not None:
+                sources.append((stage, path, payload))
+    for stage, root in (("completed", paths.completed), ("failed", paths.failed)):
+        if not root.exists():
+            continue
+        for archive in sorted(path for path in root.iterdir() if path.is_dir()):
+            path = archive / "job.yaml"
+            payload = _read_job_yaml(path)
+            if payload is not None:
+                sources.append((stage, path, payload))
+    return sources
+
+
+def _extract_refill_attempt_candidate(
+    generation: Mapping[str, Any],
+    *,
+    stage: str,
+    path: Path,
+    job: Mapping[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    job_id = str(job.get("job_id") or "").strip()
+    founder = job.get("founder_build_next")
+    if not job_id or not isinstance(founder, dict):
+        return None, None
+    attempt = founder.get("refill_attempt")
+    if not isinstance(attempt, dict):
+        return None, None
+    if attempt.get("generation_id") != generation.get("generation_id"):
+        return None, None
+    candidate_validation = job.get("candidate_validation")
+    if isinstance(candidate_validation, dict) and candidate_validation.get("job_id") != job_id:
+        return None, "candidate validation job_id disagrees with job_id"
+    evidence = founder.get("portfolio_selection_evidence")
+    if isinstance(evidence, dict) and isinstance(evidence.get("refill_attempt"), dict):
+        if dict(evidence["refill_attempt"]) != dict(attempt):
+            return None, "portfolio selection refill_attempt disagrees"
+    attempt_ordinal = attempt.get("attempt_ordinal")
+    retry_ordinal = attempt.get("retry_ordinal", 0)
+    if not isinstance(attempt_ordinal, int) or isinstance(attempt_ordinal, bool):
+        return None, "refill attempt ordinal is malformed"
+    if attempt_ordinal < 1:
+        return None, "refill attempt ordinal must be positive"
+    if not isinstance(retry_ordinal, int) or isinstance(retry_ordinal, bool) or retry_ordinal < 0:
+        return None, "refill retry ordinal is malformed"
+    work_item_id = str(founder.get("work_item_id") or "").strip()
+    selected_work_item_id = str(attempt.get("selected_work_item_id") or "").strip()
+    if not work_item_id or selected_work_item_id != work_item_id:
+        return None, "refill selected work item disagrees with job evidence"
+    pipeline_id = str(founder.get("pipeline_id") or "").strip()
+    if not pipeline_id:
+        return None, "refill attempt lacks pipeline identity"
+    source = founder.get("source")
+    source_commit = source.get("commit") if isinstance(source, dict) else None
+    if not isinstance(source_commit, str) or not source_commit:
+        return None, "refill attempt lacks source commit evidence"
+    return {
+        "attempt_ordinal": attempt_ordinal,
+        "retry_ordinal": retry_ordinal,
+        "reason": str(attempt.get("reason") or "initial"),
+        "job_id": job_id,
+        "work_item_id": work_item_id,
+        "pipeline_id": pipeline_id,
+        "source_commit": source_commit,
+        "feed_path": str(path) if stage == "feed" else None,
+        "feed_commit": None,
+        "created_at": _utc_now(),
+        "recovered_from": {"stage": stage, "path": str(path)},
+    }, None
+
+
+def _recover_unrecorded_generation_attempt(
+    config: RefillConfig,
+    paths: HostPaths,
+    generation: dict[str, Any],
+) -> dict[str, Any] | None:
+    recorded = {
+        str(item.get("job_id") or "")
+        for item in generation.get("attempt_sequence") or []
+        if isinstance(item, dict)
+    }
+    candidates: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for stage, path, job in _job_yaml_sources(config, paths):
+        candidate, error = _extract_refill_attempt_candidate(
+            generation,
+            stage=stage,
+            path=path,
+            job=job,
+        )
+        if error is not None:
+            errors.append({"path": str(path), "stage": stage, "error": error})
+        if candidate is None:
+            continue
+        if candidate["job_id"] in recorded:
+            continue
+        candidates.append(candidate)
+    if errors:
+        generation["state"] = "BLOCKED"
+        generation["recovery_error"] = {
+            "reason": "invalid_refill_attempt_evidence",
+            "errors": errors,
+        }
+        save_refill_generation(config, generation)
+        return generation["recovery_error"]
+    def candidate_key(candidate: Mapping[str, Any]) -> str:
+        return json.dumps(
+            {
+                "attempt_ordinal": candidate.get("attempt_ordinal"),
+                "retry_ordinal": candidate.get("retry_ordinal"),
+                "reason": candidate.get("reason"),
+                "job_id": candidate.get("job_id"),
+                "work_item_id": candidate.get("work_item_id"),
+                "pipeline_id": candidate.get("pipeline_id"),
+                "source_commit": candidate.get("source_commit"),
+            },
+            sort_keys=True,
+        )
+
+    unique = {candidate_key(candidate) for candidate in candidates}
+    if len(unique) > 1:
+        generation["state"] = "BLOCKED"
+        generation["recovery_error"] = {
+            "reason": "ambiguous_refill_attempt_recovery",
+            "candidates": candidates,
+        }
+        save_refill_generation(config, generation)
+        return generation["recovery_error"]
+    if not candidates:
+        return None
+    candidate = sorted(
+        candidates,
+        key=lambda item: {
+            "running": 0,
+            "pending": 1,
+            "failed": 2,
+            "completed": 3,
+            "feed": 4,
+        }.get(str(item.get("recovered_from", {}).get("stage")), 5),
+    )[0]
+    expected_ordinal = len(generation.get("attempt_sequence") or []) + 1
+    if candidate["attempt_ordinal"] != expected_ordinal:
+        generation["state"] = "BLOCKED"
+        generation["recovery_error"] = {
+            "reason": "refill_attempt_ordinal_conflict",
+            "expected_attempt_ordinal": expected_ordinal,
+            "candidate": candidate,
+        }
+        save_refill_generation(config, generation)
+        return generation["recovery_error"]
+    generation.setdefault("attempt_sequence", []).append(candidate)
+    generation["current_attempt"] = candidate
+    ids = list(generation.get("attempted_work_item_ids") or [])
+    if candidate["work_item_id"] not in ids:
+        ids.append(candidate["work_item_id"])
+    generation["attempted_work_item_ids"] = ids
+    generation["state"] = "RECOVERED"
+    generation["last_attempt_recovery"] = candidate["recovered_from"]
+    save_refill_generation(config, generation)
+    return None
+
+
 def _publisher_seen(paths: HostPaths, job_id: str) -> dict[str, Any] | None:
     raw = _read_json_file(paths.state / "controlled-publisher-seen.json") or {}
     entry = raw.get(job_id)
@@ -714,7 +901,17 @@ def _classify_attempt(
     if archive_state is None or archive is None:
         if _job_in_feed(config, job_id):
             return {"category": "in_flight", "stage": "awaiting_import"}
-        return {"category": "in_flight", "stage": "awaiting_import"}
+        return {
+            "category": "unknown",
+            "stage": "missing_attempt_evidence",
+            "evidence": {
+                "error": (
+                    "tracked refill attempt has no feed, pending, running, completed, "
+                    "or failed evidence"
+                ),
+                "job_id": job_id,
+            },
+        }
     if archive_state == "failed":
         return _classify_failed_attempt(archive, now=config.clock())
 
@@ -1053,6 +1250,24 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
             awaiting_review=awaiting_review,
             evidence={"reason": "runtime_health", "health": snapshot.health},
         )
+    if generation is not None:
+        recovery_error = _recover_unrecorded_generation_attempt(config, paths, generation)
+        if recovery_error is not None:
+            return _report(
+                config=config,
+                policy=policy,
+                status="BLOCKED",
+                message="Refill generation attempt recovery found conflicting evidence.",
+                active_running=active_running,
+                active_queued=active_queued,
+                feed_awaiting_import=feed_awaiting_import,
+                awaiting_review=awaiting_review,
+                evidence={
+                    "reason": recovery_error["reason"],
+                    "generation": generation,
+                    "health": snapshot.health,
+                },
+            )
     if active_queued + feed_awaiting_import >= policy.queue_cap:
         return _report(
             config=config,
@@ -1127,7 +1342,6 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
             awaiting_review=awaiting_review,
             evidence={"reason": "missing_generation", "health": snapshot.health},
         )
-
     current = generation.get("current_attempt")
     retry_same_item: str | None = None
     retry_reason = "initial"

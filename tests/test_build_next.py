@@ -246,13 +246,18 @@ def _write_ppe(
         "payload = json.loads((root / 'snapshot.json').read_text())\n"
         "ready = payload['pipelines'][0].get('ready_work') or []\n"
         "ready_ids = {item.get('work_item_id') for item in ready}\n"
-        "matched = [item for item in excluded if item in ready_ids]\n"
+        "matched = [\n"
+        "    {'pipeline_id': 'ppe', 'work_item_id': item}\n"
+        "    for item in excluded\n"
+        "    if item in ready_ids\n"
+        "]\n"
         "unmatched = [item for item in excluded if item not in ready_ids]\n"
         "payload['selection_context'] = {\n"
         "    'scope': 'request',\n"
         "    'excluded_work_item_ids': excluded,\n"
         "    'matched_exclusions': matched,\n"
         "    'unmatched_exclusions': unmatched,\n"
+        "    'effect': 'request exclusions applied',\n"
         "}\n"
         "rec = payload.get('recommended_next_action') or {}\n"
         "remaining = [item for item in ready if item.get('work_item_id') not in excluded]\n"
@@ -990,6 +995,29 @@ def test_exclusions_are_passed_to_ppe_and_echoed_in_selection_context(tmp_path: 
     assert receipt.status == "QUEUED"
     assert receipt.work_item_id == "fixture_work_b"
     assert receipt.evidence["requested_exclusions"] == ["fixture_work"]
+
+
+def test_selection_context_matches_current_ppe_object_shape(tmp_path: Path) -> None:
+    snapshot = _snapshot()
+    second = dict(snapshot["pipelines"][0]["ready_work"][0])
+    second["work_item_id"] = "fixture_work_b"
+    snapshot["pipelines"][0]["ready_work"].append(second)
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(
+        BuildNextConfig(
+            ppe_repo=ppe,
+            feed_repo_url=str(feed),
+            checkout_root=tmp_path / "checkout",
+            allow_test_local_source_remote=True,
+            exclude_work_item_ids=("fixture_work", "not_ready"),
+        )
+    )
+
+    assert receipt.status == "QUEUED"
+    assert receipt.work_item_id == "fixture_work_b"
+    assert receipt.evidence["requested_exclusions"] == ["fixture_work", "not_ready"]
 
 
 def test_malformed_or_mismatched_selection_context_fails_closed(tmp_path: Path) -> None:

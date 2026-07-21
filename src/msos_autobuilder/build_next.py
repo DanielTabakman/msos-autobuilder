@@ -384,13 +384,31 @@ def _validate_selection_context(
         "excluded_work_item_ids",
         "matched_exclusions",
         "unmatched_exclusions",
+        "effect",
     }:
         raise BuildNextError("PPE selection_context has unexpected fields")
     for field in ("excluded_work_item_ids", "matched_exclusions", "unmatched_exclusions"):
         if not isinstance(context.get(field), list):
             raise BuildNextError(f"PPE selection_context {field} is malformed")
+    if not isinstance(context.get("effect"), str) or not context["effect"].strip():
+        raise BuildNextError("PPE selection_context effect is malformed")
+    if not all(isinstance(item, str) for item in context["excluded_work_item_ids"]):
+        raise BuildNextError("PPE selection_context excluded_work_item_ids is malformed")
+    if not all(isinstance(item, str) for item in context["unmatched_exclusions"]):
+        raise BuildNextError("PPE selection_context unmatched_exclusions is malformed")
+    matched_items = context["matched_exclusions"]
+    if not all(
+        isinstance(item, dict)
+        and set(item) == {"pipeline_id", "work_item_id"}
+        and isinstance(item["pipeline_id"], str)
+        and isinstance(item["work_item_id"], str)
+        and item["pipeline_id"].strip()
+        and item["work_item_id"].strip()
+        for item in matched_items
+    ):
+        raise BuildNextError("PPE selection_context matched_exclusions is malformed")
     excluded = sorted({_normalize_work_item_id(item) for item in context["excluded_work_item_ids"]})
-    matched = sorted({_normalize_work_item_id(item) for item in context["matched_exclusions"]})
+    matched = sorted({_normalize_work_item_id(item["work_item_id"]) for item in matched_items})
     unmatched = sorted({_normalize_work_item_id(item) for item in context["unmatched_exclusions"]})
     if excluded != requested or sorted({*matched, *unmatched}) != requested:
         raise BuildNextError("PPE selection_context did not match requested exclusions")

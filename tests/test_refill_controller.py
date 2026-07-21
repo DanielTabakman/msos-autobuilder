@@ -1263,6 +1263,39 @@ def _submit_tracked_attempt(config: RefillConfig) -> str:
     return report.build_next_receipt.job_id
 
 
+def _feed_job_path(config: RefillConfig, job_id: str) -> Path:
+    assert config.build_next.checkout_root is not None
+    return config.build_next.checkout_root / config.build_next.jobs_path / f"{job_id}.yaml"
+
+
+def _clear_generation_attempt_ledger(config: RefillConfig) -> dict[str, object]:
+    generation = load_refill_generation(config)
+    assert generation is not None
+    generation["attempt_sequence"] = []
+    generation["current_attempt"] = None
+    generation["attempted_work_item_ids"] = []
+    generation["state"] = "READY"
+    return save_refill_generation(config, generation)
+
+
+def _archive_job_yaml_from_feed(
+    config: RefillConfig,
+    job_id: str,
+    *,
+    failed: bool = False,
+) -> None:
+    assert config.build_next.host_root is not None
+    source = _feed_job_path(config, job_id)
+    root = config.build_next.host_root / "queue" / ("failed" if failed else "completed") / job_id
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "job.yaml").write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    if failed:
+        (root / "error.json").write_text(
+            json.dumps({"message": "unexpected local crash", "traceback": ""}) + "\n",
+            encoding="utf-8",
+        )
+
+
 def test_keep_one_creates_fresh_generation_and_resume_preserves_it(tmp_path: Path) -> None:
     config = _refill_config(tmp_path)
     keep_one_running(config)
@@ -1306,6 +1339,105 @@ def test_host_completion_without_downstream_terminal_evidence_occupies_capacity(
 
     assert report.status == "RUNNING"
     assert report.decision_evidence["reason"] == "tracked_attempt_capacity_full"
+
+
+def test_feed_submitted_job_recovery_after_pre_ledger_crash(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _clear_generation_attempt_ledger(config)
+
+    report = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert report.status == "QUEUED"
+    assert generation is not None
+    assert generation["current_attempt"]["job_id"] == job_id
+    assert generation["attempt_sequence"][0]["job_id"] == job_id
+    assert generation["last_attempt_recovery"]["stage"] == "feed"
+
+
+def test_completed_and_failed_attempt_recovery(tmp_path: Path) -> None:
+    completed = _refill_config(tmp_path / "completed")
+    _write_host_status(completed)
+    completed_job = _submit_tracked_attempt(completed)
+    _archive_job_yaml_from_feed(completed, completed_job)
+    _clear_generation_attempt_ledger(completed)
+
+    failed = _refill_config(tmp_path / "failed")
+    _write_host_status(failed)
+    failed_job = _submit_tracked_attempt(failed)
+    _archive_job_yaml_from_feed(failed, failed_job, failed=True)
+    _clear_generation_attempt_ledger(failed)
+
+    completed_report = reconcile_refill(completed)
+    failed_report = reconcile_refill(failed)
+
+    completed_generation = load_refill_generation(completed)
+    failed_generation = load_refill_generation(failed)
+    assert completed_report.status == "RUNNING"
+    assert completed_generation is not None
+    assert completed_generation["current_attempt"]["job_id"] == completed_job
+    assert completed_generation["last_attempt_recovery"]["stage"] == "completed"
+    assert failed_report.status == "BLOCKED"
+    assert failed_generation is not None
+    assert failed_generation["current_attempt"]["job_id"] == failed_job
+    assert failed_generation["last_attempt_recovery"]["stage"] == "failed"
+
+
+def test_conflicting_recovery_evidence_blocks(tmp_path: Path) -> None:
+    config = _refill_config(
+        tmp_path,
+        ppe=_write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_two_items()),
+    )
+    _write_host_status(config)
+    first_job = _submit_tracked_attempt(config)
+    generation = _clear_generation_attempt_ledger(config)
+    assert config.build_next.host_root is not None
+    second_text = _feed_job_path(config, first_job).read_text(encoding="utf-8").replace(
+        first_job,
+        "different-refill-job",
+    )
+    pending = config.build_next.host_root / "queue" / "pending"
+    pending.mkdir(parents=True, exist_ok=True)
+    (pending / "different-refill-job.yaml").write_text(second_text, encoding="utf-8")
+    save_refill_generation(config, generation)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    assert report.decision_evidence["reason"] == "ambiguous_refill_attempt_recovery"
+
+
+def test_restart_recovery_is_idempotent(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _clear_generation_attempt_ledger(config)
+
+    first = reconcile_refill(config)
+    second = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert first.status == "QUEUED"
+    assert second.status == "QUEUED"
+    assert generation is not None
+    assert [attempt["job_id"] for attempt in generation["attempt_sequence"]] == [job_id]
+
+
+def test_missing_tracked_attempt_evidence_blocks(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    save_refill_policy(config, RefillPolicy(enabled=True, desired_capacity=1))
+    _seed_generation(config)
+
+    report = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert report.status == "BLOCKED"
+    assert report.decision_evidence["reason"] == "ambiguous_attempt"
+    assert generation is not None
+    assert generation["last_attempt_classification"]["stage"] == "missing_attempt_evidence"
 
 
 def test_item_terminal_attempt_excludes_a_and_dispatches_b(tmp_path: Path) -> None:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import secrets
 import tempfile
 import time
@@ -22,6 +21,7 @@ from .build_next import (
     BuildNextReceipt,
     RefillAttemptContext,
     _prepare_feed_checkout,
+    _source_identity,
     build_next,
 )
 from .persistent_host import HostPaths, HostProcessLock, parse_host_job
@@ -608,9 +608,13 @@ def _attempt_archive(paths: HostPaths, job_id: str) -> tuple[str | None, Path | 
     return None, None
 
 
-def _job_in_feed_or_queue(config: RefillConfig, paths: HostPaths, job_id: str) -> bool:
+def _job_in_active_queue(paths: HostPaths, job_id: str) -> bool:
     if (paths.running / f"{job_id}.yaml").exists() or (paths.pending / f"{job_id}.yaml").exists():
         return True
+    return False
+
+
+def _job_in_feed(config: RefillConfig, job_id: str) -> bool:
     if not config.build_next.submit:
         return False
     checkout = config.build_next.checkout_root or (
@@ -647,63 +651,43 @@ def _revision_seen(paths: HostPaths, job_id: str) -> dict[str, Any] | None:
     return None
 
 
-def _extract_retry_at(message: str, now: datetime) -> str | None:
-    iso = re.search(r"retry_at[=:]\s*([0-9T:Z+\-.]+)", message, flags=re.IGNORECASE)
-    if iso:
-        parsed = _parse_utc(iso.group(1))
-        if parsed is not None and parsed > now:
-            return parsed.isoformat().replace("+00:00", "Z")
-    natural = re.search(
-        (
-            r"try again at\s+([A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?,\s+"
-            r"\d{4}\s+\d{1,2}:\d{2}\s+[AP]M)"
-        ),
-        message,
-        flags=re.IGNORECASE,
+def _structured_provider_failure(
+    error: Mapping[str, Any], *, now: datetime
+) -> dict[str, Any] | None:
+    provider = error.get("provider_failure")
+    if not isinstance(provider, dict):
+        return None
+    retry_at = _parse_utc(provider.get("retry_at"))
+    retryable = (
+        provider.get("version") == 1
+        and provider.get("scope") == "provider"
+        and provider.get("temporary") is True
+        and provider.get("retryable") is True
+        and isinstance(provider.get("retry_at"), str)
+        and provider["retry_at"].endswith("Z")
+        and retry_at is not None
     )
-    if natural:
-        text = re.sub(r"(\d{1,2})(st|nd|rd|th)", r"\1", natural.group(1), flags=re.IGNORECASE)
-        try:
-            parsed = datetime.strptime(text, "%b %d, %Y %I:%M %p").replace(tzinfo=UTC)
-        except ValueError:
-            try:
-                parsed = datetime.strptime(text, "%B %d, %Y %I:%M %p").replace(tzinfo=UTC)
-            except ValueError:
-                return None
-        if parsed > now:
-            return parsed.isoformat().replace("+00:00", "Z")
-    return None
+    return {
+        "category": "provider_systemic",
+        "retryable": retryable,
+        "trustworthy_retry_at": (
+            retry_at.isoformat().replace("+00:00", "Z") if retryable else None
+        ),
+        "provider_failure": dict(provider),
+    }
 
 
 def _classify_failed_attempt(archive: Path, *, now: datetime) -> dict[str, Any]:
     error = _read_json_file(archive / "error.json") or {}
     message = " ".join(str(error.get(key) or "") for key in ("message", "traceback"))
-    lower = message.lower()
-    provider = any(
-        token in lower
-        for token in (
-            "usage limit",
-            "quota",
-            "rate limit",
-            "temporarily unavailable",
-            "provider unavailable",
-            "authentication",
-            "unauthorized",
-        )
-    )
-    if provider:
-        auth = "authentication" in lower or "unauthorized" in lower
-        temporary_auth = bool(error.get("temporary") or error.get("retryable"))
-        retryable = not auth or temporary_auth
-        retry_at = _extract_retry_at(message, now)
+    structured = _structured_provider_failure(error, now=now)
+    if structured is not None:
         return {
-            "category": "provider_systemic",
-            "retryable": retryable,
-            "trustworthy_retry_at": retry_at,
+            **structured,
             "evidence": {
                 "archive": str(archive),
                 "error_sha256": _sha256_file(archive / "error.json"),
-                "message_excerpt": message[:300],
+                "provider_failure": structured["provider_failure"],
             },
         }
     return {
@@ -724,10 +708,12 @@ def _classify_attempt(
     job_id = str(attempt.get("job_id") or "")
     if not job_id:
         return {"category": "unknown", "evidence": {"error": "attempt lacks job_id"}}
-    if _job_in_feed_or_queue(config, paths, job_id):
-        return {"category": "in_flight", "stage": "feed_or_host_queue"}
+    if _job_in_active_queue(paths, job_id):
+        return {"category": "in_flight", "stage": "host_queue"}
     archive_state, archive = _attempt_archive(paths, job_id)
     if archive_state is None or archive is None:
+        if _job_in_feed(config, job_id):
+            return {"category": "in_flight", "stage": "awaiting_import"}
         return {"category": "in_flight", "stage": "awaiting_import"}
     if archive_state == "failed":
         return _classify_failed_attempt(archive, now=config.clock())
@@ -776,6 +762,33 @@ def _append_attempt(
     generation["attempted_work_item_ids"] = ids
     if receipt.evidence.get("source"):
         generation["source_ppe_identity"] = receipt.evidence["source"]
+
+
+def _pinned_source_commit(generation: Mapping[str, Any]) -> str | None:
+    source = generation.get("source_ppe_identity")
+    if isinstance(source, dict) and isinstance(source.get("commit"), str):
+        commit = source["commit"]
+        if commit:
+            return commit
+    return None
+
+
+def _source_pin_block(config: RefillConfig, generation: Mapping[str, Any]) -> dict[str, Any] | None:
+    pinned = _pinned_source_commit(generation)
+    if pinned is None:
+        return None
+    try:
+        identity = _source_identity(
+            replace(config.build_next, expected_source_commit=pinned),
+            config.build_next.ppe_repo.expanduser().resolve(),
+        )
+    except Exception as exc:
+        return {"reason": "source_pin_mismatch", "pinned_commit": pinned, "error": str(exc)}
+    return None if identity.commit == pinned else {
+        "reason": "source_pin_mismatch",
+        "pinned_commit": pinned,
+        "observed_commit": identity.commit,
+    }
 
 
 def _active_release_evidence(path: Path) -> dict[str, Any]:
@@ -1120,6 +1133,25 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
     retry_reason = "initial"
     retry_ordinal = 0
     if isinstance(current, dict):
+        pin_block = _source_pin_block(config, generation)
+        if pin_block is not None:
+            generation["state"] = "BLOCKED"
+            save_refill_generation(config, generation)
+            return _report(
+                config=config,
+                policy=policy,
+                status="BLOCKED",
+                message="Pinned PPE source moved; refill dispatch is blocked.",
+                active_running=active_running,
+                active_queued=active_queued,
+                feed_awaiting_import=feed_awaiting_import,
+                awaiting_review=awaiting_review,
+                evidence={
+                    **pin_block,
+                    "generation": generation,
+                    "health": snapshot.health,
+                },
+            )
         classification = _classify_attempt(config, paths, current)
         generation["last_attempt_classification"] = classification
         category = classification.get("category")
@@ -1220,10 +1252,12 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
     if retry_same_item:
         exclusions = tuple(item for item in exclusions if item != retry_same_item)
     attempt_ordinal = len(generation.get("attempt_sequence") or []) + 1
+    pinned_commit = _pinned_source_commit(generation)
     build_config = replace(
         config.build_next,
         requested_by="capacity-one refill controller",
         exclude_work_item_ids=exclusions,
+        expected_source_commit=pinned_commit,
         refill_attempt=_attempt_context(
             generation,
             attempt_ordinal=attempt_ordinal,

@@ -9,7 +9,7 @@ from threading import Event, Thread
 from time import sleep
 
 import pytest
-from test_build_next import _config, _feed_repo, _snapshot, _write_ppe
+from test_build_next import _commit_all, _config, _feed_repo, _git, _snapshot, _write_ppe
 
 from msos_autobuilder.refill_controller import (
     RefillConfig,
@@ -1233,6 +1233,7 @@ def _archive_attempt(
     *,
     failed: bool = False,
     message: str = "",
+    error: dict[str, object] | None = None,
 ) -> None:
     assert config.build_next.host_root is not None
     root = config.build_next.host_root / "queue" / ("failed" if failed else "completed") / job_id
@@ -1240,9 +1241,26 @@ def _archive_attempt(
     (root / "job.yaml").write_text(json.dumps({"version": 1, "job_id": job_id}) + "\n")
     if failed:
         (root / "error.json").write_text(
-            json.dumps({"message": message, "traceback": message}) + "\n",
+            json.dumps(error or {"message": message, "traceback": message}) + "\n",
             encoding="utf-8",
         )
+
+
+def _submit_tracked_attempt(config: RefillConfig) -> str:
+    keep_one_running(config)
+    report = reconcile_refill(config)
+    assert report.status == "QUEUED"
+    assert report.build_next_receipt is not None
+    generation = load_refill_generation(config)
+    assert generation is not None
+    assert generation["current_attempt"]["job_id"] == report.build_next_receipt.job_id
+    assert config.build_next.checkout_root is not None
+    assert (
+        config.build_next.checkout_root
+        / config.build_next.jobs_path
+        / f"{report.build_next_receipt.job_id}.yaml"
+    ).exists()
+    return report.build_next_receipt.job_id
 
 
 def test_keep_one_creates_fresh_generation_and_resume_preserves_it(tmp_path: Path) -> None:
@@ -1295,13 +1313,12 @@ def test_item_terminal_attempt_excludes_a_and_dispatches_b(tmp_path: Path) -> No
     feed = _feed_repo(tmp_path / "feed-work")
     config = _refill_config(tmp_path, ppe=ppe, feed=feed)
     _write_host_status(config)
-    save_refill_policy(config, RefillPolicy(enabled=True, desired_capacity=1))
-    _seed_generation(config)
-    _archive_attempt(config, "attempt-a")
+    job_id = _submit_tracked_attempt(config)
+    _archive_attempt(config, job_id)
     _write_state_json(
         config,
         "controlled-publisher-seen.json",
-        {"attempt-a": {"published_at": "2026-07-20T01:00:00+00:00", "status": "published-draft"}},
+        {job_id: {"published_at": "2026-07-20T01:00:00+00:00", "status": "published-draft"}},
     )
 
     report = reconcile_refill(config)
@@ -1312,6 +1329,7 @@ def test_item_terminal_attempt_excludes_a_and_dispatches_b(tmp_path: Path) -> No
     assert report.build_next_receipt.work_item_id == "fixture_work_b"
     assert generation is not None
     assert generation["item_scoped_terminal_exclusions"] == ["fixture_work"]
+    assert report.feed_awaiting_import == 1
 
 
 def test_provider_retry_waits_until_retry_at_and_uses_fresh_same_item_identity(
@@ -1324,13 +1342,20 @@ def test_provider_retry_waits_until_retry_at_and_uses_fresh_same_item_identity(
         clock=lambda: datetime(2026, 7, 24, 12, 0, tzinfo=UTC),
     )
     _write_host_status(early)
-    save_refill_policy(early, RefillPolicy(enabled=True, desired_capacity=1))
-    _seed_generation(early)
+    job_id = _submit_tracked_attempt(early)
     _archive_attempt(
         early,
-        "attempt-a",
+        job_id,
         failed=True,
-        message="ERROR: usage limit; try again at Jul 25th, 2026 3:04 PM.",
+        error={
+            "provider_failure": {
+                "version": 1,
+                "scope": "provider",
+                "temporary": True,
+                "retryable": True,
+                "retry_at": "2026-07-25T15:04:00Z",
+            }
+        },
     )
 
     before = reconcile_refill(early)
@@ -1345,22 +1370,31 @@ def test_provider_retry_waits_until_retry_at_and_uses_fresh_same_item_identity(
     assert at_retry.status == "QUEUED"
     assert at_retry.build_next_receipt is not None
     assert at_retry.build_next_receipt.work_item_id == "fixture_work"
-    assert at_retry.build_next_receipt.job_id != "attempt-a"
+    assert at_retry.build_next_receipt.job_id != job_id
     assert generation is not None
     assert generation["provider_retry_consumed"] is True
     assert len(generation["attempt_sequence"]) == 2
 
 
-def test_second_systemic_failure_remains_backpressure_and_no_third_attempt(tmp_path: Path) -> None:
+def test_structured_provider_failure_without_retry_authorization_does_not_retry(
+    tmp_path: Path,
+) -> None:
     config = _refill_config(tmp_path)
     _write_host_status(config)
-    save_refill_policy(config, RefillPolicy(enabled=True, desired_capacity=1))
-    _seed_generation(config, job_id="attempt-b", consumed=True)
+    job_id = _submit_tracked_attempt(config)
     _archive_attempt(
         config,
-        "attempt-b",
+        job_id,
         failed=True,
-        message="ERROR: usage limit; try again at Jul 25th, 2026 3:04 PM.",
+        error={
+            "provider_failure": {
+                "version": 1,
+                "scope": "provider",
+                "temporary": False,
+                "retryable": False,
+                "retry_at": "2026-07-25T15:04:00Z",
+            }
+        },
     )
 
     report = reconcile_refill(config)
@@ -1370,6 +1404,26 @@ def test_second_systemic_failure_remains_backpressure_and_no_third_attempt(tmp_p
     assert report.build_next_receipt is None
     assert generation is not None
     assert len(generation["attempt_sequence"]) == 1
+
+
+def test_prose_only_provider_failure_does_not_trigger_retry(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _archive_attempt(
+        config,
+        job_id,
+        failed=True,
+        message="ERROR: usage limit; quota exhausted; try again at Jul 25th, 2026 3:04 PM.",
+    )
+
+    report = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert report.status == "BLOCKED"
+    assert report.build_next_receipt is None
+    assert generation is not None
+    assert generation["provider_retry_consumed"] is False
 
 
 def test_unknown_failure_blocks_without_exclusion_or_b_dispatch(tmp_path: Path) -> None:
@@ -1388,3 +1442,103 @@ def test_unknown_failure_blocks_without_exclusion_or_b_dispatch(tmp_path: Path) 
     assert report.build_next_receipt is None
     assert generation is not None
     assert generation["item_scoped_terminal_exclusions"] == []
+
+
+def test_ppe_source_movement_blocks_exclusion_rerank(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_two_items())
+    feed = _feed_repo(tmp_path / "feed-work")
+    config = _refill_config(tmp_path, ppe=ppe, feed=feed)
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    pinned = load_refill_generation(config)["source_ppe_identity"]["commit"]
+    (ppe / "movement.txt").write_text("moved\n", encoding="utf-8")
+    moved = _commit_all(ppe, "move ppe main")
+    _git(ppe, "push", "-q", "origin", "main")
+    _archive_attempt(config, job_id)
+    _write_state_json(config, "controlled-publisher-seen.json", {job_id: {"status": "published"}})
+
+    report = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert moved != pinned
+    assert report.status == "BLOCKED"
+    assert report.build_next_receipt is None
+    assert report.decision_evidence["reason"] == "source_pin_mismatch"
+    assert generation["item_scoped_terminal_exclusions"] == []
+
+
+def test_ppe_source_movement_blocks_provider_retry(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    feed = _feed_repo(tmp_path / "feed-work")
+    config = RefillConfig(
+        build_next=_config(tmp_path, ppe, feed, host_root=tmp_path / "host"),
+        clock=lambda: datetime(2026, 7, 25, 15, 4, tzinfo=UTC),
+    )
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    (ppe / "movement.txt").write_text("moved\n", encoding="utf-8")
+    _commit_all(ppe, "move ppe main")
+    _git(ppe, "push", "-q", "origin", "main")
+    _archive_attempt(
+        config,
+        job_id,
+        failed=True,
+        error={
+            "provider_failure": {
+                "version": 1,
+                "scope": "provider",
+                "temporary": True,
+                "retryable": True,
+                "retry_at": "2026-07-25T15:04:00Z",
+            }
+        },
+    )
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    assert report.build_next_receipt is None
+    assert report.decision_evidence["reason"] == "source_pin_mismatch"
+
+
+def test_pause_resume_at_unchanged_pinned_source_proceeds(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    pause_builds(config)
+    resume_builds(config)
+    _archive_attempt(config, job_id)
+    _write_state_json(config, "controlled-publisher-seen.json", {job_id: {"status": "published"}})
+
+    report = reconcile_refill(config)
+
+    assert report.status == "UNFILLED"
+    assert report.build_next_receipt is not None
+
+
+def test_fresh_generation_after_ppe_source_movement_pins_new_source(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    feed = _feed_repo(tmp_path / "feed-work")
+    config = _refill_config(tmp_path, ppe=ppe, feed=feed)
+    _write_host_status(config)
+    first_job = _submit_tracked_attempt(config)
+    first_generation = load_refill_generation(config)
+    first_commit = first_generation["source_ppe_identity"]["commit"]
+    _archive_attempt(config, first_job)
+    _write_state_json(
+        config,
+        "controlled-publisher-seen.json",
+        {first_job: {"status": "published"}},
+    )
+    pause_builds(config)
+    (ppe / "movement.txt").write_text("moved\n", encoding="utf-8")
+    second_commit = _commit_all(ppe, "move ppe main")
+    _git(ppe, "push", "-q", "origin", "main")
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert second_commit != first_commit
+    assert report.status == "QUEUED"
+    assert generation["source_ppe_identity"]["commit"] == second_commit

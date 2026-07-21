@@ -13,7 +13,9 @@ import yaml
 from msos_autobuilder.build_next import (
     BuildNextConfig,
     RefillAttemptContext,
+    _job_id,
     _normalize_github_repository,
+    _select_native_slice,
     build_next,
 )
 from msos_autobuilder.validation_contract import stable_contract_sha256
@@ -242,19 +244,28 @@ def _write_ppe(
         "    if arg == '--exclude-work-item-id' and index + 1 < len(args):\n"
         "        excluded.append(args[index + 1])\n"
         "payload = json.loads((root / 'snapshot.json').read_text())\n"
+        "ready = payload['pipelines'][0].get('ready_work') or []\n"
+        "ready_ids = {item.get('work_item_id') for item in ready}\n"
+        "matched = [item for item in excluded if item in ready_ids]\n"
+        "unmatched = [item for item in excluded if item not in ready_ids]\n"
         "payload['selection_context'] = {\n"
         "    'scope': 'request',\n"
-        "    'requested_exclusions': excluded,\n"
+        "    'excluded_work_item_ids': excluded,\n"
+        "    'matched_exclusions': matched,\n"
+        "    'unmatched_exclusions': unmatched,\n"
         "}\n"
-        "ready = payload['pipelines'][0].get('ready_work') or []\n"
-        "payload['pipelines'][0]['ready_work'] = [\n"
-        "    item for item in ready if item.get('work_item_id') not in excluded\n"
-        "]\n"
         "rec = payload.get('recommended_next_action') or {}\n"
-        "if rec.get('work_item_id') in excluded and payload['pipelines'][0]['ready_work']:\n"
-        "    next_item = payload['pipelines'][0]['ready_work'][0]\n"
+        "remaining = [item for item in ready if item.get('work_item_id') not in excluded]\n"
+        "if rec.get('work_item_id') in excluded and remaining:\n"
+        "    next_item = remaining[0]\n"
         "    rec['work_item_id'] = next_item['work_item_id']\n"
         "    payload['recommended_next_action'] = rec\n"
+        "elif rec.get('work_item_id') in excluded:\n"
+        "    payload['recommended_next_action'] = {\n"
+        "        'pipeline_id': rec.get('pipeline_id'),\n"
+        "        'state': 'UNFILLED',\n"
+        "        'action_type': 'wait',\n"
+        "    }\n"
         "print(json.dumps(payload))\n",
         encoding="utf-8",
     )
@@ -868,6 +879,96 @@ def test_manual_build_next_without_attempt_context_keeps_deterministic_id(tmp_pa
     assert refill.job_id != manual.job_id
 
 
+def test_manual_job_id_keeps_legacy_96_character_truncation() -> None:
+    native_slice = _select_native_slice(
+        _plan(touch_set=["src/options.py"])
+        | {
+            "slices": [
+                {
+                    "sliceId": "Options-HorizonComparison-Product-Slice002",
+                    "layerPreset": "PPE_UI",
+                    "declaredPlane": "PRODUCT-PLANE",
+                    "buildBranch": "build/options",
+                    "touchSet": ["src/options.py"],
+                }
+            ]
+        }
+    )
+    source_commit = "a25f26d06b067e39047f1d825203a96810ae4a8c"
+
+    job_id = _job_id(
+        "ppe",
+        "options_horizon_comparison_v1",
+        native_slice,
+        source_commit,
+    )
+
+    old = (
+        "build-next-ppe-options_horizon_comparison_v1-"
+        "Options-HorizonComparison-Product-Slice002-a25f26d06b067"
+    )[:96]
+    assert job_id == old
+    assert len(job_id) == 96
+
+
+def test_refill_job_id_keeps_digest_suffix_distinct_after_length_limit() -> None:
+    native_slice = _select_native_slice(
+        {
+            "slices": [
+                {
+                    "sliceId": "Options-HorizonComparison-Product-Slice002",
+                    "layerPreset": "PPE_UI",
+                    "declaredPlane": "PRODUCT-PLANE",
+                    "buildBranch": "build/options",
+                    "touchSet": ["src/options.py"],
+                }
+            ]
+        }
+    )
+    source_commit = "a25f26d06b067e39047f1d825203a96810ae4a8c"
+
+    first = _job_id(
+        "ppe",
+        "options_horizon_comparison_v1",
+        native_slice,
+        source_commit,
+        refill_attempt=RefillAttemptContext(
+            generation_id="refill-generation-1",
+            attempt_ordinal=1,
+            selected_work_item_id="options_horizon_comparison_v1",
+        ).evidence("options_horizon_comparison_v1"),
+    )
+    second_generation = _job_id(
+        "ppe",
+        "options_horizon_comparison_v1",
+        native_slice,
+        source_commit,
+        refill_attempt=RefillAttemptContext(
+            generation_id="refill-generation-2",
+            attempt_ordinal=1,
+            selected_work_item_id="options_horizon_comparison_v1",
+        ).evidence("options_horizon_comparison_v1"),
+    )
+    retry = _job_id(
+        "ppe",
+        "options_horizon_comparison_v1",
+        native_slice,
+        source_commit,
+        refill_attempt=RefillAttemptContext(
+            generation_id="refill-generation-1",
+            attempt_ordinal=2,
+            retry_ordinal=1,
+            selected_work_item_id="options_horizon_comparison_v1",
+        ).evidence("options_horizon_comparison_v1"),
+    )
+
+    assert first != second_generation
+    assert retry != first
+    assert len(first.rsplit("-", 1)[-1]) == 16
+    assert first.endswith(first.rsplit("-", 1)[-1])
+    assert len(first) <= 120
+
+
 def test_exclusions_are_passed_to_ppe_and_echoed_in_selection_context(tmp_path: Path) -> None:
     snapshot = _snapshot()
     second = dict(snapshot["pipelines"][0]["ready_work"][0])
@@ -898,7 +999,7 @@ def test_malformed_or_mismatched_selection_context_fails_closed(tmp_path: Path) 
         "import json, pathlib\n"
         "root = pathlib.Path(__file__).resolve().parents[1]\n"
         "payload = json.loads((root / 'snapshot.json').read_text())\n"
-        "payload['selection_context'] = {'scope': 'global', 'requested_exclusions': []}\n"
+        "payload['selection_context'] = {'scope': 'global', 'excluded_work_item_ids': []}\n"
         "print(json.dumps(payload))\n",
         encoding="utf-8",
     )

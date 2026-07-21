@@ -191,6 +191,7 @@ class BuildNextConfig:
     allow_test_local_source_remote: bool = False
     exclude_work_item_ids: tuple[str, ...] = ()
     refill_attempt: RefillAttemptContext | None = None
+    expected_source_commit: str | None = None
 
     def __post_init__(self) -> None:
         if not self.feed_repo_url.strip():
@@ -370,7 +371,7 @@ def _validate_selection_context(
     snapshot: Mapping[str, Any],
     requested_exclusions: Sequence[str],
 ) -> None:
-    requested = [_normalize_work_item_id(item) for item in requested_exclusions]
+    requested = sorted({_normalize_work_item_id(item) for item in requested_exclusions})
     if not requested:
         return
     context = snapshot.get("selection_context")
@@ -378,12 +379,21 @@ def _validate_selection_context(
         raise BuildNextError("PPE selection_context is missing for requested exclusions")
     if context.get("scope") != "request":
         raise BuildNextError("PPE selection_context scope must be request-scoped")
-    returned_raw = context.get("requested_exclusions")
-    if not isinstance(returned_raw, list):
-        raise BuildNextError("PPE selection_context requested_exclusions is malformed")
-    returned = [_normalize_work_item_id(item) for item in returned_raw]
-    if returned != requested:
-        raise BuildNextError("PPE selection_context did not echo requested exclusions")
+    if set(context) != {
+        "scope",
+        "excluded_work_item_ids",
+        "matched_exclusions",
+        "unmatched_exclusions",
+    }:
+        raise BuildNextError("PPE selection_context has unexpected fields")
+    for field in ("excluded_work_item_ids", "matched_exclusions", "unmatched_exclusions"):
+        if not isinstance(context.get(field), list):
+            raise BuildNextError(f"PPE selection_context {field} is malformed")
+    excluded = sorted({_normalize_work_item_id(item) for item in context["excluded_work_item_ids"]})
+    matched = sorted({_normalize_work_item_id(item) for item in context["matched_exclusions"]})
+    unmatched = sorted({_normalize_work_item_id(item) for item in context["unmatched_exclusions"]})
+    if excluded != requested or sorted({*matched, *unmatched}) != requested:
+        raise BuildNextError("PPE selection_context did not match requested exclusions")
 
 
 def _normalize_github_repository(url: str) -> str | None:
@@ -709,6 +719,11 @@ def _source_identity(config: BuildNextConfig, ppe_repo: Path) -> SourceIdentity:
         raise BuildNextError(
             f"PPE source HEAD {commit} does not match freshly fetched {remote_ref} {remote_commit}"
         )
+    if config.expected_source_commit is not None and commit != config.expected_source_commit:
+        raise BuildNextError(
+            f"PPE source commit {commit} does not match pinned generation source "
+            f"{config.expected_source_commit}"
+        )
     return SourceIdentity(
         remote=config.source_remote,
         remote_url=remote_url,
@@ -873,15 +888,41 @@ def _job_id(
     refill_attempt: Mapping[str, Any] | None = None,
 ) -> str:
     if refill_attempt is not None:
-        digest = _sha256_text(json.dumps(dict(refill_attempt), sort_keys=True))[:10]
-        return _safe_id(
-            f"build-next-{pipeline_id}-{work_item_id}-{native_slice.slice_id}-"
-            f"{source_commit[:12]}-g{str(refill_attempt.get('generation_id'))[:12]}-"
-            f"a{refill_attempt.get('attempt_ordinal')}-r{refill_attempt.get('retry_ordinal')}-{digest}"
+        return _refill_job_id(
+            pipeline_id,
+            work_item_id,
+            native_slice,
+            source_commit,
+            refill_attempt,
         )
     return _safe_id(
         f"build-next-{pipeline_id}-{work_item_id}-{native_slice.slice_id}-{source_commit[:12]}"
+    )[:96]
+
+
+def _refill_job_id(
+    pipeline_id: str,
+    work_item_id: str,
+    native_slice: NativeSlicePacket,
+    source_commit: str,
+    refill_attempt: Mapping[str, Any],
+) -> str:
+    digest_payload = {
+        "generation_id": str(refill_attempt.get("generation_id") or ""),
+        "attempt_ordinal": refill_attempt.get("attempt_ordinal"),
+        "retry_ordinal": refill_attempt.get("retry_ordinal"),
+        "selected_work_item_id": _normalize_work_item_id(work_item_id),
+        "slice_id": native_slice.slice_id,
+        "source_commit": source_commit,
+    }
+    digest = _sha256_text(json.dumps(digest_payload, sort_keys=True, separators=(",", ":")))[:16]
+    prefix = _safe_id(
+            f"build-next-{pipeline_id}-{work_item_id}-{native_slice.slice_id}-"
+            f"{source_commit[:12]}-g{str(refill_attempt.get('generation_id'))[:12]}-"
+            f"a{refill_attempt.get('attempt_ordinal')}-r{refill_attempt.get('retry_ordinal')}"
     )
+    suffix = f"-{digest}"
+    return f"{prefix[: 120 - len(suffix)].rstrip('-')}{suffix}"
 
 
 def _build_job(
@@ -1122,6 +1163,7 @@ def _blocked_receipt(message: str, evidence: Mapping[str, Any] | None = None) ->
 def build_next(config: BuildNextConfig) -> BuildNextReceipt:
     ppe_repo = config.ppe_repo.expanduser().resolve()
     try:
+        source_identity = _source_identity(config, ppe_repo)
         snapshot = _collect_snapshot(ppe_repo, config.exclude_work_item_ids)
         _validate_selection_context(snapshot, config.exclude_work_item_ids)
         _validate_snapshot(snapshot, config.max_snapshot_age_seconds)
@@ -1185,7 +1227,6 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
         native_slice = _select_native_slice(plan)
         prerequisite_evidence = _validate_native_prerequisites(work, plan, native_slice)
         forbidden_paths = FORBIDDEN_AUTHORITY_PATHS
-        source_identity = _source_identity(config, ppe_repo)
         evidence_identity = _evidence_identity(
             ppe_repo,
             source_identity=source_identity,

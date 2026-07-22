@@ -11,6 +11,7 @@ from time import sleep
 import pytest
 from test_build_next import _commit_all, _config, _feed_repo, _git, _snapshot, _write_ppe
 
+import msos_autobuilder.refill_controller as refill_controller
 from msos_autobuilder.refill_controller import (
     RefillConfig,
     RefillControllerError,
@@ -1183,6 +1184,61 @@ def _ready_snapshot_with_two_items() -> dict[str, object]:
     return snapshot
 
 
+A_WORK_ITEM = "options_horizon_comparison_v1"
+B_WORK_ITEM = "options_expression_fit_ranking_v1"
+
+
+def _ready_snapshot_with_a_b() -> dict[str, object]:
+    snapshot = _snapshot(work_item_id=A_WORK_ITEM)
+    second = dict(snapshot["pipelines"][0]["ready_work"][0])
+    second["work_item_id"] = B_WORK_ITEM
+    snapshot["pipelines"][0]["ready_work"].append(second)
+    return snapshot
+
+
+def _write_gate_report(
+    config: RefillConfig,
+    job_id: str,
+    *,
+    status: str = "failed",
+    state: str = "candidate_failed",
+) -> None:
+    assert config.build_next.host_root is not None
+    root = (
+        config.build_next.host_root
+        / "state"
+        / "candidate-gate-results-repo"
+        / "results"
+        / "test-host"
+        / job_id
+    )
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "gate-report.json").write_text(
+        json.dumps({"status": status, "state": state, "job_id": job_id}) + "\n",
+        encoding="utf-8",
+    )
+    (root / "job.yaml").write_text(
+        json.dumps({"version": 1, "job_id": job_id}) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_revision_seen(config: RefillConfig, source_job_id: str, revision_job_id: str) -> None:
+    _write_state_json(
+        config,
+        "revision-loop-seen.json",
+        {
+            f"test-host/{source_job_id}": {
+                "source_job_id": source_job_id,
+                "revision_job_id": revision_job_id,
+                "gate_report_sha256": "1" * 64,
+                "jobs_commit": "2" * 40,
+                "queued_at": "2026-07-20T00:00:00+00:00",
+            }
+        },
+    )
+
+
 def _seed_generation(
     config: RefillConfig,
     *,
@@ -1296,19 +1352,20 @@ def _archive_job_yaml_from_feed(
         )
 
 
-def test_keep_one_creates_fresh_generation_and_resume_preserves_it(tmp_path: Path) -> None:
+def test_keep_one_creates_generation_and_refuses_ready_overwrite(tmp_path: Path) -> None:
     config = _refill_config(tmp_path)
     keep_one_running(config)
     first = load_refill_generation(config)
     pause_builds(config)
     resume_builds(config)
     resumed = load_refill_generation(config)
-    keep_one_running(config)
+
+    with pytest.raises(RefillControllerError, match="unresolved refill generation"):
+        keep_one_running(config)
     second = load_refill_generation(config)
 
     assert first is not None and resumed is not None and second is not None
-    assert first["generation_id"] == resumed["generation_id"]
-    assert first["generation_id"] != second["generation_id"]
+    assert first["generation_id"] == resumed["generation_id"] == second["generation_id"]
     assert second["attempt_sequence"] == []
     assert second["provider_retry_consumed"] is False
 
@@ -1552,7 +1609,7 @@ def test_prose_only_provider_failure_does_not_trigger_retry(tmp_path: Path) -> N
     report = reconcile_refill(config)
     generation = load_refill_generation(config)
 
-    assert report.status == "BLOCKED"
+    assert report.status == "BACKPRESSURE"
     assert report.build_next_receipt is None
     assert generation is not None
     assert generation["provider_retry_consumed"] is False
@@ -1666,11 +1723,365 @@ def test_fresh_generation_after_ppe_source_movement_pins_new_source(tmp_path: Pa
     (ppe / "movement.txt").write_text("moved\n", encoding="utf-8")
     second_commit = _commit_all(ppe, "move ppe main")
     _git(ppe, "push", "-q", "origin", "main")
+
+    with pytest.raises(RefillControllerError, match="unresolved refill generation"):
+        keep_one_running(config)
+    generation = load_refill_generation(config)
+
+    assert second_commit != first_commit
+    assert generation is not None
+    assert generation["source_ppe_identity"]["commit"] == first_commit
+
+
+def test_unfilled_generation_archives_and_replaces_idempotently(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
     keep_one_running(config)
+    generation = load_refill_generation(config)
+    assert generation is not None
+    generation["state"] = "UNFILLED"
+    save_refill_generation(config, generation)
+
+    keep_one_running(config)
+    replacement = load_refill_generation(config)
+    history = (
+        config.build_next.host_root
+        / "state"
+        / "refill-generation-history"
+        / f"{generation['generation_id']}.json"
+    )
+
+    assert replacement is not None
+    assert replacement["generation_id"] != generation["generation_id"]
+    assert json.loads(history.read_text(encoding="utf-8")) == generation
+
+
+def test_conflicting_generation_history_blocks_replacement(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    keep_one_running(config)
+    generation = load_refill_generation(config)
+    assert generation is not None
+    generation["state"] = "UNFILLED"
+    save_refill_generation(config, generation)
+    history = (
+        config.build_next.host_root
+        / "state"
+        / "refill-generation-history"
+        / f"{generation['generation_id']}.json"
+    )
+    history.parent.mkdir(parents=True, exist_ok=True)
+    history.write_text(json.dumps({"conflict": True}) + "\n", encoding="utf-8")
+
+    with pytest.raises(RefillControllerError, match="history conflicts"):
+        keep_one_running(config)
+
+
+@pytest.mark.parametrize("state", ["PAUSED", "BLOCKED", "BACKPRESSURE"])
+def test_keep_one_cannot_overwrite_unresolved_terminal_like_states(
+    tmp_path: Path, state: str
+) -> None:
+    config = _refill_config(tmp_path)
+    keep_one_running(config)
+    generation = load_refill_generation(config)
+    assert generation is not None
+    generation["state"] = state
+    save_refill_generation(config, generation)
+
+    with pytest.raises(RefillControllerError, match="unresolved refill generation"):
+        keep_one_running(config)
+
+
+def test_prepared_dispatch_crash_before_feed_replays_same_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    keep_one_running(config)
+    real_build_next = refill_controller.build_next
+
+    def crash_after_prepare(build_config: object) -> object:
+        if getattr(build_config, "submit", True):
+            raise RuntimeError("crash before feed")
+        return real_build_next(build_config)
+
+    monkeypatch.setattr(refill_controller, "build_next", crash_after_prepare)
+    with pytest.raises(RuntimeError, match="crash before feed"):
+        reconcile_refill(config)
+    prepared = load_refill_generation(config)["prepared_dispatch"]
+
+    monkeypatch.setattr(refill_controller, "build_next", real_build_next)
+    report = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert report.status == "QUEUED"
+    assert generation is not None
+    assert "prepared_dispatch" not in generation
+    assert generation["current_attempt"]["attempt_ordinal"] == prepared["attempt_ordinal"] == 1
+    assert generation["current_attempt"]["job_id"] == prepared["job_id"]
+
+
+def test_prepared_dispatch_crash_after_feed_recovers_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    keep_one_running(config)
+    real_build_next = refill_controller.build_next
+
+    def crash_after_feed(build_config: object) -> object:
+        receipt = real_build_next(build_config)
+        if getattr(build_config, "submit", True):
+            raise RuntimeError("crash after feed")
+        return receipt
+
+    monkeypatch.setattr(refill_controller, "build_next", crash_after_feed)
+    with pytest.raises(RuntimeError, match="crash after feed"):
+        reconcile_refill(config)
+
+    monkeypatch.setattr(refill_controller, "build_next", real_build_next)
+    first = reconcile_refill(config)
+    second = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert first.status == "QUEUED"
+    assert second.status == "QUEUED"
+    assert generation is not None
+    assert len(generation["attempt_sequence"]) == 1
+    assert "prepared_dispatch" not in generation
+
+
+def test_revision_pending_owns_failed_source_item_and_blocks_b(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
+    feed = _feed_repo(tmp_path / "feed-work")
+    config = _refill_config(tmp_path, ppe=ppe, feed=feed)
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _archive_job_yaml_from_feed(config, job_id)
+    _write_gate_report(config, job_id, status="failed", state="candidate_failed")
+    revision_id = "revision-for-a"
+    _write_revision_seen(config, job_id, revision_id)
+    pending = config.build_next.host_root / "queue" / "pending"
+    pending.mkdir(parents=True, exist_ok=True)
+    (pending / f"{revision_id}.yaml").write_text("version: 1\n", encoding="utf-8")
 
     report = reconcile_refill(config)
     generation = load_refill_generation(config)
 
-    assert second_commit != first_commit
     assert report.status == "QUEUED"
-    assert generation["source_ppe_identity"]["commit"] == second_commit
+    assert report.build_next_receipt is None
+    assert generation is not None
+    assert generation["item_scoped_terminal_exclusions"] == []
+
+
+def test_revision_provider_failure_backpressures_a_without_b_dispatch(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
+    feed = _feed_repo(tmp_path / "feed-work")
+    config = _refill_config(tmp_path, ppe=ppe, feed=feed)
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _archive_job_yaml_from_feed(config, job_id)
+    _write_gate_report(config, job_id, status="failed", state="candidate_failed")
+    revision_id = "revision-provider-failed"
+    _write_revision_seen(config, job_id, revision_id)
+    _archive_attempt(
+        config,
+        revision_id,
+        failed=True,
+        error={
+            "provider_failure": {
+                "version": 1,
+                "scope": "provider",
+                "temporary": True,
+                "retryable": False,
+                "retry_at": "2026-07-25T15:04:00Z",
+            }
+        },
+    )
+
+    report = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert report.status == "BACKPRESSURE"
+    assert report.build_next_receipt is None
+    assert generation is not None
+    assert generation["item_scoped_terminal_exclusions"] == []
+
+
+def test_terminal_revision_excludes_a_and_allows_b(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
+    feed = _feed_repo(tmp_path / "feed-work")
+    config = _refill_config(tmp_path, ppe=ppe, feed=feed)
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _archive_job_yaml_from_feed(config, job_id)
+    _write_gate_report(config, job_id, status="failed", state="candidate_failed")
+    revision_id = "revision-terminal"
+    _write_revision_seen(config, job_id, revision_id)
+    _archive_attempt(config, revision_id)
+    _write_gate_report(config, revision_id, status="failed", state="candidate_rejected")
+
+    report = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert report.status == "QUEUED"
+    assert report.build_next_receipt is not None
+    assert report.build_next_receipt.work_item_id == B_WORK_ITEM
+    assert generation is not None
+    assert generation["item_scoped_terminal_exclusions"] == [A_WORK_ITEM]
+
+
+def test_multiple_revision_descendants_block(tmp_path: Path) -> None:
+    config = _refill_config(
+        tmp_path,
+        ppe=_write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b()),
+    )
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _archive_job_yaml_from_feed(config, job_id)
+    _write_gate_report(config, job_id, status="failed", state="candidate_failed")
+    _write_state_json(
+        config,
+        "revision-loop-seen.json",
+        {
+            f"test-host/{job_id}": {"source_job_id": job_id, "revision_job_id": "r1"},
+            f"other/{job_id}": {"source_job_id": job_id, "revision_job_id": "r2"},
+        },
+    )
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    assert report.decision_evidence["reason"] == "ambiguous_attempt"
+
+
+def test_generic_quota_text_backpressures_without_retry(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _archive_attempt(config, job_id, failed=True, message="Codex quota exhausted; try again later")
+
+    report = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert report.status == "BACKPRESSURE"
+    assert report.build_next_receipt is None
+    assert generation is not None
+    assert generation["provider_retry_consumed"] is False
+
+
+def test_timezone_free_structured_retry_at_does_not_authorize_retry(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _archive_attempt(
+        config,
+        job_id,
+        failed=True,
+        error={
+            "provider_failure": {
+                "version": 1,
+                "scope": "provider",
+                "temporary": True,
+                "retryable": True,
+                "retry_at": "2026-07-25T15:04:00",
+            }
+        },
+    )
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BACKPRESSURE"
+    assert report.build_next_receipt is None
+
+
+def test_second_provider_failure_does_not_retry_or_dispatch_b(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
+    feed = _feed_repo(tmp_path / "feed-work")
+    config = RefillConfig(
+        build_next=_config(tmp_path, ppe, feed, host_root=tmp_path / "host"),
+        clock=lambda: datetime(2026, 7, 25, 15, 4, tzinfo=UTC),
+    )
+    _write_host_status(config)
+    first_job = _submit_tracked_attempt(config)
+    _archive_attempt(
+        config,
+        first_job,
+        failed=True,
+        error={
+            "provider_failure": {
+                "version": 1,
+                "scope": "provider",
+                "temporary": True,
+                "retryable": True,
+                "retry_at": "2026-07-25T15:04:00Z",
+            }
+        },
+    )
+    retry_report = reconcile_refill(config)
+    retry_job = retry_report.build_next_receipt.job_id
+    _archive_job_yaml_from_feed(config, retry_job, failed=True)
+
+    second = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert second.status == "BLOCKED"
+    assert second.build_next_receipt is None
+    assert generation is not None
+    assert generation["item_scoped_terminal_exclusions"] == []
+
+
+def test_auth_text_is_nonretryable_but_structured_temporary_auth_can_retry(
+    tmp_path: Path,
+) -> None:
+    auth_text = _refill_config(tmp_path / "auth-text")
+    _write_host_status(auth_text)
+    text_job = _submit_tracked_attempt(auth_text)
+    _archive_attempt(auth_text, text_job, failed=True, message="authentication failed")
+
+    structured = RefillConfig(
+        build_next=_refill_config(tmp_path / "auth-structured").build_next,
+        clock=lambda: datetime(2026, 7, 25, 15, 4, tzinfo=UTC),
+    )
+    _write_host_status(structured)
+    structured_job = _submit_tracked_attempt(structured)
+    _archive_attempt(
+        structured,
+        structured_job,
+        failed=True,
+        error={
+            "provider_failure": {
+                "version": 1,
+                "scope": "provider",
+                "temporary": True,
+                "retryable": True,
+                "retry_at": "2026-07-25T15:04:00+00:00",
+                "reason": "temporary auth outage",
+            }
+        },
+    )
+
+    text_report = reconcile_refill(auth_text)
+    structured_report = reconcile_refill(structured)
+
+    assert text_report.status == "BACKPRESSURE"
+    assert text_report.build_next_receipt is None
+    assert structured_report.status == "QUEUED"
+    assert structured_report.build_next_receipt is not None
+
+
+def test_persistent_feed_copy_does_not_prevent_terminal_a_advancing_to_b(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
+    feed = _feed_repo(tmp_path / "feed-work")
+    config = _refill_config(tmp_path, ppe=ppe, feed=feed)
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _archive_job_yaml_from_feed(config, job_id)
+    _write_state_json(config, "controlled-publisher-seen.json", {job_id: {"status": "published"}})
+
+    report = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert report.status == "QUEUED"
+    assert report.build_next_receipt is not None
+    assert report.build_next_receipt.work_item_id == B_WORK_ITEM
+    assert generation is not None
+    assert generation["item_scoped_terminal_exclusions"] == [A_WORK_ITEM]

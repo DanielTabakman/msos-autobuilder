@@ -1095,9 +1095,15 @@ def _revision_lineage_classification(
                 }
             if status == "failed" or state in {"candidate_failed", "candidate_rejected"}:
                 return {
-                    "category": "item_terminal",
-                    "stage": "revision_gate_terminal",
-                    "evidence": evidence,
+                    "category": "unknown",
+                    "stage": "revision_descendant_disposition_missing",
+                    "evidence": {
+                        **evidence,
+                        "reason": (
+                            "failed revision gate is not terminal without trusted "
+                            "publisher disposition"
+                        ),
+                    },
                 }
         return {"category": "in_flight", "stage": "revision_downstream", "evidence": lineage}
     if _job_in_feed(config, revision_job_id):
@@ -1228,7 +1234,17 @@ def _classify_attempt(
         status = str(gate.get("status") or "")
         state = str(gate.get("state") or "")
         if status == "failed" or state in {"candidate_failed", "candidate_rejected"}:
-            return {"category": "item_terminal", "stage": "gate", "evidence": gate}
+            return {
+                "category": "unknown",
+                "stage": "revision_disposition_missing",
+                "evidence": {
+                    "gate": gate,
+                    "reason": (
+                        "failed source gate is not terminal without trusted publisher "
+                        "or revision disposition"
+                    ),
+                },
+            }
         if status == "passed" and state in {"candidate_passed", "awaiting_review"}:
             return {"category": "in_flight", "stage": "publisher_review", "evidence": gate}
     return {"category": "in_flight", "stage": "downstream_disposition"}

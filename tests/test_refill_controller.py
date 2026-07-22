@@ -1869,6 +1869,56 @@ def test_prepared_dispatch_crash_after_feed_recovers_once(
     assert "prepared_dispatch" not in generation
 
 
+def test_failed_source_gate_without_revision_ledger_blocks_without_b(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
+    feed = _feed_repo(tmp_path / "feed-work")
+    config = _refill_config(tmp_path, ppe=ppe, feed=feed)
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _archive_job_yaml_from_feed(config, job_id)
+    _write_gate_report(config, job_id, status="failed", state="candidate_failed")
+
+    first = reconcile_refill(config)
+    second = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert first.status == "BLOCKED"
+    assert second.status == "BLOCKED"
+    assert first.build_next_receipt is None
+    assert second.build_next_receipt is None
+    assert generation is not None
+    assert generation["item_scoped_terminal_exclusions"] == []
+    assert generation["last_attempt_classification"]["stage"] == "revision_disposition_missing"
+
+
+def test_failed_source_gate_later_revision_pending_occupies_a_without_b(
+    tmp_path: Path,
+) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
+    feed = _feed_repo(tmp_path / "feed-work")
+    config = _refill_config(tmp_path, ppe=ppe, feed=feed)
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _archive_job_yaml_from_feed(config, job_id)
+    _write_gate_report(config, job_id, status="failed", state="candidate_failed")
+    blocked = reconcile_refill(config)
+    revision_id = "revision-for-a"
+    _write_revision_seen(config, job_id, revision_id)
+    pending = config.build_next.host_root / "queue" / "pending"
+    pending.mkdir(parents=True, exist_ok=True)
+    (pending / f"{revision_id}.yaml").write_text("version: 1\n", encoding="utf-8")
+
+    occupied = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert blocked.status == "BLOCKED"
+    assert occupied.status == "QUEUED"
+    assert occupied.build_next_receipt is None
+    assert generation is not None
+    assert generation["current_attempt"]["job_id"] == job_id
+    assert generation["item_scoped_terminal_exclusions"] == []
+
+
 def test_revision_pending_owns_failed_source_item_and_blocks_b(tmp_path: Path) -> None:
     ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
     feed = _feed_repo(tmp_path / "feed-work")
@@ -1926,6 +1976,32 @@ def test_revision_provider_failure_backpressures_a_without_b_dispatch(tmp_path: 
     assert generation["item_scoped_terminal_exclusions"] == []
 
 
+def test_failed_revision_gate_without_publisher_blocks_without_b(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
+    feed = _feed_repo(tmp_path / "feed-work")
+    config = _refill_config(tmp_path, ppe=ppe, feed=feed)
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _archive_job_yaml_from_feed(config, job_id)
+    _write_gate_report(config, job_id, status="failed", state="candidate_failed")
+    revision_id = "revision-failed-gate"
+    _write_revision_seen(config, job_id, revision_id)
+    _archive_attempt(config, revision_id)
+    _write_gate_report(config, revision_id, status="failed", state="candidate_rejected")
+
+    report = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert report.status == "BLOCKED"
+    assert report.build_next_receipt is None
+    assert generation is not None
+    assert generation["item_scoped_terminal_exclusions"] == []
+    assert (
+        generation["last_attempt_classification"]["stage"]
+        == "revision_descendant_disposition_missing"
+    )
+
+
 def test_terminal_revision_excludes_a_and_allows_b(tmp_path: Path) -> None:
     ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
     feed = _feed_repo(tmp_path / "feed-work")
@@ -1937,7 +2013,11 @@ def test_terminal_revision_excludes_a_and_allows_b(tmp_path: Path) -> None:
     revision_id = "revision-terminal"
     _write_revision_seen(config, job_id, revision_id)
     _archive_attempt(config, revision_id)
-    _write_gate_report(config, revision_id, status="failed", state="candidate_rejected")
+    _write_state_json(
+        config,
+        "controlled-publisher-seen.json",
+        {revision_id: {"status": "published", "published_at": "2026-07-20T02:00:00+00:00"}},
+    )
 
     report = reconcile_refill(config)
     generation = load_refill_generation(config)

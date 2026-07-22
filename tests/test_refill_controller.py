@@ -2471,3 +2471,78 @@ def test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b(
     assert report.build_next_receipt is None
     assert generation is not None
     assert generation["item_scoped_terminal_exclusions"] == []
+
+
+@pytest.mark.parametrize("ledger_text", ["{not-json", "[]"])
+def test_corrupt_revision_ledger_blocks_without_falling_through_to_failed_gate(
+    tmp_path: Path, ledger_text: str
+) -> None:
+    config, _info = _seed_failed_source_with_revision_ledger(tmp_path, {})
+    assert config.build_next.host_root is not None
+    ledger = config.build_next.host_root / "state" / "revision-loop-seen.json"
+    ledger.write_text(ledger_text, encoding="utf-8")
+
+    report = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert report.status == "BLOCKED"
+    assert report.build_next_receipt is None
+    assert generation is not None
+    assert generation["item_scoped_terminal_exclusions"] == []
+    assert generation["last_attempt_classification"]["stage"] == "revision_lineage"
+
+
+@pytest.mark.parametrize(
+    "case_name,descendant_factory",
+    [
+        ("descendant_non_object", lambda _revision_id: []),
+        (
+            "descendant_incomplete",
+            lambda revision_id: {
+                "source_job_id": revision_id,
+                "gate_report_sha256": "3" * 64,
+                "jobs_commit": "4" * 40,
+                "queued_at": "2026-07-20T00:01:00Z",
+            },
+        ),
+        (
+            "descendant_key_source_conflict",
+            lambda _revision_id: {
+                "source_job_id": "other-source",
+                "revision_job_id": "revision-b",
+                "gate_report_sha256": "3" * 64,
+                "jobs_commit": "4" * 40,
+                "queued_at": "2026-07-20T00:01:00Z",
+            },
+        ),
+    ],
+)
+def test_malformed_targeted_revision_descendant_blocks_without_dispatching_b(
+    tmp_path: Path, case_name: str, descendant_factory: object
+) -> None:
+    revision_id = "revision-a"
+    config, info = _seed_failed_source_with_revision_ledger(tmp_path / case_name, {})
+    job_id = info["job_id"]
+    _write_state_json(
+        config,
+        "revision-loop-seen.json",
+        {
+            f"test-host/{job_id}": {
+                "source_job_id": job_id,
+                "revision_job_id": revision_id,
+                "gate_report_sha256": "1" * 64,
+                "jobs_commit": "2" * 40,
+                "queued_at": "2026-07-20T00:00:00Z",
+            },
+            f"test-host/{revision_id}": descendant_factory(revision_id),
+        },
+    )
+
+    report = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert report.status == "BLOCKED"
+    assert report.build_next_receipt is None
+    assert generation is not None
+    assert generation["item_scoped_terminal_exclusions"] == []
+    assert generation["last_attempt_classification"]["stage"] == "revision_lineage"

@@ -915,8 +915,33 @@ def _has_trustworthy_offset(value: Any) -> bool:
     return bool(text.endswith("Z") or re.search(r"[+-]\d{2}:\d{2}$", text))
 
 
-def _revision_lineage_entries(paths: HostPaths, source_job_id: str) -> list[dict[str, Any]]:
-    raw = _read_json_file(paths.state / "revision-loop-seen.json") or {}
+def _load_revision_ledger(paths: HostPaths) -> dict[str, Any]:
+    path = paths.state / "revision-loop-seen.json"
+    if not path.exists():
+        return {"state": "absent", "path": str(path), "entries": {}}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            "state": "malformed",
+            "path": str(path),
+            "error": str(exc),
+            "entries": {},
+        }
+    if not isinstance(raw, dict):
+        return {
+            "state": "non_object",
+            "path": str(path),
+            "raw_type": type(raw).__name__,
+            "entries": {},
+        }
+    return {"state": "object", "path": str(path), "entries": raw}
+
+
+def _revision_lineage_entries(
+    ledger: Mapping[str, Any], source_job_id: str
+) -> list[dict[str, Any]]:
+    raw = ledger.get("entries")
     entries: list[dict[str, Any]] = []
     if not isinstance(raw, dict):
         return entries
@@ -937,6 +962,7 @@ def _revision_lineage_entries(paths: HostPaths, source_job_id: str) -> list[dict
                     "revision_job_id": "",
                     "_lineage_error": "targeted revision entry is not an object",
                     "_ledger_key_source": key_source,
+                    "_raw_type": type(entry).__name__,
                 }
             )
             continue
@@ -950,22 +976,10 @@ def _revision_lineage_entries(paths: HostPaths, source_job_id: str) -> list[dict
     return entries
 
 
-def _revision_descendants(paths: HostPaths, source_job_id: str) -> list[dict[str, Any]]:
-    raw = _read_json_file(paths.state / "revision-loop-seen.json") or {}
-    descendants: list[dict[str, Any]] = []
-    if not isinstance(raw, dict):
-        return descendants
-    for key, entry in raw.items():
-        if not isinstance(entry, dict):
-            continue
-        key_source = str(key).rsplit("/", 1)[-1]
-        explicit_source = str(entry.get("source_job_id") or key_source)
-        if explicit_source == source_job_id or key_source == source_job_id:
-            normalized = dict(entry)
-            normalized["source_job_id"] = explicit_source
-            normalized["revision_job_id"] = str(entry.get("revision_job_id") or "")
-            descendants.append(normalized)
-    return descendants
+def _revision_descendants(
+    ledger: Mapping[str, Any], source_job_id: str
+) -> list[dict[str, Any]]:
+    return _revision_lineage_entries(ledger, source_job_id)
 
 
 def _revision_lineage_error(entry: Mapping[str, Any], source_job_id: str) -> str | None:
@@ -997,7 +1011,20 @@ def _revision_lineage_classification(
     paths: HostPaths,
     source_job_id: str,
 ) -> dict[str, Any] | None:
-    entries = _revision_lineage_entries(paths, source_job_id)
+    ledger = _load_revision_ledger(paths)
+    ledger_state = ledger.get("state")
+    if ledger_state == "absent":
+        return None
+    if ledger_state != "object":
+        return {
+            "category": "unknown",
+            "stage": "revision_lineage",
+            "evidence": {
+                "error": "revision ledger is malformed",
+                "ledger": ledger,
+            },
+        }
+    entries = _revision_lineage_entries(ledger, source_job_id)
     if not entries:
         return None
     errors = [
@@ -1018,7 +1045,7 @@ def _revision_lineage_classification(
         }
     entry = entries[0]
     revision_job_id = str(entry["revision_job_id"])
-    descendant_entries = _revision_descendants(paths, revision_job_id)
+    descendant_entries = _revision_descendants(ledger, revision_job_id)
     if descendant_entries:
         return {
             "category": "unknown",

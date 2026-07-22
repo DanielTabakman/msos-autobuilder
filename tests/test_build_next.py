@@ -259,8 +259,6 @@ if excluded:
         pipeline_id = pipe.get('pipeline_id')
         for work in pipe.get('ready_work') or []:
             work_item_id = work.get('work_item_id')
-            if work.get('state') != 'READY_TO_BUILD':
-                continue
             if work_item_id in excluded_set:
                 matched.append({'pipeline_id': pipeline_id, 'work_item_id': work_item_id})
             else:
@@ -1092,6 +1090,45 @@ def test_selection_context_matches_landed_object_shape_and_scans_multiple_pipeli
     assert receipt.work_item_id == "fixture_work_b"
     assert receipt.evidence["requested_exclusions"] == ["missing", "shared-id"]
     assert context == {"rank_tuple": [1, "ppe", "fixture_work"]}
+
+
+def test_fixture_exclusion_matching_uses_ready_work_membership_without_state(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot()
+    stateless = dict(snapshot["pipelines"][0]["ready_work"][0])
+    stateless["work_item_id"] = "stateless-ready-member"
+    stateless.pop("state", None)
+    snapshot["pipelines"][0]["ready_work"] = [stateless]
+    snapshot["recommended_next_action"] = {
+        "pipeline_id": "ppe",
+        "state": "UNFILLED",
+        "action_type": "wait",
+    }
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+
+    output = subprocess.run(
+        [
+            "python",
+            str(ppe / "scripts" / "founder_portfolio.py"),
+            "what's next",
+            "--repo-root",
+            str(ppe),
+            "--json",
+            "--exclude-work-item-id",
+            "stateless-ready-member",
+        ],
+        cwd=ppe,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    context = json.loads(output.stdout)["selection_context"]
+
+    assert context["matched_exclusions"] == [
+        {"pipeline_id": "ppe", "work_item_id": "stateless-ready-member"}
+    ]
+    assert context["unmatched_exclusions"] == []
 
 
 def test_exclusion_context_is_written_to_top_level_and_recommendation(tmp_path: Path) -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -11,6 +12,7 @@ from typing import Any
 import yaml
 
 from msos_autobuilder.build_next import (
+    EXCLUSION_EFFECT,
     BuildNextConfig,
     RefillAttemptContext,
     _job_id,
@@ -235,51 +237,73 @@ def _write_ppe(
 ) -> Path:
     repo = _init_repo(root)
     (repo / "scripts").mkdir()
-    (repo / "scripts" / "founder_portfolio.py").write_text(
-        "import json, pathlib, sys\n"
-        "root = pathlib.Path(__file__).resolve().parents[1]\n"
-        "excluded = []\n"
-        "args = sys.argv[1:]\n"
-        "for index, arg in enumerate(args):\n"
-        "    if arg == '--exclude-work-item-id' and index + 1 < len(args):\n"
-        "        excluded.append(args[index + 1])\n"
-        "payload = json.loads((root / 'snapshot.json').read_text())\n"
-        "ready = payload['pipelines'][0].get('ready_work') or []\n"
-        "ready_ids = {item.get('work_item_id') for item in ready}\n"
-        "matched = [\n"
-        "    {'pipeline_id': 'ppe', 'work_item_id': item}\n"
-        "    for item in excluded\n"
-        "    if item in ready_ids\n"
-        "]\n"
-        "unmatched = [item for item in excluded if item not in ready_ids]\n"
-        "payload['selection_context'] = {\n"
-        "    'scope': 'request',\n"
-        "    'excluded_work_item_ids': excluded,\n"
-        "    'matched_exclusions': matched,\n"
-        "    'unmatched_exclusions': unmatched,\n"
-        "    'effect': 'request exclusions applied',\n"
-        "}\n"
-        "rec = payload.get('recommended_next_action') or {}\n"
-        "remaining = [item for item in ready if item.get('work_item_id') not in excluded]\n"
-        "if rec.get('work_item_id') in excluded and remaining:\n"
-        "    next_item = remaining[0]\n"
-        "    rec['work_item_id'] = next_item['work_item_id']\n"
-        "    payload['recommended_next_action'] = rec\n"
-        "elif rec.get('work_item_id') in excluded:\n"
-        "    payload['recommended_next_action'] = {\n"
-        "        'pipeline_id': rec.get('pipeline_id'),\n"
-        "        'state': 'UNFILLED',\n"
-        "        'action_type': 'wait',\n"
-        "    }\n"
-        "print(json.dumps(payload))\n",
-        encoding="utf-8",
-    )
+    script = '''
+import json, pathlib, sys
+EFFECT = (
+    "exclusions remove matching READY candidates from recommendation eligibility only; "
+    "ready_work is unchanged"
+)
+root = pathlib.Path(__file__).resolve().parents[1]
+args = sys.argv[1:]
+raw_excluded = []
+for index, arg in enumerate(args):
+    if arg == '--exclude-work-item-id' and index + 1 < len(args):
+        raw_excluded.append(args[index + 1])
+excluded = sorted({str(item).strip() for item in raw_excluded if str(item).strip()})
+payload = json.loads((root / 'snapshot.json').read_text())
+if excluded:
+    excluded_set = set(excluded)
+    matched = []
+    eligible = []
+    for pipe in payload.get('pipelines') or []:
+        pipeline_id = pipe.get('pipeline_id')
+        for work in pipe.get('ready_work') or []:
+            work_item_id = work.get('work_item_id')
+            if work.get('state') != 'READY_TO_BUILD':
+                continue
+            if work_item_id in excluded_set:
+                matched.append({'pipeline_id': pipeline_id, 'work_item_id': work_item_id})
+            else:
+                eligible.append((pipeline_id, work))
+    matched = sorted(matched, key=lambda item: (item['pipeline_id'], item['work_item_id']))
+    matched_ids = {item['work_item_id'] for item in matched}
+    unmatched = sorted(item for item in excluded if item not in matched_ids)
+    context = {
+        'excluded_work_item_ids': excluded,
+        'matched_exclusions': matched,
+        'unmatched_exclusions': unmatched,
+        'scope': 'request',
+        'effect': EFFECT,
+    }
+    payload['selection_context'] = context
+    rec = payload.get('recommended_next_action') or {}
+    if rec.get('work_item_id') in excluded_set or not rec.get('work_item_id'):
+        if eligible:
+            pipeline_id, next_item = eligible[0]
+            rec.update({
+                'pipeline_id': pipeline_id,
+                'state': 'READY_TO_BUILD',
+                'action_type': 'build',
+                'summary': next_item.get('title'),
+                'work_item_id': next_item.get('work_item_id'),
+            })
+        else:
+            rec = {
+                'pipeline_id': rec.get('pipeline_id'),
+                'state': 'UNFILLED',
+                'action_type': 'wait',
+            }
+    rec['selection_context'] = context
+    payload['recommended_next_action'] = rec
+print(json.dumps(payload))
+'''.lstrip()
+    (repo / "scripts" / "founder_portfolio.py").write_text(script, encoding="utf-8")
     (repo / "config").mkdir()
     (repo / "config" / "founder_pipeline_registry.json").write_text(
-        json.dumps(registry or _registry(), indent=2) + "\n",
+        json.dumps(registry or _registry(), indent=2) + chr(10),
         encoding="utf-8",
     )
-    (repo / "requirements.txt").write_bytes(b"# PPE fixture requirements\n")
+    (repo / "requirements.txt").write_bytes(b"# PPE fixture requirements" + bytes([10]))
     sop = repo / "docs" / "SOP"
     (sop / "PHASE_PLANS").mkdir(parents=True)
     for rel in [
@@ -294,13 +318,14 @@ def _write_ppe(
     ]:
         path = sop / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("{}\n" if rel.endswith(".json") else f"# {rel}\n", encoding="utf-8")
+        content = "{}" if rel.endswith(".json") else f"# {rel}"
+        path.write_text(content + chr(10), encoding="utf-8")
     (sop / "PHASE_PLANS" / "fixture_relay.json").write_text(
-        json.dumps(plan or _plan(), indent=2) + "\n",
+        json.dumps(plan or _plan(), indent=2) + chr(10),
         encoding="utf-8",
     )
     (repo / "snapshot.json").write_text(
-        json.dumps(snapshot or _snapshot(), indent=2) + "\n",
+        json.dumps(snapshot or _snapshot(), indent=2) + chr(10),
         encoding="utf-8",
     )
     _commit_all(repo)
@@ -309,7 +334,6 @@ def _write_ppe(
     _git(repo, "remote", "add", "origin", str(origin))
     _git(repo, "push", "-q", "-u", "origin", "main")
     return repo
-
 
 def _feed_repo(root: Path) -> Path:
     repo = _init_repo(root)
@@ -856,6 +880,56 @@ def test_no_product_main_write_or_merge_authority_is_introduced(tmp_path: Path) 
     }
 
 
+def _fixture_native_slice(slice_id: str = "Fixture-Product-Slice002"):
+    return _select_native_slice(
+        {
+            "slices": [
+                {
+                    "sliceId": slice_id,
+                    "layerPreset": "PPE_UI",
+                    "declaredPlane": "PRODUCT-PLANE",
+                    "buildBranch": "build/options",
+                    "touchSet": ["src/options.py"],
+                }
+            ]
+        }
+    )
+
+
+def _ready_item(work_item_id: str, *, title: str | None = None) -> dict[str, Any]:
+    item = dict(_snapshot()["pipelines"][0]["ready_work"][0])
+    item["work_item_id"] = work_item_id
+    item["title"] = title or work_item_id
+    item["selection"] = dict(item["selection"])
+    item["selection"]["founder_priority_rank"] = 10
+    return item
+
+
+def _append_ready(snapshot: dict[str, Any], work_item_id: str) -> None:
+    snapshot["pipelines"][0]["ready_work"].append(_ready_item(work_item_id))
+
+
+def _append_pipeline(snapshot: dict[str, Any], pipeline_id: str, work_item_ids: list[str]) -> None:
+    pipe = dict(snapshot["pipelines"][0])
+    pipe["pipeline_id"] = pipeline_id
+    pipe["ready_work"] = [_ready_item(item) for item in work_item_ids]
+    pipe["running_work"] = []
+    pipe["queued_work"] = []
+    pipe["backpressure"] = []
+    pipe["stale_evidence"] = []
+    snapshot["pipelines"].append(pipe)
+
+
+def _patch_ppe_script(ppe: Path, old: str, new: str, message: str) -> None:
+    script = ppe / "scripts" / "founder_portfolio.py"
+    text = script.read_text(encoding="utf-8")
+    if old not in text:
+        raise AssertionError(f"fixture script pattern not found: {old!r}")
+    script.write_text(text.replace(old, new), encoding="utf-8")
+    _commit_all(ppe, message)
+    _git(ppe, "push", "-q", "origin", "main")
+
+
 def test_manual_build_next_without_attempt_context_keeps_deterministic_id(tmp_path: Path) -> None:
     ppe = _write_ppe(tmp_path / "ppe")
     feed = _feed_repo(tmp_path / "feed-work")
@@ -884,102 +958,183 @@ def test_manual_build_next_without_attempt_context_keeps_deterministic_id(tmp_pa
     assert refill.job_id != manual.job_id
 
 
-def test_manual_job_id_keeps_legacy_96_character_truncation() -> None:
-    native_slice = _select_native_slice(
-        _plan(touch_set=["src/options.py"])
-        | {
-            "slices": [
-                {
-                    "sliceId": "Options-HorizonComparison-Product-Slice002",
-                    "layerPreset": "PPE_UI",
-                    "declaredPlane": "PRODUCT-PLANE",
-                    "buildBranch": "build/options",
-                    "touchSet": ["src/options.py"],
-                }
-            ]
-        }
-    )
-    source_commit = "a25f26d06b067e39047f1d825203a96810ae4a8c"
-
+def test_manual_short_job_id_matches_fixed_base_value() -> None:
     job_id = _job_id(
         "ppe",
-        "options_horizon_comparison_v1",
-        native_slice,
-        source_commit,
+        "fixture_work",
+        _fixture_native_slice(),
+        "a25f26d06b067e39047f1d825203a96810ae4a8c",
     )
 
-    old = (
-        "build-next-ppe-options_horizon_comparison_v1-"
-        "Options-HorizonComparison-Product-Slice002-a25f26d06b067"
-    )[:96]
-    assert job_id == old
+    assert job_id == "build-next-ppe-fixture_work-Fixture-Product-Slice002-a25f26d06b06"
+
+
+def test_manual_long_job_id_matches_fixed_base_value() -> None:
+    job_id = _job_id(
+        "ppe",
+        "manual id with spaces / punctuation ? and a very very long work item id that keeps going",
+        _fixture_native_slice("Manual Long Slice With Spaces And Symbols 002"),
+        "a25f26d06b067e39047f1d825203a96810ae4a8c",
+    )
+
+    assert job_id == (
+        "build-next-ppe-manual-id-with-spaces-punctuation-and-a-very-very-long-work-item-id-that-keeps-go"
+    )
     assert len(job_id) == 96
 
 
-def test_refill_job_id_keeps_digest_suffix_distinct_after_length_limit() -> None:
-    native_slice = _select_native_slice(
-        {
-            "slices": [
-                {
-                    "sliceId": "Options-HorizonComparison-Product-Slice002",
-                    "layerPreset": "PPE_UI",
-                    "declaredPlane": "PRODUCT-PLANE",
-                    "buildBranch": "build/options",
-                    "touchSet": ["src/options.py"],
-                }
-            ]
-        }
-    )
-    source_commit = "a25f26d06b067e39047f1d825203a96810ae4a8c"
+def test_existing_manual_terminal_evidence_still_prevents_redispatch(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    feed = _feed_repo(tmp_path / "feed-work")
+    first = build_next(_config(tmp_path / "first", ppe, feed))
+    completed = tmp_path / "host" / "queue" / "completed" / str(first.job_id)
+    completed.mkdir(parents=True)
 
-    first = _job_id(
-        "ppe",
-        "options_horizon_comparison_v1",
-        native_slice,
-        source_commit,
-        refill_attempt=RefillAttemptContext(
-            generation_id="refill-generation-1",
-            attempt_ordinal=1,
-            selected_work_item_id="options_horizon_comparison_v1",
-        ).evidence("options_horizon_comparison_v1"),
-    )
-    second_generation = _job_id(
-        "ppe",
-        "options_horizon_comparison_v1",
-        native_slice,
-        source_commit,
-        refill_attempt=RefillAttemptContext(
-            generation_id="refill-generation-2",
-            attempt_ordinal=1,
-            selected_work_item_id="options_horizon_comparison_v1",
-        ).evidence("options_horizon_comparison_v1"),
-    )
-    retry = _job_id(
-        "ppe",
-        "options_horizon_comparison_v1",
-        native_slice,
-        source_commit,
-        refill_attempt=RefillAttemptContext(
-            generation_id="refill-generation-1",
-            attempt_ordinal=2,
-            retry_ordinal=1,
-            selected_work_item_id="options_horizon_comparison_v1",
-        ).evidence("options_horizon_comparison_v1"),
-    )
+    receipt = build_next(_config(tmp_path / "second", ppe, feed, host_root=tmp_path / "host"))
 
-    assert first != second_generation
-    assert retry != first
-    assert len(first.rsplit("-", 1)[-1]) == 16
-    assert first.endswith(first.rsplit("-", 1)[-1])
-    assert len(first) <= 120
+    assert receipt.status == "BLOCKED"
+    assert "refusing redispatch" in receipt.message
 
 
-def test_exclusions_are_passed_to_ppe_and_echoed_in_selection_context(tmp_path: Path) -> None:
+def test_exclusion_normalizer_trims_deduplicates_sorts_and_discards_blanks(tmp_path: Path) -> None:
     snapshot = _snapshot()
-    second = dict(snapshot["pipelines"][0]["ready_work"][0])
-    second["work_item_id"] = "fixture_work_b"
-    snapshot["pipelines"][0]["ready_work"].append(second)
+    _append_ready(snapshot, "Alpha ID: 1/2?")
+    _append_ready(snapshot, "fixture_work_b")
     ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(
+        BuildNextConfig(
+            ppe_repo=ppe,
+            feed_repo_url=str(feed),
+            checkout_root=tmp_path / "checkout",
+            allow_test_local_source_remote=True,
+            exclude_work_item_ids=(" fixture_work ", "", "Alpha ID: 1/2?", "fixture_work"),
+        )
+    )
+
+    assert receipt.status == "QUEUED"
+    assert receipt.work_item_id == "fixture_work_b"
+    assert receipt.evidence["requested_exclusions"] == ["Alpha ID: 1/2?", "fixture_work"]
+
+
+def test_exclusion_ids_preserve_spaces_punctuation_and_long_identity(tmp_path: Path) -> None:
+    long_id = "long exclusion id " + "x" * 140 + " !?"
+    snapshot = _snapshot(work_item_id="Alpha ID: 1/2?")
+    _append_ready(snapshot, long_id)
+    _append_ready(snapshot, "fixture_work_b")
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(
+        BuildNextConfig(
+            ppe_repo=ppe,
+            feed_repo_url=str(feed),
+            checkout_root=tmp_path / "checkout",
+            allow_test_local_source_remote=True,
+            exclude_work_item_ids=(" Alpha ID: 1/2? ", long_id),
+        )
+    )
+
+    context = receipt.evidence["selection_explanation"]
+    assert receipt.status == "QUEUED"
+    assert receipt.work_item_id == "fixture_work_b"
+    assert receipt.evidence["requested_exclusions"] == ["Alpha ID: 1/2?", long_id]
+    assert len(receipt.evidence["requested_exclusions"][1]) > 96
+    assert context == {"rank_tuple": [1, "ppe", "fixture_work"]}
+
+
+def test_selection_context_matches_landed_object_shape_and_scans_multiple_pipelines(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(work_item_id="shared-id")
+    _append_ready(snapshot, "fixture_work_b")
+    _append_pipeline(snapshot, "alpha", ["shared-id", "not requested"])
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    feed = _feed_repo(tmp_path / "feed-work")
+    output = subprocess.run(
+        [
+            "python",
+            str(ppe / "scripts" / "founder_portfolio.py"),
+            "what's next",
+            "--repo-root",
+            str(ppe),
+            "--json",
+            "--exclude-work-item-id",
+            "shared-id",
+            "--exclude-work-item-id",
+            "missing",
+        ],
+        cwd=ppe,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    context = json.loads(output.stdout)["selection_context"]
+    assert context["matched_exclusions"] == [
+        {"pipeline_id": "alpha", "work_item_id": "shared-id"},
+        {"pipeline_id": "ppe", "work_item_id": "shared-id"},
+    ]
+    assert context["unmatched_exclusions"] == ["missing"]
+
+    receipt = build_next(
+        BuildNextConfig(
+            ppe_repo=ppe,
+            feed_repo_url=str(feed),
+            checkout_root=tmp_path / "checkout",
+            allow_test_local_source_remote=True,
+            exclude_work_item_ids=("missing", "shared-id"),
+        )
+    )
+
+    context = receipt.evidence["selection_explanation"]
+    assert receipt.status == "QUEUED"
+    assert receipt.work_item_id == "fixture_work_b"
+    assert receipt.evidence["requested_exclusions"] == ["missing", "shared-id"]
+    assert context == {"rank_tuple": [1, "ppe", "fixture_work"]}
+
+
+def test_exclusion_context_is_written_to_top_level_and_recommendation(tmp_path: Path) -> None:
+    snapshot = _snapshot()
+    _append_ready(snapshot, "fixture_work_b")
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    output = subprocess.run(
+        [
+            "python",
+            str(ppe / "scripts" / "founder_portfolio.py"),
+            "what's next",
+            "--repo-root",
+            str(ppe),
+            "--json",
+            "--exclude-work-item-id",
+            "fixture_work",
+            "--exclude-work-item-id",
+            "not_ready",
+        ],
+        cwd=ppe,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    payload = json.loads(output.stdout)
+    context = payload["selection_context"]
+
+    assert context == {
+        "excluded_work_item_ids": ["fixture_work", "not_ready"],
+        "matched_exclusions": [{"pipeline_id": "ppe", "work_item_id": "fixture_work"}],
+        "unmatched_exclusions": ["not_ready"],
+        "scope": "request",
+        "effect": EXCLUSION_EFFECT,
+    }
+    assert payload["recommended_next_action"]["selection_context"] == context
+    assert payload["pipelines"][0]["ready_work"][0]["work_item_id"] == "fixture_work"
+
+
+def test_wrong_exclusion_effect_is_rejected(tmp_path: Path) -> None:
+    snapshot = _snapshot()
+    _append_ready(snapshot, "fixture_work_b")
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    _patch_ppe_script(ppe, "ready_work is unchanged", "wrong effect", "bad effect")
     feed = _feed_repo(tmp_path / "feed-work")
 
     receipt = build_next(
@@ -992,47 +1147,15 @@ def test_exclusions_are_passed_to_ppe_and_echoed_in_selection_context(tmp_path: 
         )
     )
 
-    assert receipt.status == "QUEUED"
-    assert receipt.work_item_id == "fixture_work_b"
-    assert receipt.evidence["requested_exclusions"] == ["fixture_work"]
+    assert receipt.status == "BLOCKED"
+    assert "effect" in receipt.message
 
 
-def test_selection_context_matches_current_ppe_object_shape(tmp_path: Path) -> None:
+def test_missing_nested_selection_context_is_rejected(tmp_path: Path) -> None:
     snapshot = _snapshot()
-    second = dict(snapshot["pipelines"][0]["ready_work"][0])
-    second["work_item_id"] = "fixture_work_b"
-    snapshot["pipelines"][0]["ready_work"].append(second)
+    _append_ready(snapshot, "fixture_work_b")
     ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
-    feed = _feed_repo(tmp_path / "feed-work")
-
-    receipt = build_next(
-        BuildNextConfig(
-            ppe_repo=ppe,
-            feed_repo_url=str(feed),
-            checkout_root=tmp_path / "checkout",
-            allow_test_local_source_remote=True,
-            exclude_work_item_ids=("fixture_work", "not_ready"),
-        )
-    )
-
-    assert receipt.status == "QUEUED"
-    assert receipt.work_item_id == "fixture_work_b"
-    assert receipt.evidence["requested_exclusions"] == ["fixture_work", "not_ready"]
-
-
-def test_malformed_or_mismatched_selection_context_fails_closed(tmp_path: Path) -> None:
-    ppe = _write_ppe(tmp_path / "ppe")
-    script = ppe / "scripts" / "founder_portfolio.py"
-    script.write_text(
-        "import json, pathlib\n"
-        "root = pathlib.Path(__file__).resolve().parents[1]\n"
-        "payload = json.loads((root / 'snapshot.json').read_text())\n"
-        "payload['selection_context'] = {'scope': 'global', 'excluded_work_item_ids': []}\n"
-        "print(json.dumps(payload))\n",
-        encoding="utf-8",
-    )
-    _commit_all(ppe, "bad selector context")
-    _git(ppe, "push", "-q", "origin", "main")
+    _patch_ppe_script(ppe, "    rec['selection_context'] = context\n", "", "missing nested")
     feed = _feed_repo(tmp_path / "feed-work")
 
     receipt = build_next(
@@ -1047,3 +1170,211 @@ def test_malformed_or_mismatched_selection_context_fails_closed(tmp_path: Path) 
 
     assert receipt.status == "BLOCKED"
     assert "selection_context" in receipt.message
+
+
+def test_contradictory_nested_selection_context_is_rejected(tmp_path: Path) -> None:
+    snapshot = _snapshot()
+    _append_ready(snapshot, "fixture_work_b")
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    _patch_ppe_script(
+        ppe,
+        "    rec['selection_context'] = context\n",
+        (
+            "    rec['selection_context'] = dict(context)\n"
+            "    rec['selection_context']['scope'] = 'global'\n"
+        ),
+        "contradictory nested",
+    )
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(
+        BuildNextConfig(
+            ppe_repo=ppe,
+            feed_repo_url=str(feed),
+            checkout_root=tmp_path / "checkout",
+            allow_test_local_source_remote=True,
+            exclude_work_item_ids=("fixture_work",),
+        )
+    )
+
+    assert receipt.status == "BLOCKED"
+    assert "does not match" in receipt.message
+
+
+def test_legacy_requested_exclusions_is_rejected(tmp_path: Path) -> None:
+    snapshot = _snapshot()
+    _append_ready(snapshot, "fixture_work_b")
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    _patch_ppe_script(
+        ppe,
+        "    payload['selection_context'] = context\n",
+        (
+            "    payload['selection_context'] = context\n"
+            "    payload['requested_exclusions'] = excluded\n"
+        ),
+        "legacy requested_exclusions",
+    )
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(
+        BuildNextConfig(
+            ppe_repo=ppe,
+            feed_repo_url=str(feed),
+            checkout_root=tmp_path / "checkout",
+            allow_test_local_source_remote=True,
+            exclude_work_item_ids=("fixture_work",),
+        )
+    )
+
+    assert receipt.status == "BLOCKED"
+    assert "legacy requested_exclusions" in receipt.message
+
+
+def test_excluded_recommendation_is_rejected(tmp_path: Path) -> None:
+    snapshot = _snapshot()
+    _append_ready(snapshot, "fixture_work_b")
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    _patch_ppe_script(
+        ppe,
+        "print(json.dumps(payload))\n",
+        (
+            "if excluded:\n"
+            "    payload['recommended_next_action']['work_item_id'] = excluded[0]\n"
+            "print(json.dumps(payload))\n"
+        ),
+        "excluded recommendation",
+    )
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(
+        BuildNextConfig(
+            ppe_repo=ppe,
+            feed_repo_url=str(feed),
+            checkout_root=tmp_path / "checkout",
+            allow_test_local_source_remote=True,
+            exclude_work_item_ids=("fixture_work",),
+        )
+    )
+
+    assert receipt.status == "BLOCKED"
+    assert "excluded work item" in receipt.message
+
+
+def test_refill_ids_are_96_chars_with_intact_16_hex_digest() -> None:
+    job_id = _job_id(
+        "ppe",
+        "options_horizon_comparison_v1_with_a_long_human_readable_name",
+        _fixture_native_slice("Options-HorizonComparison-Product-Slice002"),
+        "a25f26d06b067e39047f1d825203a96810ae4a8c",
+        refill_attempt=RefillAttemptContext(
+            generation_id="refill-generation-1",
+            attempt_ordinal=1,
+            selected_work_item_id="options_horizon_comparison_v1_with_a_long_human_readable_name",
+        ).evidence("options_horizon_comparison_v1_with_a_long_human_readable_name"),
+    )
+
+    digest = job_id.rsplit("-", 1)[-1]
+    assert len(job_id) <= 96
+    assert len(digest) == 16
+    assert re.fullmatch(r"[0-9a-f]{16}", digest)
+
+
+def test_refill_pipeline_generation_attempt_and_retry_affect_digest() -> None:
+    native_slice = _fixture_native_slice("Options-HorizonComparison-Product-Slice002")
+    source_commit = "a25f26d06b067e39047f1d825203a96810ae4a8c"
+    work_item_id = "options_horizon_comparison_v1"
+
+    base = _job_id(
+        "ppe",
+        work_item_id,
+        native_slice,
+        source_commit,
+        refill_attempt=RefillAttemptContext(
+            generation_id="refill-generation-1",
+            attempt_ordinal=1,
+            selected_work_item_id=work_item_id,
+        ).evidence(work_item_id),
+    )
+    pipeline = _job_id(
+        "other-pipeline",
+        work_item_id,
+        native_slice,
+        source_commit,
+        refill_attempt=RefillAttemptContext(
+            generation_id="refill-generation-1",
+            attempt_ordinal=1,
+            selected_work_item_id=work_item_id,
+        ).evidence(work_item_id),
+    )
+    generation = _job_id(
+        "ppe",
+        work_item_id,
+        native_slice,
+        source_commit,
+        refill_attempt=RefillAttemptContext(
+            generation_id="refill-generation-2",
+            attempt_ordinal=1,
+            selected_work_item_id=work_item_id,
+        ).evidence(work_item_id),
+    )
+    attempt = _job_id(
+        "ppe",
+        work_item_id,
+        native_slice,
+        source_commit,
+        refill_attempt=RefillAttemptContext(
+            generation_id="refill-generation-1",
+            attempt_ordinal=2,
+            selected_work_item_id=work_item_id,
+        ).evidence(work_item_id),
+    )
+    retry = _job_id(
+        "ppe",
+        work_item_id,
+        native_slice,
+        source_commit,
+        refill_attempt=RefillAttemptContext(
+            generation_id="refill-generation-1",
+            attempt_ordinal=1,
+            retry_ordinal=1,
+            selected_work_item_id=work_item_id,
+        ).evidence(work_item_id),
+    )
+
+    digests = {item.rsplit("-", 1)[-1] for item in [base, pipeline, generation, attempt, retry]}
+    assert len(digests) == 5
+
+
+def test_long_near_identical_refill_inputs_remain_distinct() -> None:
+    native_slice = _fixture_native_slice("Very-Long-Product-Slice-" + "A" * 80)
+    source_commit = "a25f26d06b067e39047f1d825203a96810ae4a8c"
+    first_work_item = "long-near-identical-work-item-" + "x" * 100 + "1"
+    second_work_item = "long-near-identical-work-item-" + "x" * 100 + "2"
+
+    first = _job_id(
+        "ppe",
+        first_work_item,
+        native_slice,
+        source_commit,
+        refill_attempt=RefillAttemptContext(
+            generation_id="refill-generation-1",
+            attempt_ordinal=1,
+            selected_work_item_id=first_work_item,
+        ).evidence(first_work_item),
+    )
+    second = _job_id(
+        "ppe",
+        second_work_item,
+        native_slice,
+        source_commit,
+        refill_attempt=RefillAttemptContext(
+            generation_id="refill-generation-1",
+            attempt_ordinal=1,
+            selected_work_item_id=second_work_item,
+        ).evidence(second_work_item),
+    )
+
+    assert first != second
+    assert len(first) <= 96
+    assert len(second) <= 96
+    assert first.rsplit("-", 1)[-1] != second.rsplit("-", 1)[-1]

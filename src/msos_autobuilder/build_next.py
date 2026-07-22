@@ -323,13 +323,23 @@ def _load_json(path: Path, label: str) -> dict[str, Any]:
     return data
 
 
+EXCLUSION_EFFECT = (
+    "exclusions remove matching READY candidates from recommendation eligibility only; "
+    "ready_work is unchanged"
+)
+
+
 def _safe_id(value: str, *, fallback: str = "item") -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip()).strip(".-")
-    return cleaned[:120] or fallback
+    return cleaned[:96] or fallback
 
 
 def _normalize_work_item_id(value: Any) -> str:
     return _safe_id(str(value or ""), fallback="work-item")
+
+
+def _normalize_excluded_work_item_ids(values: Sequence[Any]) -> list[str]:
+    return sorted({str(item).strip() for item in values if str(item).strip()})
 
 
 def _safe_relative(value: Any, label: str) -> str:
@@ -352,8 +362,8 @@ def _collect_snapshot(ppe_repo: Path, exclude_work_item_ids: Sequence[str] = ())
         str(ppe_repo),
         "--json",
     ]
-    for work_item_id in exclude_work_item_ids:
-        argv.extend(["--exclude-work-item-id", _normalize_work_item_id(work_item_id)])
+    for work_item_id in _normalize_excluded_work_item_ids(exclude_work_item_ids):
+        argv.extend(["--exclude-work-item-id", work_item_id])
     proc = _run(
         argv,
         cwd=ppe_repo,
@@ -371,14 +381,14 @@ def _validate_selection_context(
     snapshot: Mapping[str, Any],
     requested_exclusions: Sequence[str],
 ) -> None:
-    requested = sorted({_normalize_work_item_id(item) for item in requested_exclusions})
+    requested = _normalize_excluded_work_item_ids(requested_exclusions)
     if not requested:
         return
+    if "requested_exclusions" in snapshot:
+        raise BuildNextError("PPE selection_context uses legacy requested_exclusions")
     context = snapshot.get("selection_context")
     if not isinstance(context, dict):
         raise BuildNextError("PPE selection_context is missing for requested exclusions")
-    if context.get("scope") != "request":
-        raise BuildNextError("PPE selection_context scope must be request-scoped")
     if set(context) != {
         "scope",
         "excluded_work_item_ids",
@@ -387,15 +397,22 @@ def _validate_selection_context(
         "effect",
     }:
         raise BuildNextError("PPE selection_context has unexpected fields")
+    if context.get("scope") != "request":
+        raise BuildNextError("PPE selection_context scope must be request-scoped")
+    if context.get("effect") != EXCLUSION_EFFECT:
+        raise BuildNextError("PPE selection_context effect does not match the landed contract")
     for field in ("excluded_work_item_ids", "matched_exclusions", "unmatched_exclusions"):
         if not isinstance(context.get(field), list):
             raise BuildNextError(f"PPE selection_context {field} is malformed")
-    if not isinstance(context.get("effect"), str) or not context["effect"].strip():
-        raise BuildNextError("PPE selection_context effect is malformed")
+    if context["excluded_work_item_ids"] != requested:
+        raise BuildNextError("PPE selection_context excluded_work_item_ids did not match request")
     if not all(isinstance(item, str) for item in context["excluded_work_item_ids"]):
         raise BuildNextError("PPE selection_context excluded_work_item_ids is malformed")
-    if not all(isinstance(item, str) for item in context["unmatched_exclusions"]):
+    unmatched = context["unmatched_exclusions"]
+    if not all(isinstance(item, str) for item in unmatched):
         raise BuildNextError("PPE selection_context unmatched_exclusions is malformed")
+    if unmatched != sorted(unmatched) or len(unmatched) != len(set(unmatched)):
+        raise BuildNextError("PPE selection_context unmatched_exclusions is not canonical")
     matched_items = context["matched_exclusions"]
     if not all(
         isinstance(item, dict)
@@ -407,11 +424,30 @@ def _validate_selection_context(
         for item in matched_items
     ):
         raise BuildNextError("PPE selection_context matched_exclusions is malformed")
-    excluded = sorted({_normalize_work_item_id(item) for item in context["excluded_work_item_ids"]})
-    matched = sorted({_normalize_work_item_id(item["work_item_id"]) for item in matched_items})
-    unmatched = sorted({_normalize_work_item_id(item) for item in context["unmatched_exclusions"]})
-    if excluded != requested or sorted({*matched, *unmatched}) != requested:
-        raise BuildNextError("PPE selection_context did not match requested exclusions")
+    matched_pairs = [(item["pipeline_id"], item["work_item_id"]) for item in matched_items]
+    if matched_pairs != sorted(matched_pairs) or len(matched_pairs) != len(set(matched_pairs)):
+        raise BuildNextError("PPE selection_context matched_exclusions is not canonical")
+    requested_set = set(requested)
+    matched_ids = {work_item_id for _, work_item_id in matched_pairs}
+    unmatched_ids = set(unmatched)
+    if matched_ids & unmatched_ids:
+        raise BuildNextError("PPE selection_context matched and unmatched exclusions overlap")
+    if not matched_ids <= requested_set or not unmatched_ids <= requested_set:
+        raise BuildNextError("PPE selection_context includes unknown exclusions")
+    if matched_ids | unmatched_ids != requested_set:
+        raise BuildNextError("PPE selection_context did not account for every requested exclusion")
+    rec = snapshot.get("recommended_next_action")
+    if not isinstance(rec, dict):
+        raise BuildNextError("PPE recommended_next_action is missing for requested exclusions")
+    if "requested_exclusions" in rec:
+        raise BuildNextError("PPE recommended_next_action uses legacy requested_exclusions")
+    if rec.get("selection_context") != context:
+        raise BuildNextError(
+            "PPE recommended_next_action selection_context does not match top-level context"
+        )
+    rec_work_item_id = rec.get("work_item_id")
+    if isinstance(rec_work_item_id, str) and rec_work_item_id in requested_set:
+        raise BuildNextError("PPE recommended excluded work item despite request exclusions")
 
 
 def _normalize_github_repository(url: str) -> str | None:
@@ -796,7 +832,7 @@ def _evidence_identity(
         "selection_explanation": snapshot.get("recommended_next_action", {}).get(
             "selection_explanation"
         ),
-        "requested_exclusions": [_normalize_work_item_id(item) for item in requested_exclusions],
+        "requested_exclusions": _normalize_excluded_work_item_ids(requested_exclusions),
     }
     if refill_attempt is not None:
         stable["refill_attempt"] = dict(refill_attempt)
@@ -915,7 +951,7 @@ def _job_id(
         )
     return _safe_id(
         f"build-next-{pipeline_id}-{work_item_id}-{native_slice.slice_id}-{source_commit[:12]}"
-    )[:96]
+    )
 
 
 def _refill_job_id(
@@ -926,21 +962,24 @@ def _refill_job_id(
     refill_attempt: Mapping[str, Any],
 ) -> str:
     digest_payload = {
+        "pipeline_id": pipeline_id,
+        "work_item_id": work_item_id,
+        "selected_work_item_id": str(refill_attempt.get("selected_work_item_id") or ""),
+        "slice_id": native_slice.slice_id,
+        "source_commit": source_commit,
         "generation_id": str(refill_attempt.get("generation_id") or ""),
         "attempt_ordinal": refill_attempt.get("attempt_ordinal"),
         "retry_ordinal": refill_attempt.get("retry_ordinal"),
-        "selected_work_item_id": _normalize_work_item_id(work_item_id),
-        "slice_id": native_slice.slice_id,
-        "source_commit": source_commit,
     }
     digest = _sha256_text(json.dumps(digest_payload, sort_keys=True, separators=(",", ":")))[:16]
-    prefix = _safe_id(
-            f"build-next-{pipeline_id}-{work_item_id}-{native_slice.slice_id}-"
-            f"{source_commit[:12]}-g{str(refill_attempt.get('generation_id'))[:12]}-"
-            f"a{refill_attempt.get('attempt_ordinal')}-r{refill_attempt.get('retry_ordinal')}"
+    safe_prefix = _safe_id(
+        f"build-next-{pipeline_id}-{work_item_id}-{native_slice.slice_id}-"
+        f"{source_commit[:12]}-g{str(refill_attempt.get('generation_id'))[:12]}-"
+        f"a{refill_attempt.get('attempt_ordinal')}-r{refill_attempt.get('retry_ordinal')}"
     )
     suffix = f"-{digest}"
-    return f"{prefix[: 120 - len(suffix)].rstrip('-')}{suffix}"
+    prefix_budget = 96 - len(suffix)
+    return f"{safe_prefix[:prefix_budget].rstrip('-')}{suffix}"
 
 
 def _build_job(
@@ -1226,7 +1265,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
         )
         if (
             refill_attempt is not None
-            and refill_attempt["selected_work_item_id"] != _normalize_work_item_id(work_item_id)
+            and refill_attempt["selected_work_item_id"] != work_item_id
         ):
             raise BuildNextError("refill attempt selected work-item identity does not match PPE")
         registry = _load_json(

@@ -272,6 +272,18 @@ def _generation_history_path(config: RefillConfig, generation: Mapping[str, Any]
     return _host_paths(config).state / "refill-generation-history" / f"{safe}.json"
 
 
+def _load_generation_history(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RefillControllerError("refill generation history is not valid JSON") from exc
+    if not isinstance(raw, dict):
+        raise RefillControllerError("refill generation history must be a JSON object")
+    return raw
+
+
 def _generation_unresolved(generation: Mapping[str, Any]) -> str | None:
     if isinstance(generation.get("prepared_dispatch"), dict):
         return "prepared_dispatch"
@@ -305,7 +317,7 @@ def _archive_generation_for_replacement(
 ) -> None:
     history = _generation_history_path(config, generation)
     payload = dict(generation)
-    existing = _read_json_file(history)
+    existing = _load_generation_history(history)
     if existing is not None:
         if existing != payload:
             raise RefillControllerError(
@@ -429,20 +441,18 @@ def _keep_one_running_locked(config: RefillConfig) -> RefillPolicy:
         review_cap_per_repository=policy.review_cap_per_repository,
         last_decision_evidence=policy.last_decision_evidence,
     )
-    saved = save_refill_policy(config, updated)
     generation = load_refill_generation(config)
-    if generation is None:
-        save_refill_generation(config, _new_generation(saved, now=config.clock().isoformat()))
-        return saved
-    if not _generation_can_be_replaced(generation):
-        unresolved = _generation_unresolved(generation) or str(
-            generation.get("state") or "unknown"
-        )
-        raise RefillControllerError(
-            "cannot replace unresolved refill generation "
-            f"{generation.get('generation_id')!r}: {unresolved}"
-        )
-    _archive_generation_for_replacement(config, generation)
+    if generation is not None:
+        if not _generation_can_be_replaced(generation):
+            unresolved = _generation_unresolved(generation) or str(
+                generation.get("state") or "unknown"
+            )
+            raise RefillControllerError(
+                "cannot replace unresolved refill generation "
+                f"{generation.get('generation_id')!r}: {unresolved}"
+            )
+        _archive_generation_for_replacement(config, generation)
+    saved = save_refill_policy(config, updated)
     save_refill_generation(config, _new_generation(saved, now=config.clock().isoformat()))
     return saved
 
@@ -911,17 +921,75 @@ def _revision_lineage_entries(paths: HostPaths, source_job_id: str) -> list[dict
     if not isinstance(raw, dict):
         return entries
     for key, entry in raw.items():
+        key_source = str(key).rsplit("/", 1)[-1]
+        explicit_source = (
+            str(entry.get("source_job_id"))
+            if isinstance(entry, dict) and entry.get("source_job_id") is not None
+            else None
+        )
+        targeted = key_source == source_job_id or explicit_source == source_job_id
+        if not targeted:
+            continue
+        if not isinstance(entry, dict):
+            entries.append(
+                {
+                    "source_job_id": explicit_source or key_source,
+                    "revision_job_id": "",
+                    "_lineage_error": "targeted revision entry is not an object",
+                    "_ledger_key_source": key_source,
+                }
+            )
+            continue
+        normalized = dict(entry)
+        normalized["source_job_id"] = explicit_source or key_source
+        normalized["revision_job_id"] = str(entry.get("revision_job_id") or "")
+        normalized["_ledger_key_source"] = key_source
+        if explicit_source is not None and explicit_source != key_source:
+            normalized["_lineage_error"] = "revision source disagrees with ledger key"
+        entries.append(normalized)
+    return entries
+
+
+def _revision_descendants(paths: HostPaths, source_job_id: str) -> list[dict[str, Any]]:
+    raw = _read_json_file(paths.state / "revision-loop-seen.json") or {}
+    descendants: list[dict[str, Any]] = []
+    if not isinstance(raw, dict):
+        return descendants
+    for key, entry in raw.items():
         if not isinstance(entry, dict):
             continue
         key_source = str(key).rsplit("/", 1)[-1]
-        source = str(entry.get("source_job_id") or key_source)
-        revision_job_id = str(entry.get("revision_job_id") or "")
-        if source == source_job_id and revision_job_id:
+        explicit_source = str(entry.get("source_job_id") or key_source)
+        if explicit_source == source_job_id or key_source == source_job_id:
             normalized = dict(entry)
-            normalized["source_job_id"] = source
-            normalized["revision_job_id"] = revision_job_id
-            entries.append(normalized)
-    return entries
+            normalized["source_job_id"] = explicit_source
+            normalized["revision_job_id"] = str(entry.get("revision_job_id") or "")
+            descendants.append(normalized)
+    return descendants
+
+
+def _revision_lineage_error(entry: Mapping[str, Any], source_job_id: str) -> str | None:
+    if entry.get("_lineage_error"):
+        return str(entry["_lineage_error"])
+    if entry.get("source_job_id") != source_job_id:
+        return "revision source identity does not match source job"
+    revision_job_id = str(entry.get("revision_job_id") or "")
+    if not revision_job_id:
+        return "revision lineage lacks revision_job_id"
+    if revision_job_id == source_job_id:
+        return "revision lineage points source to itself"
+    gate_hash = str(entry.get("gate_report_sha256") or "")
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", gate_hash):
+        return "revision lineage gate_report_sha256 is malformed"
+    jobs_commit = str(entry.get("jobs_commit") or "")
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", jobs_commit):
+        return "revision lineage jobs_commit is malformed"
+    queued_at = entry.get("queued_at")
+    if not (isinstance(queued_at, str) and _has_trustworthy_offset(queued_at)):
+        return "revision lineage queued_at is not offset-aware"
+    if _parse_utc(queued_at) is None:
+        return "revision lineage queued_at is malformed"
+    return None
 
 
 def _revision_lineage_classification(
@@ -932,15 +1000,35 @@ def _revision_lineage_classification(
     entries = _revision_lineage_entries(paths, source_job_id)
     if not entries:
         return None
+    errors = [
+        error
+        for entry in entries
+        if (error := _revision_lineage_error(entry, source_job_id))
+    ]
     revision_ids = {str(entry.get("revision_job_id") or "") for entry in entries}
-    if source_job_id in revision_ids or len(revision_ids) != 1 or len(entries) != 1:
+    if errors or source_job_id in revision_ids or len(revision_ids) != 1 or len(entries) != 1:
         return {
             "category": "unknown",
             "stage": "revision_lineage",
-            "evidence": {"error": "malformed or conflicting revision lineage", "entries": entries},
+            "evidence": {
+                "error": "malformed or conflicting revision lineage",
+                "errors": errors,
+                "entries": entries,
+            },
         }
     entry = entries[0]
     revision_job_id = str(entry["revision_job_id"])
+    descendant_entries = _revision_descendants(paths, revision_job_id)
+    if descendant_entries:
+        return {
+            "category": "unknown",
+            "stage": "revision_lineage",
+            "evidence": {
+                "error": "revision descendant has its own revision lineage",
+                "entries": entries,
+                "descendants": descendant_entries,
+            },
+        }
     lineage = {
         "source_job_id": source_job_id,
         "revision_job_id": revision_job_id,
@@ -1261,6 +1349,7 @@ def _prepare_dispatch(
     reason: str,
     selected_work_item_id: str | None,
     pinned_commit: str | None,
+    consume_provider_retry: bool = False,
 ) -> tuple[dict[str, Any], BuildNextReceipt]:
     dry_config = replace(
         config.build_next,
@@ -1295,6 +1384,8 @@ def _prepare_dispatch(
     }
     generation["prepared_dispatch"] = prepared
     generation["state"] = "DISPATCHING"
+    if consume_provider_retry:
+        generation["provider_retry_consumed"] = True
     if receipt.evidence.get("source"):
         generation["source_ppe_identity"] = receipt.evidence["source"]
     save_refill_generation(config, generation)
@@ -1343,6 +1434,8 @@ def _recover_or_replay_prepared_dispatch(
     config: RefillConfig,
     paths: HostPaths,
     generation: dict[str, Any],
+    *,
+    allow_replay: bool,
 ) -> BuildNextReceipt | dict[str, Any] | None:
     prepared = generation.get("prepared_dispatch")
     if not isinstance(prepared, dict):
@@ -1362,6 +1455,8 @@ def _recover_or_replay_prepared_dispatch(
             ),
         )[0]
         _commit_prepared_attempt(config, generation, candidate)
+        return None
+    if not allow_replay:
         return None
     receipt = _submit_prepared_dispatch(config, generation, prepared)
     if receipt.status == "QUEUED" and generation.get("state") != "BLOCKED":
@@ -1694,7 +1789,9 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
             evidence={"reason": "runtime_health", "health": snapshot.health},
         )
     if generation is not None and isinstance(generation.get("prepared_dispatch"), dict):
-        prepared_result = _recover_or_replay_prepared_dispatch(config, paths, generation)
+        prepared_result = _recover_or_replay_prepared_dispatch(
+            config, paths, generation, allow_replay=False
+        )
         if isinstance(prepared_result, dict):
             return _report(
                 config=config,
@@ -1825,6 +1922,47 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
             awaiting_review=awaiting_review,
             evidence={"reason": "missing_generation", "health": snapshot.health},
         )
+    if isinstance(generation.get("prepared_dispatch"), dict):
+        prepared_result = _recover_or_replay_prepared_dispatch(
+            config, paths, generation, allow_replay=True
+        )
+        if isinstance(prepared_result, dict):
+            return _report(
+                config=config,
+                policy=policy,
+                status="BLOCKED",
+                message="Prepared refill dispatch has conflicting side-effect evidence.",
+                active_running=active_running,
+                active_queued=active_queued,
+                feed_awaiting_import=feed_awaiting_import,
+                awaiting_review=awaiting_review,
+                evidence={
+                    "reason": prepared_result.get("reason", "prepared_dispatch_conflict"),
+                    "generation": generation,
+                    "health": snapshot.health,
+                },
+            )
+        if isinstance(prepared_result, BuildNextReceipt):
+            if prepared_result.status == "QUEUED":
+                feed_awaiting_import = max(feed_awaiting_import, 1)
+            return _report(
+                config=config,
+                policy=policy,
+                status=prepared_result.status,
+                message=prepared_result.message,
+                active_running=active_running,
+                active_queued=active_queued,
+                feed_awaiting_import=feed_awaiting_import,
+                awaiting_review=awaiting_review,
+                evidence={
+                    "reason": "prepared_dispatch_reconciled",
+                    "build_next": asdict(prepared_result),
+                    "generation": generation,
+                    "health": snapshot.health,
+                },
+                receipt=prepared_result,
+            )
+
     current = generation.get("current_attempt")
     retry_same_item: str | None = None
     retry_reason = "initial"
@@ -1889,12 +2027,9 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
                 and now >= retry_at
                 and generation.get("provider_retry_consumed") is not True
             ):
-                generation["provider_retry_consumed"] = True
-                generation["state"] = "RETRYING"
                 retry_same_item = str(current.get("work_item_id") or "")
                 retry_reason = "provider_retry"
                 retry_ordinal = 1
-                save_refill_generation(config, generation)
             else:
                 generation["state"] = "BACKPRESSURE"
                 save_refill_generation(config, generation)
@@ -1959,6 +2094,7 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
         reason=retry_reason,
         selected_work_item_id=retry_same_item,
         pinned_commit=pinned_commit,
+        consume_provider_retry=retry_reason == "provider_retry",
     )
     if not prepared:
         receipt = dry_receipt

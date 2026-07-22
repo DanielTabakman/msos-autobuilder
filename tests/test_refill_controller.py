@@ -1324,6 +1324,26 @@ def _feed_job_path(config: RefillConfig, job_id: str) -> Path:
     return config.build_next.checkout_root / config.build_next.jobs_path / f"{job_id}.yaml"
 
 
+def _policy_file(config: RefillConfig) -> Path:
+    assert config.build_next.host_root is not None
+    return config.build_next.host_root / "state" / "refill-policy.json"
+
+
+def _generation_file(config: RefillConfig) -> Path:
+    assert config.build_next.host_root is not None
+    return config.build_next.host_root / "state" / "refill-generation.json"
+
+
+def _generation_history_file(config: RefillConfig, generation: dict[str, object]) -> Path:
+    assert config.build_next.host_root is not None
+    return (
+        config.build_next.host_root
+        / "state"
+        / "refill-generation-history"
+        / f"{generation['generation_id']}.json"
+    )
+
+
 def _clear_generation_attempt_ledger(config: RefillConfig) -> dict[str, object]:
     generation = load_refill_generation(config)
     assert generation is not None
@@ -2085,3 +2105,369 @@ def test_persistent_feed_copy_does_not_prevent_terminal_a_advancing_to_b(tmp_pat
     assert report.build_next_receipt.work_item_id == B_WORK_ITEM
     assert generation is not None
     assert generation["item_scoped_terminal_exclusions"] == [A_WORK_ITEM]
+
+
+def test_failed_keep_one_leaves_paused_policy_and_generation_bytes_unchanged(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    keep_one_running(config)
+    pause_builds(config)
+    policy_before = _policy_file(config).read_bytes()
+    generation_before = _generation_file(config).read_bytes()
+
+    with pytest.raises(RefillControllerError, match="unresolved refill generation"):
+        keep_one_running(config)
+
+    assert _policy_file(config).read_bytes() == policy_before
+    assert _generation_file(config).read_bytes() == generation_before
+    assert load_refill_policy(config).enabled is False
+
+
+def test_conflicting_history_leaves_policy_generation_and_history_bytes_unchanged(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    keep_one_running(config)
+    generation = load_refill_generation(config)
+    assert generation is not None
+    generation["state"] = "UNFILLED"
+    save_refill_generation(config, generation)
+    save_refill_policy(config, RefillPolicy(enabled=False, desired_capacity=0))
+    history = _generation_history_file(config, generation)
+    history.parent.mkdir(parents=True, exist_ok=True)
+    history.write_text(json.dumps({"conflict": True}) + "\n", encoding="utf-8")
+    policy_before = _policy_file(config).read_bytes()
+    generation_before = _generation_file(config).read_bytes()
+    history_before = history.read_bytes()
+
+    with pytest.raises(RefillControllerError, match="history conflicts"):
+        keep_one_running(config)
+
+    assert _policy_file(config).read_bytes() == policy_before
+    assert _generation_file(config).read_bytes() == generation_before
+    assert history.read_bytes() == history_before
+
+
+@pytest.mark.parametrize("history_text", ["{not-json", "[]"])
+def test_malformed_history_blocks_without_overwriting_existing_bytes(
+    tmp_path: Path, history_text: str
+) -> None:
+    config = _refill_config(tmp_path)
+    keep_one_running(config)
+    generation = load_refill_generation(config)
+    assert generation is not None
+    generation["state"] = "UNFILLED"
+    save_refill_generation(config, generation)
+    save_refill_policy(config, RefillPolicy(enabled=False, desired_capacity=0))
+    history = _generation_history_file(config, generation)
+    history.parent.mkdir(parents=True, exist_ok=True)
+    history.write_text(history_text, encoding="utf-8")
+    policy_before = _policy_file(config).read_bytes()
+    generation_before = _generation_file(config).read_bytes()
+    history_before = history.read_bytes()
+
+    with pytest.raises(RefillControllerError, match="history"):
+        keep_one_running(config)
+
+    assert _policy_file(config).read_bytes() == policy_before
+    assert _generation_file(config).read_bytes() == generation_before
+    assert history.read_bytes() == history_before
+
+
+def _provider_retry_ready_config(tmp_path: Path) -> tuple[RefillConfig, str]:
+    config = RefillConfig(
+        build_next=_refill_config(tmp_path).build_next,
+        clock=lambda: datetime(2026, 7, 25, 15, 4, tzinfo=UTC),
+    )
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _archive_attempt(
+        config,
+        job_id,
+        failed=True,
+        error={
+            "provider_failure": {
+                "version": 1,
+                "scope": "provider",
+                "temporary": True,
+                "retryable": True,
+                "retry_at": "2026-07-25T15:04:00Z",
+            }
+        },
+    )
+    return config, job_id
+
+
+def test_crash_during_retry_dry_prepare_leaves_retry_unconsumed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, _job_id = _provider_retry_ready_config(tmp_path)
+    real_build_next = refill_controller.build_next
+
+    def crash_retry_dry(build_config: object) -> object:
+        attempt = getattr(build_config, "refill_attempt", None)
+        if (
+            getattr(build_config, "submit", True) is False
+            and getattr(attempt, "reason", "") == "provider_retry"
+        ):
+            raise RuntimeError("dry retry crash")
+        return real_build_next(build_config)
+
+    monkeypatch.setattr(refill_controller, "build_next", crash_retry_dry)
+    generation_before = load_refill_generation(config)
+    with pytest.raises(RuntimeError, match="dry retry crash"):
+        reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert generation == generation_before
+    assert generation is not None
+    assert generation["provider_retry_consumed"] is False
+    assert "prepared_dispatch" not in generation
+
+    monkeypatch.setattr(refill_controller, "build_next", real_build_next)
+    report = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert report.status == "QUEUED"
+    assert generation is not None
+    assert generation["provider_retry_consumed"] is True
+    assert len(generation["attempt_sequence"]) == 2
+
+
+def test_crash_after_prepared_retry_before_feed_recovers_same_retry_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, _job_id = _provider_retry_ready_config(tmp_path)
+    real_build_next = refill_controller.build_next
+
+    def crash_retry_submit(build_config: object) -> object:
+        attempt = getattr(build_config, "refill_attempt", None)
+        if (
+            getattr(build_config, "submit", True)
+            and getattr(attempt, "reason", "") == "provider_retry"
+        ):
+            raise RuntimeError("retry feed crash")
+        return real_build_next(build_config)
+
+    monkeypatch.setattr(refill_controller, "build_next", crash_retry_submit)
+    with pytest.raises(RuntimeError, match="retry feed crash"):
+        reconcile_refill(config)
+    prepared = load_refill_generation(config)["prepared_dispatch"]
+
+    monkeypatch.setattr(refill_controller, "build_next", real_build_next)
+    first = reconcile_refill(config)
+    second = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert first.status == "QUEUED"
+    assert second.status == "QUEUED"
+    assert generation is not None
+    assert generation["provider_retry_consumed"] is True
+    assert generation["current_attempt"]["job_id"] == prepared["job_id"]
+    retry_jobs = [
+        item["job_id"]
+        for item in generation["attempt_sequence"]
+        if item["retry_ordinal"] == 1
+    ]
+    assert retry_jobs == [prepared["job_id"]]
+
+
+@pytest.mark.parametrize("occupancy", ["pending", "running"])
+def test_prepared_replay_waits_for_unrelated_capacity_then_submits_same_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, occupancy: str
+) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    keep_one_running(config)
+    real_build_next = refill_controller.build_next
+
+    def crash_after_prepare(build_config: object) -> object:
+        if getattr(build_config, "submit", True):
+            raise RuntimeError("before feed")
+        return real_build_next(build_config)
+
+    monkeypatch.setattr(refill_controller, "build_next", crash_after_prepare)
+    with pytest.raises(RuntimeError, match="before feed"):
+        reconcile_refill(config)
+    prepared = load_refill_generation(config)["prepared_dispatch"]
+    queue_dir = config.build_next.host_root / "queue" / occupancy
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    unrelated = queue_dir / "unrelated.yaml"
+    unrelated.write_text("version: 1\n", encoding="utf-8")
+
+    monkeypatch.setattr(refill_controller, "build_next", real_build_next)
+    blocked = reconcile_refill(config)
+    generation = load_refill_generation(config)
+    unrelated.unlink()
+    replayed = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert blocked.status == ("RUNNING" if occupancy == "running" else "QUEUED")
+    assert blocked.build_next_receipt is None
+    assert generation is not None
+    assert replayed.status == "QUEUED"
+    assert replayed.build_next_receipt is not None
+    assert replayed.build_next_receipt.job_id == prepared["job_id"]
+    assert generation["current_attempt"]["job_id"] == prepared["job_id"]
+
+
+def _seed_failed_source_with_revision_ledger(
+    tmp_path: Path, ledger: dict[str, object]
+) -> tuple[RefillConfig, dict[str, object]]:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
+    config = _refill_config(tmp_path, ppe=ppe, feed=_feed_repo(tmp_path / "feed-work"))
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _archive_job_yaml_from_feed(config, job_id)
+    _write_gate_report(config, job_id, status="failed", state="candidate_failed")
+    _write_state_json(config, "revision-loop-seen.json", ledger)
+    return config, {"job_id": job_id}
+
+
+@pytest.mark.parametrize(
+    "case_name,ledger_factory",
+    [
+        (
+            "missing_revision_job_id",
+            lambda job_id: {
+                f"test-host/{job_id}": {
+                    "source_job_id": job_id,
+                    "gate_report_sha256": "1" * 64,
+                    "jobs_commit": "2" * 40,
+                    "queued_at": "2026-07-20T00:00:00Z",
+                }
+            },
+        ),
+        (
+            "missing_gate_hash",
+            lambda job_id: {
+                f"test-host/{job_id}": {
+                    "source_job_id": job_id,
+                    "revision_job_id": "revision-a",
+                    "jobs_commit": "2" * 40,
+                    "queued_at": "2026-07-20T00:00:00Z",
+                }
+            },
+        ),
+        (
+            "invalid_jobs_commit",
+            lambda job_id: {
+                f"test-host/{job_id}": {
+                    "source_job_id": job_id,
+                    "revision_job_id": "revision-a",
+                    "gate_report_sha256": "1" * 64,
+                    "jobs_commit": "not-a-commit",
+                    "queued_at": "2026-07-20T00:00:00Z",
+                }
+            },
+        ),
+        (
+            "timezone_free_queued_at",
+            lambda job_id: {
+                f"test-host/{job_id}": {
+                    "source_job_id": job_id,
+                    "revision_job_id": "revision-a",
+                    "gate_report_sha256": "1" * 64,
+                    "jobs_commit": "2" * 40,
+                    "queued_at": "2026-07-20T00:00:00",
+                }
+            },
+        ),
+        (
+            "key_source_disagreement",
+            lambda job_id: {
+                f"test-host/{job_id}": {
+                    "source_job_id": "other-source",
+                    "revision_job_id": "revision-a",
+                    "gate_report_sha256": "1" * 64,
+                    "jobs_commit": "2" * 40,
+                    "queued_at": "2026-07-20T00:00:00Z",
+                }
+            },
+        ),
+        (
+            "source_points_to_self",
+            lambda job_id: {
+                f"test-host/{job_id}": {
+                    "source_job_id": job_id,
+                    "revision_job_id": job_id,
+                    "gate_report_sha256": "1" * 64,
+                    "jobs_commit": "2" * 40,
+                    "queued_at": "2026-07-20T00:00:00Z",
+                }
+            },
+        ),
+        (
+            "cycle_a_r_a",
+            lambda job_id: {
+                f"test-host/{job_id}": {
+                    "source_job_id": job_id,
+                    "revision_job_id": "revision-a",
+                    "gate_report_sha256": "1" * 64,
+                    "jobs_commit": "2" * 40,
+                    "queued_at": "2026-07-20T00:00:00Z",
+                },
+                "test-host/revision-a": {
+                    "source_job_id": "revision-a",
+                    "revision_job_id": job_id,
+                    "gate_report_sha256": "3" * 64,
+                    "jobs_commit": "4" * 40,
+                    "queued_at": "2026-07-20T00:01:00Z",
+                },
+            },
+        ),
+        (
+            "descendant_revision",
+            lambda job_id: {
+                f"test-host/{job_id}": {
+                    "source_job_id": job_id,
+                    "revision_job_id": "revision-a",
+                    "gate_report_sha256": "1" * 64,
+                    "jobs_commit": "2" * 40,
+                    "queued_at": "2026-07-20T00:00:00Z",
+                },
+                "test-host/revision-a": {
+                    "source_job_id": "revision-a",
+                    "revision_job_id": "revision-b",
+                    "gate_report_sha256": "3" * 64,
+                    "jobs_commit": "4" * 40,
+                    "queued_at": "2026-07-20T00:01:00Z",
+                },
+            },
+        ),
+        (
+            "multiple_direct_descendants",
+            lambda job_id: {
+                f"test-host/{job_id}": {
+                    "source_job_id": job_id,
+                    "revision_job_id": "revision-a",
+                    "gate_report_sha256": "1" * 64,
+                    "jobs_commit": "2" * 40,
+                    "queued_at": "2026-07-20T00:00:00Z",
+                },
+                f"other/{job_id}": {
+                    "source_job_id": job_id,
+                    "revision_job_id": "revision-b",
+                    "gate_report_sha256": "3" * 64,
+                    "jobs_commit": "4" * 40,
+                    "queued_at": "2026-07-20T00:01:00Z",
+                },
+            },
+        ),
+    ],
+)
+def test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b(
+    tmp_path: Path, case_name: str, ledger_factory: object
+) -> None:
+    config, info = _seed_failed_source_with_revision_ledger(tmp_path / case_name, {})
+    job_id = info["job_id"]
+    _write_state_json(config, "revision-loop-seen.json", ledger_factory(job_id))
+
+    report = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert report.status == "BLOCKED"
+    assert report.build_next_receipt is None
+    assert generation is not None
+    assert generation["item_scoped_terminal_exclusions"] == []

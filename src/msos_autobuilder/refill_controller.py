@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import secrets
 import tempfile
 import time
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -19,7 +21,9 @@ import yaml
 from .build_next import (
     BuildNextConfig,
     BuildNextReceipt,
+    RefillAttemptContext,
     _prepare_feed_checkout,
+    _source_identity,
     build_next,
 )
 from .persistent_host import HostPaths, HostProcessLock, parse_host_job
@@ -70,6 +74,12 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
         os.fsync(handle.fileno())
         temporary = Path(handle.name)
     os.replace(temporary, path)
+
+
+def _sha256_file(path: Path) -> str | None:
+    if not path.exists() or not path.is_file():
+        return None
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 class ReconcileFileLock(AbstractContextManager["ReconcileFileLock"]):
@@ -196,6 +206,7 @@ class RefillConfig:
     policy_path: Path | None = None
     max_host_heartbeat_age_seconds: int = 300
     supervisor_root: Path | None = None
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 
     @classmethod
     def from_service_config(
@@ -249,6 +260,127 @@ class CapacitySnapshot:
     feed_awaiting_import: int
     awaiting_review: dict[str, int]
     health: dict[str, Any]
+
+
+def _generation_path(config: RefillConfig) -> Path:
+    return _host_paths(config).state / "refill-generation.json"
+
+
+def _generation_history_path(config: RefillConfig, generation: Mapping[str, Any]) -> Path:
+    generation_id = str(generation.get("generation_id") or "unknown").strip() or "unknown"
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", generation_id).strip(".-") or "unknown"
+    return _host_paths(config).state / "refill-generation-history" / f"{safe}.json"
+
+
+def _load_generation_history(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RefillControllerError("refill generation history is not valid JSON") from exc
+    if not isinstance(raw, dict):
+        raise RefillControllerError("refill generation history must be a JSON object")
+    return raw
+
+
+def _generation_unresolved(generation: Mapping[str, Any]) -> str | None:
+    if isinstance(generation.get("prepared_dispatch"), dict):
+        return "prepared_dispatch"
+    if isinstance(generation.get("current_attempt"), dict):
+        return "current_attempt"
+    if generation.get("state") in {
+        "READY",
+        "DISPATCHING",
+        "QUEUED",
+        "OCCUPIED",
+        "RECOVERED",
+        "RETRYING",
+        "BACKPRESSURE",
+        "BLOCKED",
+        "PAUSED",
+    }:
+        return str(generation.get("state"))
+    return None
+
+
+def _generation_can_be_replaced(generation: Mapping[str, Any]) -> bool:
+    return (
+        generation.get("state") == "UNFILLED"
+        and not isinstance(generation.get("current_attempt"), dict)
+        and not isinstance(generation.get("prepared_dispatch"), dict)
+    )
+
+
+def _archive_generation_for_replacement(
+    config: RefillConfig, generation: Mapping[str, Any]
+) -> None:
+    history = _generation_history_path(config, generation)
+    payload = dict(generation)
+    existing = _load_generation_history(history)
+    if existing is not None:
+        if existing != payload:
+            raise RefillControllerError(
+                "refill generation history conflicts with active generation"
+            )
+        return
+    _atomic_write_json(history, payload)
+
+
+def _new_generation(policy: RefillPolicy, *, now: str) -> dict[str, Any]:
+    generation_id = f"refill-{secrets.token_hex(12)}"
+    return {
+        "version": 1,
+        "generation_id": generation_id,
+        "created_at": now,
+        "founder_intent": "refill-keep-one",
+        "desired_capacity": policy.desired_capacity,
+        "source_ppe_identity": None,
+        "attempt_sequence": [],
+        "current_attempt": None,
+        "attempted_work_item_ids": [],
+        "item_scoped_terminal_exclusions": [],
+        "provider_failure": None,
+        "trustworthy_retry_at": None,
+        "provider_retry_consumed": False,
+        "state": "READY",
+    }
+
+
+def load_refill_generation(config: RefillConfig) -> dict[str, Any] | None:
+    path = _generation_path(config)
+    if not path.exists():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RefillControllerError(f"refill generation is not valid JSON: {path}") from exc
+    if not isinstance(raw, dict) or raw.get("version") != 1:
+        raise RefillControllerError("refill generation must be a version 1 JSON object")
+    return raw
+
+
+def save_refill_generation(config: RefillConfig, generation: Mapping[str, Any]) -> dict[str, Any]:
+    payload = dict(generation)
+    _atomic_write_json(_generation_path(config), payload)
+    return payload
+
+
+def _attempt_context(
+    generation: Mapping[str, Any],
+    *,
+    attempt_ordinal: int,
+    retry_ordinal: int,
+    reason: str,
+    selected_work_item_id: str | None = None,
+) -> RefillAttemptContext:
+    return RefillAttemptContext(
+        generation_id=str(generation["generation_id"]),
+        attempt_ordinal=attempt_ordinal,
+        retry_ordinal=retry_ordinal,
+        reason=reason,
+        selected_work_item_id=selected_work_item_id,
+    )
 
 
 def _policy_path(config: RefillConfig) -> Path:
@@ -309,7 +441,20 @@ def _keep_one_running_locked(config: RefillConfig) -> RefillPolicy:
         review_cap_per_repository=policy.review_cap_per_repository,
         last_decision_evidence=policy.last_decision_evidence,
     )
-    return save_refill_policy(config, updated)
+    generation = load_refill_generation(config)
+    if generation is not None:
+        if not _generation_can_be_replaced(generation):
+            unresolved = _generation_unresolved(generation) or str(
+                generation.get("state") or "unknown"
+            )
+            raise RefillControllerError(
+                "cannot replace unresolved refill generation "
+                f"{generation.get('generation_id')!r}: {unresolved}"
+            )
+        _archive_generation_for_replacement(config, generation)
+    saved = save_refill_policy(config, updated)
+    save_refill_generation(config, _new_generation(saved, now=config.clock().isoformat()))
+    return saved
 
 
 def pause_builds(config: RefillConfig) -> RefillPolicy:
@@ -331,7 +476,13 @@ def _pause_builds_locked(config: RefillConfig) -> RefillPolicy:
         review_cap_per_repository=policy.review_cap_per_repository,
         last_decision_evidence=policy.last_decision_evidence,
     )
-    return save_refill_policy(config, updated)
+    saved = save_refill_policy(config, updated)
+    generation = load_refill_generation(config)
+    if generation is not None:
+        generation["state"] = "PAUSED"
+        generation["desired_capacity"] = 0
+        save_refill_generation(config, generation)
+    return saved
 
 
 def resume_builds(config: RefillConfig) -> RefillPolicy:
@@ -358,7 +509,13 @@ def _resume_builds_locked(config: RefillConfig) -> RefillPolicy:
         review_cap_per_repository=policy.review_cap_per_repository,
         last_decision_evidence=policy.last_decision_evidence,
     )
-    return save_refill_policy(config, updated)
+    saved = save_refill_policy(config, updated)
+    generation = load_refill_generation(config)
+    if generation is not None:
+        generation["state"] = "READY"
+        generation["desired_capacity"] = capacity
+        save_refill_generation(config, generation)
+    return saved
 
 
 def keep_one_running_and_reconcile(config: RefillConfig) -> RefillReport:
@@ -505,6 +662,911 @@ def _awaiting_review_counts(paths: HostPaths) -> dict[str, int]:
         repository = _gate_report_repository(job, raw) or "unknown"
         counts[repository] = counts.get(repository, 0) + 1
     return counts
+
+
+def _read_json_file(path: Path) -> dict[str, Any] | None:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def _attempt_archive(paths: HostPaths, job_id: str) -> tuple[str | None, Path | None]:
+    if (paths.completed / job_id).is_dir():
+        return "completed", paths.completed / job_id
+    if (paths.failed / job_id).is_dir():
+        return "failed", paths.failed / job_id
+    return None, None
+
+
+def _job_in_active_queue(paths: HostPaths, job_id: str) -> bool:
+    if (paths.running / f"{job_id}.yaml").exists() or (paths.pending / f"{job_id}.yaml").exists():
+        return True
+    return False
+
+
+def _job_in_feed(config: RefillConfig, job_id: str) -> bool:
+    if not config.build_next.submit:
+        return False
+    checkout = config.build_next.checkout_root or (
+        Path(tempfile.gettempdir()) / "msos-autobuilder-build-next-feed"
+    )
+    feed_job = checkout.expanduser().resolve() / config.build_next.jobs_path / f"{job_id}.yaml"
+    return feed_job.exists()
+
+
+def _read_job_yaml(path: Path) -> dict[str, Any] | None:
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def _job_yaml_sources(
+    config: RefillConfig,
+    paths: HostPaths,
+) -> list[tuple[str, Path, dict[str, Any]]]:
+    sources: list[tuple[str, Path, dict[str, Any]]] = []
+    if config.build_next.submit:
+        checkout = config.build_next.checkout_root or (
+            Path(tempfile.gettempdir()) / "msos-autobuilder-build-next-feed"
+        )
+        feed_root = checkout.expanduser().resolve() / config.build_next.jobs_path
+        if feed_root.exists():
+            for path in sorted(feed_root.glob("*.yaml")):
+                payload = _read_job_yaml(path)
+                if payload is not None:
+                    sources.append(("feed", path, payload))
+    for stage, root in (("pending", paths.pending), ("running", paths.running)):
+        for path in sorted(root.glob("*.yaml")):
+            payload = _read_job_yaml(path)
+            if payload is not None:
+                sources.append((stage, path, payload))
+    for stage, root in (("completed", paths.completed), ("failed", paths.failed)):
+        if not root.exists():
+            continue
+        for archive in sorted(path for path in root.iterdir() if path.is_dir()):
+            path = archive / "job.yaml"
+            payload = _read_job_yaml(path)
+            if payload is not None:
+                sources.append((stage, path, payload))
+    return sources
+
+
+def _extract_refill_attempt_candidate(
+    generation: Mapping[str, Any],
+    *,
+    stage: str,
+    path: Path,
+    job: Mapping[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    job_id = str(job.get("job_id") or "").strip()
+    founder = job.get("founder_build_next")
+    if not job_id or not isinstance(founder, dict):
+        return None, None
+    attempt = founder.get("refill_attempt")
+    if not isinstance(attempt, dict):
+        return None, None
+    if attempt.get("generation_id") != generation.get("generation_id"):
+        return None, None
+    candidate_validation = job.get("candidate_validation")
+    if isinstance(candidate_validation, dict) and candidate_validation.get("job_id") != job_id:
+        return None, "candidate validation job_id disagrees with job_id"
+    evidence = founder.get("portfolio_selection_evidence")
+    if isinstance(evidence, dict) and isinstance(evidence.get("refill_attempt"), dict):
+        if dict(evidence["refill_attempt"]) != dict(attempt):
+            return None, "portfolio selection refill_attempt disagrees"
+    attempt_ordinal = attempt.get("attempt_ordinal")
+    retry_ordinal = attempt.get("retry_ordinal", 0)
+    if not isinstance(attempt_ordinal, int) or isinstance(attempt_ordinal, bool):
+        return None, "refill attempt ordinal is malformed"
+    if attempt_ordinal < 1:
+        return None, "refill attempt ordinal must be positive"
+    if not isinstance(retry_ordinal, int) or isinstance(retry_ordinal, bool) or retry_ordinal < 0:
+        return None, "refill retry ordinal is malformed"
+    work_item_id = str(founder.get("work_item_id") or "").strip()
+    selected_work_item_id = str(attempt.get("selected_work_item_id") or "").strip()
+    if not work_item_id or selected_work_item_id != work_item_id:
+        return None, "refill selected work item disagrees with job evidence"
+    pipeline_id = str(founder.get("pipeline_id") or "").strip()
+    if not pipeline_id:
+        return None, "refill attempt lacks pipeline identity"
+    source = founder.get("source")
+    source_commit = source.get("commit") if isinstance(source, dict) else None
+    if not isinstance(source_commit, str) or not source_commit:
+        return None, "refill attempt lacks source commit evidence"
+    return {
+        "attempt_ordinal": attempt_ordinal,
+        "retry_ordinal": retry_ordinal,
+        "reason": str(attempt.get("reason") or "initial"),
+        "job_id": job_id,
+        "work_item_id": work_item_id,
+        "pipeline_id": pipeline_id,
+        "source_commit": source_commit,
+        "feed_path": str(path) if stage == "feed" else None,
+        "feed_commit": None,
+        "created_at": _utc_now(),
+        "recovered_from": {"stage": stage, "path": str(path)},
+    }, None
+
+
+def _recover_unrecorded_generation_attempt(
+    config: RefillConfig,
+    paths: HostPaths,
+    generation: dict[str, Any],
+) -> dict[str, Any] | None:
+    recorded = {
+        str(item.get("job_id") or "")
+        for item in generation.get("attempt_sequence") or []
+        if isinstance(item, dict)
+    }
+    candidates: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for stage, path, job in _job_yaml_sources(config, paths):
+        candidate, error = _extract_refill_attempt_candidate(
+            generation,
+            stage=stage,
+            path=path,
+            job=job,
+        )
+        if error is not None:
+            errors.append({"path": str(path), "stage": stage, "error": error})
+        if candidate is None:
+            continue
+        if candidate["job_id"] in recorded:
+            continue
+        candidates.append(candidate)
+    if errors:
+        generation["state"] = "BLOCKED"
+        generation["recovery_error"] = {
+            "reason": "invalid_refill_attempt_evidence",
+            "errors": errors,
+        }
+        save_refill_generation(config, generation)
+        return generation["recovery_error"]
+    def candidate_key(candidate: Mapping[str, Any]) -> str:
+        return json.dumps(
+            {
+                "attempt_ordinal": candidate.get("attempt_ordinal"),
+                "retry_ordinal": candidate.get("retry_ordinal"),
+                "reason": candidate.get("reason"),
+                "job_id": candidate.get("job_id"),
+                "work_item_id": candidate.get("work_item_id"),
+                "pipeline_id": candidate.get("pipeline_id"),
+                "source_commit": candidate.get("source_commit"),
+            },
+            sort_keys=True,
+        )
+
+    unique = {candidate_key(candidate) for candidate in candidates}
+    if len(unique) > 1:
+        generation["state"] = "BLOCKED"
+        generation["recovery_error"] = {
+            "reason": "ambiguous_refill_attempt_recovery",
+            "candidates": candidates,
+        }
+        save_refill_generation(config, generation)
+        return generation["recovery_error"]
+    if not candidates:
+        return None
+    candidate = sorted(
+        candidates,
+        key=lambda item: {
+            "running": 0,
+            "pending": 1,
+            "failed": 2,
+            "completed": 3,
+            "feed": 4,
+        }.get(str(item.get("recovered_from", {}).get("stage")), 5),
+    )[0]
+    expected_ordinal = len(generation.get("attempt_sequence") or []) + 1
+    if candidate["attempt_ordinal"] != expected_ordinal:
+        generation["state"] = "BLOCKED"
+        generation["recovery_error"] = {
+            "reason": "refill_attempt_ordinal_conflict",
+            "expected_attempt_ordinal": expected_ordinal,
+            "candidate": candidate,
+        }
+        save_refill_generation(config, generation)
+        return generation["recovery_error"]
+    generation.setdefault("attempt_sequence", []).append(candidate)
+    generation["current_attempt"] = candidate
+    ids = list(generation.get("attempted_work_item_ids") or [])
+    if candidate["work_item_id"] not in ids:
+        ids.append(candidate["work_item_id"])
+    generation["attempted_work_item_ids"] = ids
+    generation["state"] = "RECOVERED"
+    generation["last_attempt_recovery"] = candidate["recovered_from"]
+    save_refill_generation(config, generation)
+    return None
+
+
+def _publisher_seen(paths: HostPaths, job_id: str) -> dict[str, Any] | None:
+    raw = _read_json_file(paths.state / "controlled-publisher-seen.json") or {}
+    entry = raw.get(job_id)
+    return entry if isinstance(entry, dict) else None
+
+
+def _gate_report(paths: HostPaths, job_id: str) -> dict[str, Any] | None:
+    root = paths.state / "candidate-gate-results-repo" / "results"
+    if not root.exists():
+        return None
+    for path in root.glob(f"*/{job_id}/gate-report.json"):
+        raw = _read_json_file(path)
+        if raw is not None:
+            return raw
+    return None
+
+
+def _revision_seen(paths: HostPaths, job_id: str) -> dict[str, Any] | None:
+    raw = _read_json_file(paths.state / "revision-loop-seen.json") or {}
+    for key, entry in raw.items():
+        if str(key).endswith(f"/{job_id}") and isinstance(entry, dict):
+            return entry
+        if isinstance(entry, dict) and entry.get("source_job_id") == job_id:
+            return entry
+    return None
+
+
+def _has_trustworthy_offset(value: Any) -> bool:
+    text = str(value or "").strip()
+    return bool(text.endswith("Z") or re.search(r"[+-]\d{2}:\d{2}$", text))
+
+
+def _load_revision_ledger(paths: HostPaths) -> dict[str, Any]:
+    path = paths.state / "revision-loop-seen.json"
+    if not path.exists():
+        return {"state": "absent", "path": str(path), "entries": {}}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            "state": "malformed",
+            "path": str(path),
+            "error": str(exc),
+            "entries": {},
+        }
+    if not isinstance(raw, dict):
+        return {
+            "state": "non_object",
+            "path": str(path),
+            "raw_type": type(raw).__name__,
+            "entries": {},
+        }
+    return {"state": "object", "path": str(path), "entries": raw}
+
+
+def _revision_lineage_entries(
+    ledger: Mapping[str, Any], source_job_id: str
+) -> list[dict[str, Any]]:
+    raw = ledger.get("entries")
+    entries: list[dict[str, Any]] = []
+    if not isinstance(raw, dict):
+        return entries
+    for key, entry in raw.items():
+        key_source = str(key).rsplit("/", 1)[-1]
+        explicit_source = (
+            str(entry.get("source_job_id"))
+            if isinstance(entry, dict) and entry.get("source_job_id") is not None
+            else None
+        )
+        targeted = key_source == source_job_id or explicit_source == source_job_id
+        if not targeted:
+            continue
+        if not isinstance(entry, dict):
+            entries.append(
+                {
+                    "source_job_id": explicit_source or key_source,
+                    "revision_job_id": "",
+                    "_lineage_error": "targeted revision entry is not an object",
+                    "_ledger_key_source": key_source,
+                    "_raw_type": type(entry).__name__,
+                }
+            )
+            continue
+        normalized = dict(entry)
+        normalized["source_job_id"] = explicit_source or key_source
+        normalized["revision_job_id"] = str(entry.get("revision_job_id") or "")
+        normalized["_ledger_key_source"] = key_source
+        if explicit_source is not None and explicit_source != key_source:
+            normalized["_lineage_error"] = "revision source disagrees with ledger key"
+        entries.append(normalized)
+    return entries
+
+
+def _revision_descendants(
+    ledger: Mapping[str, Any], source_job_id: str
+) -> list[dict[str, Any]]:
+    return _revision_lineage_entries(ledger, source_job_id)
+
+
+def _revision_lineage_error(entry: Mapping[str, Any], source_job_id: str) -> str | None:
+    if entry.get("_lineage_error"):
+        return str(entry["_lineage_error"])
+    if entry.get("source_job_id") != source_job_id:
+        return "revision source identity does not match source job"
+    revision_job_id = str(entry.get("revision_job_id") or "")
+    if not revision_job_id:
+        return "revision lineage lacks revision_job_id"
+    if revision_job_id == source_job_id:
+        return "revision lineage points source to itself"
+    gate_hash = str(entry.get("gate_report_sha256") or "")
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", gate_hash):
+        return "revision lineage gate_report_sha256 is malformed"
+    jobs_commit = str(entry.get("jobs_commit") or "")
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", jobs_commit):
+        return "revision lineage jobs_commit is malformed"
+    queued_at = entry.get("queued_at")
+    if not (isinstance(queued_at, str) and _has_trustworthy_offset(queued_at)):
+        return "revision lineage queued_at is not offset-aware"
+    if _parse_utc(queued_at) is None:
+        return "revision lineage queued_at is malformed"
+    return None
+
+
+def _revision_lineage_classification(
+    config: RefillConfig,
+    paths: HostPaths,
+    source_job_id: str,
+) -> dict[str, Any] | None:
+    ledger = _load_revision_ledger(paths)
+    ledger_state = ledger.get("state")
+    if ledger_state == "absent":
+        return None
+    if ledger_state != "object":
+        return {
+            "category": "unknown",
+            "stage": "revision_lineage",
+            "evidence": {
+                "error": "revision ledger is malformed",
+                "ledger": ledger,
+            },
+        }
+    entries = _revision_lineage_entries(ledger, source_job_id)
+    if not entries:
+        return None
+    errors = [
+        error
+        for entry in entries
+        if (error := _revision_lineage_error(entry, source_job_id))
+    ]
+    revision_ids = {str(entry.get("revision_job_id") or "") for entry in entries}
+    if errors or source_job_id in revision_ids or len(revision_ids) != 1 or len(entries) != 1:
+        return {
+            "category": "unknown",
+            "stage": "revision_lineage",
+            "evidence": {
+                "error": "malformed or conflicting revision lineage",
+                "errors": errors,
+                "entries": entries,
+            },
+        }
+    entry = entries[0]
+    revision_job_id = str(entry["revision_job_id"])
+    descendant_entries = _revision_descendants(ledger, revision_job_id)
+    if descendant_entries:
+        return {
+            "category": "unknown",
+            "stage": "revision_lineage",
+            "evidence": {
+                "error": "revision descendant has its own revision lineage",
+                "entries": entries,
+                "descendants": descendant_entries,
+            },
+        }
+    lineage = {
+        "source_job_id": source_job_id,
+        "revision_job_id": revision_job_id,
+        "gate_report_sha256": entry.get("gate_report_sha256"),
+        "jobs_commit": entry.get("jobs_commit"),
+        "queued_at": entry.get("queued_at"),
+        "seen": entry,
+    }
+    if _job_in_active_queue(paths, revision_job_id):
+        return {"category": "in_flight", "stage": "revision_queue", "evidence": lineage}
+    revision_archive_state, revision_archive = _attempt_archive(paths, revision_job_id)
+    if revision_archive_state == "failed" and revision_archive is not None:
+        failed = _classify_failed_attempt(revision_archive, now=config.clock())
+        return {
+            **failed,
+            "stage": "revision_failed",
+            "evidence": {**failed.get("evidence", {}), "revision": lineage},
+        }
+    if revision_archive_state == "completed":
+        publisher = _publisher_seen(paths, revision_job_id)
+        if publisher is not None:
+            return {
+                "category": "item_terminal",
+                "stage": "revision_publisher",
+                "evidence": {**lineage, "publisher": publisher},
+            }
+        gate = _gate_report(paths, revision_job_id)
+        if gate is not None:
+            status = str(gate.get("status") or "")
+            state = str(gate.get("state") or "")
+            evidence = {**lineage, "gate": gate}
+            if status == "passed" and state in {"candidate_passed", "awaiting_review"}:
+                return {
+                    "category": "in_flight",
+                    "stage": "revision_publisher_review",
+                    "evidence": evidence,
+                }
+            if status == "failed" or state in {"candidate_failed", "candidate_rejected"}:
+                return {
+                    "category": "unknown",
+                    "stage": "revision_descendant_disposition_missing",
+                    "evidence": {
+                        **evidence,
+                        "reason": (
+                            "failed revision gate is not terminal without trusted "
+                            "publisher disposition"
+                        ),
+                    },
+                }
+        return {"category": "in_flight", "stage": "revision_downstream", "evidence": lineage}
+    if _job_in_feed(config, revision_job_id):
+        return {"category": "in_flight", "stage": "revision_awaiting_import", "evidence": lineage}
+    return {"category": "in_flight", "stage": "revision_pending", "evidence": lineage}
+
+
+def _structured_provider_failure(
+    error: Mapping[str, Any], *, now: datetime
+) -> dict[str, Any] | None:
+    provider = error.get("provider_failure")
+    if not isinstance(provider, dict):
+        return None
+    retry_at = _parse_utc(provider.get("retry_at"))
+    trustworthy_retry_at = (
+        isinstance(provider.get("retry_at"), str)
+        and _has_trustworthy_offset(provider.get("retry_at"))
+        and retry_at is not None
+    )
+    retryable = (
+        provider.get("version") == 1
+        and provider.get("scope") == "provider"
+        and provider.get("temporary") is True
+        and provider.get("retryable") is True
+        and trustworthy_retry_at
+    )
+    return {
+        "category": "provider_systemic",
+        "retryable": retryable,
+        "trustworthy_retry_at": (
+            retry_at.isoformat().replace("+00:00", "Z") if retryable else None
+        ),
+        "provider_failure": dict(provider),
+        "provider": provider.get("provider"),
+        "classifier": {
+            "source": (
+                provider.get("classifier_source")
+                or provider.get("source")
+                or "structured_provider_failure"
+            ),
+            "version": provider.get("classifier_version") or 1,
+        },
+        "reason": provider.get("reason") or provider.get("message") or "provider_failure",
+    }
+
+
+def _classify_failed_attempt(archive: Path, *, now: datetime) -> dict[str, Any]:
+    error = _read_json_file(archive / "error.json") or {}
+    message = " ".join(str(error.get(key) or "") for key in ("message", "traceback"))
+    structured = _structured_provider_failure(error, now=now)
+    if structured is not None:
+        return {
+            **structured,
+            "evidence": {
+                "archive": str(archive),
+                "error_sha256": _sha256_file(archive / "error.json"),
+                "provider_failure": structured["provider_failure"],
+                "provider": structured.get("provider"),
+                "classifier": structured.get("classifier"),
+                "retryable": structured.get("retryable"),
+                "retry_at": structured.get("trustworthy_retry_at"),
+                "reason": structured.get("reason"),
+            },
+        }
+    lowered = message.lower()
+    provider_tokens = ("quota", "rate limit", "rate-limit", "authentication", "auth")
+    if any(token in lowered for token in provider_tokens):
+        return {
+            "category": "provider_systemic",
+            "retryable": False,
+            "trustworthy_retry_at": None,
+            "evidence": {
+                "archive": str(archive),
+                "error_sha256": _sha256_file(archive / "error.json"),
+                "provider": "codex" if "codex" in lowered else None,
+                "classifier": {"source": "recognized_provider_text", "version": 1},
+                "retryable": False,
+                "retry_at": None,
+                "reason": message[:300],
+            },
+        }
+    return {
+        "category": "unknown",
+        "evidence": {
+            "archive": str(archive),
+            "error_sha256": _sha256_file(archive / "error.json"),
+            "message_excerpt": message[:300],
+        },
+    }
+
+
+def _classify_attempt(
+    config: RefillConfig,
+    paths: HostPaths,
+    attempt: Mapping[str, Any],
+) -> dict[str, Any]:
+    job_id = str(attempt.get("job_id") or "")
+    if not job_id:
+        return {"category": "unknown", "evidence": {"error": "attempt lacks job_id"}}
+    if _job_in_active_queue(paths, job_id):
+        return {"category": "in_flight", "stage": "host_queue"}
+    archive_state, archive = _attempt_archive(paths, job_id)
+    if archive_state is None or archive is None:
+        if _job_in_feed(config, job_id):
+            return {"category": "in_flight", "stage": "awaiting_import"}
+        return {
+            "category": "unknown",
+            "stage": "missing_attempt_evidence",
+            "evidence": {
+                "error": (
+                    "tracked refill attempt has no feed, pending, running, completed, "
+                    "or failed evidence"
+                ),
+                "job_id": job_id,
+            },
+        }
+    if archive_state == "failed":
+        return _classify_failed_attempt(archive, now=config.clock())
+
+    publisher = _publisher_seen(paths, job_id)
+    if publisher is not None:
+        return {"category": "item_terminal", "stage": "publisher", "evidence": publisher}
+    revision_classification = _revision_lineage_classification(config, paths, job_id)
+    if revision_classification is not None:
+        return revision_classification
+    gate = _gate_report(paths, job_id)
+    if gate is not None:
+        status = str(gate.get("status") or "")
+        state = str(gate.get("state") or "")
+        if status == "failed" or state in {"candidate_failed", "candidate_rejected"}:
+            return {
+                "category": "unknown",
+                "stage": "revision_disposition_missing",
+                "evidence": {
+                    "gate": gate,
+                    "reason": (
+                        "failed source gate is not terminal without trusted publisher "
+                        "or revision disposition"
+                    ),
+                },
+            }
+        if status == "passed" and state in {"candidate_passed", "awaiting_review"}:
+            return {"category": "in_flight", "stage": "publisher_review", "evidence": gate}
+    return {"category": "in_flight", "stage": "downstream_disposition"}
+
+
+def _attempt_from_receipt(
+    receipt: BuildNextReceipt,
+    *,
+    attempt_ordinal: int,
+    retry_ordinal: int,
+    reason: str,
+    recovered_from: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    attempt = {
+        "attempt_ordinal": attempt_ordinal,
+        "retry_ordinal": retry_ordinal,
+        "reason": reason,
+        "job_id": receipt.job_id,
+        "work_item_id": receipt.work_item_id,
+        "pipeline_id": receipt.pipeline_id,
+        "source_commit": receipt.source_commit,
+        "feed_path": receipt.feed_path,
+        "feed_commit": receipt.feed_commit,
+        "created_at": _utc_now(),
+    }
+    if recovered_from is not None:
+        attempt["recovered_from"] = dict(recovered_from)
+    return attempt
+
+
+def _record_attempt(generation: dict[str, Any], attempt: Mapping[str, Any]) -> None:
+    job_id = str(attempt.get("job_id") or "")
+    sequence = [
+        item
+        for item in generation.get("attempt_sequence") or []
+        if isinstance(item, dict)
+    ]
+    if not any(str(item.get("job_id") or "") == job_id for item in sequence):
+        sequence.append(dict(attempt))
+    generation["attempt_sequence"] = sequence
+    generation["current_attempt"] = dict(attempt)
+    ids = list(generation.get("attempted_work_item_ids") or [])
+    work_item_id = attempt.get("work_item_id")
+    if work_item_id and work_item_id not in ids:
+        ids.append(work_item_id)
+    generation["attempted_work_item_ids"] = ids
+
+
+def _prepared_matches_candidate(
+    prepared: Mapping[str, Any], candidate: Mapping[str, Any]
+) -> bool:
+    return all(
+        prepared.get(key) == candidate.get(key)
+        for key in (
+            "generation_id",
+            "attempt_ordinal",
+            "retry_ordinal",
+            "reason",
+            "selected_work_item_id",
+            "pipeline_id",
+            "source_commit",
+            "job_id",
+        )
+    )
+
+
+def _candidate_from_prepared_job(
+    generation: Mapping[str, Any],
+    prepared: Mapping[str, Any],
+    *,
+    stage: str,
+    path: Path,
+    job: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    candidate, error = _extract_refill_attempt_candidate(
+        generation,
+        stage=stage,
+        path=path,
+        job=job,
+    )
+    if error is not None or candidate is None:
+        return None
+    candidate["generation_id"] = generation.get("generation_id")
+    candidate["selected_work_item_id"] = candidate.get("work_item_id")
+    return candidate if _prepared_matches_candidate(prepared, candidate) else None
+
+
+def _matching_prepared_side_effects(
+    config: RefillConfig,
+    paths: HostPaths,
+    generation: Mapping[str, Any],
+    prepared: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    conflicts: list[dict[str, str]] = []
+    for stage, path, job in _job_yaml_sources(config, paths):
+        job_id = str(job.get("job_id") or "")
+        candidate = _candidate_from_prepared_job(
+            generation,
+            prepared,
+            stage=stage,
+            path=path,
+            job=job,
+        )
+        if candidate is not None:
+            matches.append(candidate)
+        elif job_id == prepared.get("job_id"):
+            conflicts.append({"stage": stage, "path": str(path)})
+    if conflicts:
+        return [{"conflict": True, "conflicts": conflicts}]
+    unique = {
+        json.dumps(
+            {key: item.get(key) for key in ("job_id", "attempt_ordinal", "retry_ordinal")},
+            sort_keys=True,
+        )
+        for item in matches
+    }
+    if len(unique) > 1:
+        return [{"conflict": True, "conflicts": matches}]
+    return matches
+
+
+def _commit_prepared_attempt(
+    config: RefillConfig,
+    generation: dict[str, Any],
+    candidate: Mapping[str, Any],
+) -> None:
+    attempt = dict(candidate)
+    attempt.pop("generation_id", None)
+    attempt.pop("selected_work_item_id", None)
+    _record_attempt(generation, attempt)
+    generation.pop("prepared_dispatch", None)
+    generation["state"] = "QUEUED"
+    generation["last_attempt_recovery"] = dict(attempt.get("recovered_from") or {})
+    save_refill_generation(config, generation)
+
+
+def _prepare_dispatch(
+    config: RefillConfig,
+    generation: dict[str, Any],
+    *,
+    exclusions: tuple[str, ...],
+    attempt_ordinal: int,
+    retry_ordinal: int,
+    reason: str,
+    selected_work_item_id: str | None,
+    pinned_commit: str | None,
+    consume_provider_retry: bool = False,
+) -> tuple[dict[str, Any], BuildNextReceipt]:
+    dry_config = replace(
+        config.build_next,
+        requested_by="capacity-one refill controller",
+        submit=False,
+        exclude_work_item_ids=exclusions,
+        expected_source_commit=pinned_commit,
+        refill_attempt=_attempt_context(
+            generation,
+            attempt_ordinal=attempt_ordinal,
+            retry_ordinal=retry_ordinal,
+            reason=reason,
+            selected_work_item_id=selected_work_item_id,
+        ),
+    )
+    receipt = build_next(dry_config)
+    if receipt.projected_status != "QUEUED" or not receipt.job_id:
+        return {}, receipt
+    prepared = {
+        "generation_id": generation.get("generation_id"),
+        "attempt_ordinal": attempt_ordinal,
+        "retry_ordinal": retry_ordinal,
+        "reason": reason,
+        "selected_work_item_id": receipt.work_item_id,
+        "pipeline_id": receipt.pipeline_id,
+        "source_commit": receipt.source_commit,
+        "job_id": receipt.job_id,
+        "exclusions": list(exclusions),
+        "prepared_at": _utc_now(),
+        "feed_path": receipt.feed_path,
+        "feed_commit": receipt.feed_commit,
+    }
+    generation["prepared_dispatch"] = prepared
+    generation["state"] = "DISPATCHING"
+    if consume_provider_retry:
+        generation["provider_retry_consumed"] = True
+    if receipt.evidence.get("source"):
+        generation["source_ppe_identity"] = receipt.evidence["source"]
+    save_refill_generation(config, generation)
+    return prepared, receipt
+
+
+def _submit_prepared_dispatch(
+    config: RefillConfig,
+    generation: dict[str, Any],
+    prepared: Mapping[str, Any],
+) -> BuildNextReceipt:
+    build_config = replace(
+        config.build_next,
+        requested_by="capacity-one refill controller",
+        exclude_work_item_ids=tuple(str(item) for item in prepared.get("exclusions") or ()),
+        expected_source_commit=str(prepared.get("source_commit") or "") or None,
+        refill_attempt=_attempt_context(
+            generation,
+            attempt_ordinal=int(prepared["attempt_ordinal"]),
+            retry_ordinal=int(prepared.get("retry_ordinal") or 0),
+            reason=str(prepared.get("reason") or "initial"),
+            selected_work_item_id=str(prepared.get("selected_work_item_id") or ""),
+        ),
+    )
+    receipt = build_next(build_config)
+    if receipt.status == "QUEUED" and any(
+        receipt_value != prepared_value
+        for receipt_value, prepared_value in (
+            (receipt.job_id, prepared.get("job_id")),
+            (receipt.work_item_id, prepared.get("selected_work_item_id")),
+            (receipt.pipeline_id, prepared.get("pipeline_id")),
+            (receipt.source_commit, prepared.get("source_commit")),
+        )
+    ):
+        generation["state"] = "BLOCKED"
+        generation["dispatch_error"] = {
+            "reason": "prepared_dispatch_identity_mismatch",
+            "prepared": dict(prepared),
+            "receipt": asdict(receipt),
+        }
+        save_refill_generation(config, generation)
+    return receipt
+
+
+def _recover_or_replay_prepared_dispatch(
+    config: RefillConfig,
+    paths: HostPaths,
+    generation: dict[str, Any],
+    *,
+    allow_replay: bool,
+) -> BuildNextReceipt | dict[str, Any] | None:
+    prepared = generation.get("prepared_dispatch")
+    if not isinstance(prepared, dict):
+        return None
+    matches = _matching_prepared_side_effects(config, paths, generation, prepared)
+    if matches and matches[0].get("conflict") is True:
+        generation["state"] = "BLOCKED"
+        generation["dispatch_error"] = {"reason": "prepared_dispatch_conflict", **matches[0]}
+        save_refill_generation(config, generation)
+        return generation["dispatch_error"]
+    if matches:
+        stage_order = {"running": 0, "pending": 1, "completed": 2, "failed": 3, "feed": 4}
+        candidate = sorted(
+            matches,
+            key=lambda item: stage_order.get(
+                str(item.get("recovered_from", {}).get("stage")), 5
+            ),
+        )[0]
+        _commit_prepared_attempt(config, generation, candidate)
+        return None
+    if not allow_replay:
+        return None
+    receipt = _submit_prepared_dispatch(config, generation, prepared)
+    if receipt.status == "QUEUED" and generation.get("state") != "BLOCKED":
+        attempt = _attempt_from_receipt(
+            receipt,
+            attempt_ordinal=int(prepared["attempt_ordinal"]),
+            retry_ordinal=int(prepared.get("retry_ordinal") or 0),
+            reason=str(prepared.get("reason") or "initial"),
+        )
+        _record_attempt(generation, attempt)
+        generation.pop("prepared_dispatch", None)
+        generation["state"] = "QUEUED"
+        if receipt.evidence.get("source"):
+            generation["source_ppe_identity"] = receipt.evidence["source"]
+        save_refill_generation(config, generation)
+    return receipt
+
+
+def _append_attempt(
+    generation: dict[str, Any],
+    receipt: BuildNextReceipt,
+    *,
+    retry_ordinal: int,
+    reason: str,
+) -> None:
+    attempt = {
+        "attempt_ordinal": len(generation.get("attempt_sequence") or []) + 1,
+        "retry_ordinal": retry_ordinal,
+        "reason": reason,
+        "job_id": receipt.job_id,
+        "work_item_id": receipt.work_item_id,
+        "pipeline_id": receipt.pipeline_id,
+        "source_commit": receipt.source_commit,
+        "feed_path": receipt.feed_path,
+        "feed_commit": receipt.feed_commit,
+        "created_at": _utc_now(),
+    }
+    _record_attempt(generation, attempt)
+    if receipt.evidence.get("source"):
+        generation["source_ppe_identity"] = receipt.evidence["source"]
+
+
+def _pinned_source_commit(generation: Mapping[str, Any]) -> str | None:
+    source = generation.get("source_ppe_identity")
+    if isinstance(source, dict) and isinstance(source.get("commit"), str):
+        commit = source["commit"]
+        if commit:
+            return commit
+    return None
+
+
+def _source_pin_block(config: RefillConfig, generation: Mapping[str, Any]) -> dict[str, Any] | None:
+    pinned = _pinned_source_commit(generation)
+    if pinned is None:
+        return None
+    try:
+        identity = _source_identity(
+            replace(config.build_next, expected_source_commit=pinned),
+            config.build_next.ppe_repo.expanduser().resolve(),
+        )
+    except Exception as exc:
+        return {"reason": "source_pin_mismatch", "pinned_commit": pinned, "error": str(exc)}
+    return None if identity.commit == pinned else {
+        "reason": "source_pin_mismatch",
+        "pinned_commit": pinned,
+        "observed_commit": identity.commit,
+    }
 
 
 def _active_release_evidence(path: Path) -> dict[str, Any]:
@@ -733,6 +1795,7 @@ def reconcile_refill(config: RefillConfig) -> RefillReport:
 def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
     policy = load_refill_policy(config)
     paths = _host_paths(config)
+    generation = load_refill_generation(config)
     snapshot = _capacity_snapshot(config, paths)
     active_running = snapshot.running
     active_queued = snapshot.queued
@@ -740,6 +1803,9 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
     awaiting_review = snapshot.awaiting_review
 
     if not policy.enabled or policy.desired_capacity == 0:
+        if generation is not None and generation.get("state") != "PAUSED":
+            generation["state"] = "PAUSED"
+            save_refill_generation(config, generation)
         return _report(
             config=config,
             policy=policy,
@@ -765,6 +1831,66 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
             awaiting_review=awaiting_review,
             evidence={"reason": "runtime_health", "health": snapshot.health},
         )
+    if generation is not None and isinstance(generation.get("prepared_dispatch"), dict):
+        prepared_result = _recover_or_replay_prepared_dispatch(
+            config, paths, generation, allow_replay=False
+        )
+        if isinstance(prepared_result, dict):
+            return _report(
+                config=config,
+                policy=policy,
+                status="BLOCKED",
+                message="Prepared refill dispatch has conflicting side-effect evidence.",
+                active_running=active_running,
+                active_queued=active_queued,
+                feed_awaiting_import=feed_awaiting_import,
+                awaiting_review=awaiting_review,
+                evidence={
+                    "reason": prepared_result.get("reason", "prepared_dispatch_conflict"),
+                    "generation": generation,
+                    "health": snapshot.health,
+                },
+            )
+        if isinstance(prepared_result, BuildNextReceipt):
+            if prepared_result.status == "QUEUED":
+                feed_awaiting_import = max(feed_awaiting_import, 1)
+            return _report(
+                config=config,
+                policy=policy,
+                status=prepared_result.status,
+                message=prepared_result.message,
+                active_running=active_running,
+                active_queued=active_queued,
+                feed_awaiting_import=feed_awaiting_import,
+                awaiting_review=awaiting_review,
+                evidence={
+                    "reason": "prepared_dispatch_reconciled",
+                    "build_next": asdict(prepared_result),
+                    "generation": generation,
+                    "health": snapshot.health,
+                },
+                receipt=prepared_result,
+            )
+        generation = load_refill_generation(config) or generation
+
+    if generation is not None:
+        recovery_error = _recover_unrecorded_generation_attempt(config, paths, generation)
+        if recovery_error is not None:
+            return _report(
+                config=config,
+                policy=policy,
+                status="BLOCKED",
+                message="Refill generation attempt recovery found conflicting evidence.",
+                active_running=active_running,
+                active_queued=active_queued,
+                feed_awaiting_import=feed_awaiting_import,
+                awaiting_review=awaiting_review,
+                evidence={
+                    "reason": recovery_error["reason"],
+                    "generation": generation,
+                    "health": snapshot.health,
+                },
+            )
     if active_queued + feed_awaiting_import >= policy.queue_cap:
         return _report(
             config=config,
@@ -827,14 +1953,217 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
                 "health": snapshot.health,
             },
         )
+    if generation is None:
+        return _report(
+            config=config,
+            policy=policy,
+            status="BLOCKED",
+            message="Refill is enabled but no founder-created generation exists.",
+            active_running=active_running,
+            active_queued=active_queued,
+            feed_awaiting_import=feed_awaiting_import,
+            awaiting_review=awaiting_review,
+            evidence={"reason": "missing_generation", "health": snapshot.health},
+        )
+    if isinstance(generation.get("prepared_dispatch"), dict):
+        prepared_result = _recover_or_replay_prepared_dispatch(
+            config, paths, generation, allow_replay=True
+        )
+        if isinstance(prepared_result, dict):
+            return _report(
+                config=config,
+                policy=policy,
+                status="BLOCKED",
+                message="Prepared refill dispatch has conflicting side-effect evidence.",
+                active_running=active_running,
+                active_queued=active_queued,
+                feed_awaiting_import=feed_awaiting_import,
+                awaiting_review=awaiting_review,
+                evidence={
+                    "reason": prepared_result.get("reason", "prepared_dispatch_conflict"),
+                    "generation": generation,
+                    "health": snapshot.health,
+                },
+            )
+        if isinstance(prepared_result, BuildNextReceipt):
+            if prepared_result.status == "QUEUED":
+                feed_awaiting_import = max(feed_awaiting_import, 1)
+            return _report(
+                config=config,
+                policy=policy,
+                status=prepared_result.status,
+                message=prepared_result.message,
+                active_running=active_running,
+                active_queued=active_queued,
+                feed_awaiting_import=feed_awaiting_import,
+                awaiting_review=awaiting_review,
+                evidence={
+                    "reason": "prepared_dispatch_reconciled",
+                    "build_next": asdict(prepared_result),
+                    "generation": generation,
+                    "health": snapshot.health,
+                },
+                receipt=prepared_result,
+            )
 
-    receipt = build_next(config.build_next)
+    current = generation.get("current_attempt")
+    retry_same_item: str | None = None
+    retry_reason = "initial"
+    retry_ordinal = 0
+    if isinstance(current, dict):
+        pin_block = _source_pin_block(config, generation)
+        if pin_block is not None:
+            generation["state"] = "BLOCKED"
+            save_refill_generation(config, generation)
+            return _report(
+                config=config,
+                policy=policy,
+                status="BLOCKED",
+                message="Pinned PPE source moved; refill dispatch is blocked.",
+                active_running=active_running,
+                active_queued=active_queued,
+                feed_awaiting_import=feed_awaiting_import,
+                awaiting_review=awaiting_review,
+                evidence={
+                    **pin_block,
+                    "generation": generation,
+                    "health": snapshot.health,
+                },
+            )
+        classification = _classify_attempt(config, paths, current)
+        generation["last_attempt_classification"] = classification
+        category = classification.get("category")
+        if category == "in_flight":
+            generation["state"] = "OCCUPIED"
+            save_refill_generation(config, generation)
+            return _report(
+                config=config,
+                policy=policy,
+                status="RUNNING",
+                message="Capacity one is occupied by a tracked refill attempt.",
+                active_running=active_running,
+                active_queued=active_queued,
+                feed_awaiting_import=feed_awaiting_import,
+                awaiting_review=awaiting_review,
+                evidence={
+                    "reason": "tracked_attempt_capacity_full",
+                    "generation": generation,
+                    "health": snapshot.health,
+                },
+            )
+        if category == "provider_systemic":
+            provider_state = {
+                "work_item_id": current.get("work_item_id"),
+                "job_id": current.get("job_id"),
+                "retryable": classification.get("retryable") is True,
+                "trustworthy_retry_at": classification.get("trustworthy_retry_at")
+                or generation.get("trustworthy_retry_at"),
+                "evidence": classification.get("evidence"),
+            }
+            generation["provider_failure"] = provider_state
+            generation["trustworthy_retry_at"] = provider_state["trustworthy_retry_at"]
+            retry_at = _parse_utc(provider_state["trustworthy_retry_at"])
+            now = config.clock()
+            if (
+                provider_state["retryable"]
+                and retry_at is not None
+                and now >= retry_at
+                and generation.get("provider_retry_consumed") is not True
+            ):
+                retry_same_item = str(current.get("work_item_id") or "")
+                retry_reason = "provider_retry"
+                retry_ordinal = 1
+            else:
+                generation["state"] = "BACKPRESSURE"
+                save_refill_generation(config, generation)
+                return _report(
+                    config=config,
+                    policy=policy,
+                    status="BACKPRESSURE",
+                    message="Provider-wide backpressure blocks refill dispatch.",
+                    active_running=active_running,
+                    active_queued=active_queued,
+                    feed_awaiting_import=feed_awaiting_import,
+                    awaiting_review=awaiting_review,
+                    evidence={
+                        "reason": "provider_backpressure",
+                        "generation": generation,
+                        "health": snapshot.health,
+                    },
+                )
+        elif category == "item_terminal":
+            exclusions = list(generation.get("item_scoped_terminal_exclusions") or [])
+            work_item_id = str(current.get("work_item_id") or "")
+            if work_item_id and work_item_id not in exclusions:
+                exclusions.append(work_item_id)
+            generation["item_scoped_terminal_exclusions"] = exclusions
+            generation["current_attempt"] = None
+            generation["provider_failure"] = None
+            generation["trustworthy_retry_at"] = None
+            generation["state"] = "READY"
+            save_refill_generation(config, generation)
+        else:
+            generation["state"] = "BLOCKED"
+            save_refill_generation(config, generation)
+            return _report(
+                config=config,
+                policy=policy,
+                status="BLOCKED",
+                message="Tracked refill attempt has ambiguous terminal evidence.",
+                active_running=active_running,
+                active_queued=active_queued,
+                feed_awaiting_import=feed_awaiting_import,
+                awaiting_review=awaiting_review,
+                evidence={
+                    "reason": "ambiguous_attempt",
+                    "generation": generation,
+                    "health": snapshot.health,
+                },
+            )
+
+    exclusions = tuple(
+        str(item) for item in generation.get("item_scoped_terminal_exclusions") or ()
+    )
+    if retry_same_item:
+        exclusions = tuple(item for item in exclusions if item != retry_same_item)
+    attempt_ordinal = len(generation.get("attempt_sequence") or []) + 1
+    pinned_commit = _pinned_source_commit(generation)
+    prepared, dry_receipt = _prepare_dispatch(
+        config,
+        generation,
+        exclusions=exclusions,
+        attempt_ordinal=attempt_ordinal,
+        retry_ordinal=retry_ordinal,
+        reason=retry_reason,
+        selected_work_item_id=retry_same_item,
+        pinned_commit=pinned_commit,
+        consume_provider_retry=retry_reason == "provider_retry",
+    )
+    if not prepared:
+        receipt = dry_receipt
+    else:
+        receipt = _submit_prepared_dispatch(config, generation, prepared)
     status = receipt.status
     message = receipt.message
-    if status == "QUEUED":
+    if status == "QUEUED" and generation.get("state") != "BLOCKED":
+        attempt = _attempt_from_receipt(
+            receipt,
+            attempt_ordinal=attempt_ordinal,
+            retry_ordinal=retry_ordinal,
+            reason=retry_reason,
+        )
+        _record_attempt(generation, attempt)
+        generation.pop("prepared_dispatch", None)
+        generation["state"] = "QUEUED"
+        if receipt.evidence.get("source"):
+            generation["source_ppe_identity"] = receipt.evidence["source"]
+        save_refill_generation(config, generation)
         feed_awaiting_import = max(feed_awaiting_import, 1)
     elif status == "RUNNING":
         active_running = max(active_running, 1)
+    elif status in {"BLOCKED", "UNFILLED"}:
+        generation["state"] = status
+        save_refill_generation(config, generation)
     return _report(
         config=config,
         policy=policy,
@@ -847,6 +2176,7 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
         evidence={
             "reason": "build_next_reconciled",
             "build_next": asdict(receipt),
+            "generation": generation,
             "health": snapshot.health,
         },
         receipt=receipt,

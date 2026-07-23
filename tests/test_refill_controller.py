@@ -857,8 +857,11 @@ def _write_legacy_publisher_recovery_case(
             "cycle_started_at": "2999-01-01T00:00:01+00:00",
             "finished_at": "2999-01-01T00:00:02+00:00",
             "result": "success",
-            "associated_jobs": [],
-            "terminal_evidence": {"processed_jobs": []},
+            "associated_jobs": ["ppe-frozen-evaluation-contract-v1-revision-1"],
+            "terminal_evidence": {
+                "processed_jobs": [],
+                "verified_jobs": ["ppe-frozen-evaluation-contract-v1-revision-1"],
+            },
         }
         success.update(success_overrides or {})
         _write_state_json(config, "publisher-service-success.json", success)
@@ -889,6 +892,42 @@ def test_legacy_publisher_marker_without_published_at_superseded_by_current_succ
     "case_name,marker_overrides,ledger_overrides,success_overrides,write_success,error_text",
     [
         ("no_later_success", {}, {}, {}, False, "success evidence is missing"),
+        (
+            "success_without_job_lists",
+            {},
+            {},
+            {"associated_jobs": [], "terminal_evidence": {"processed_jobs": []}},
+            True,
+            "associated_jobs must be a list of non-empty strings",
+        ),
+        (
+            "processed_without_verified",
+            {},
+            {},
+            {
+                "associated_jobs": ["ppe-frozen-evaluation-contract-v1-revision-1"],
+                "terminal_evidence": {
+                    "processed_jobs": ["ppe-frozen-evaluation-contract-v1-revision-1"],
+                    "verified_jobs": [],
+                },
+            },
+            True,
+            "verified_jobs must be a list of non-empty strings",
+        ),
+        (
+            "verified_without_associated",
+            {},
+            {},
+            {
+                "associated_jobs": ["other-job"],
+                "terminal_evidence": {
+                    "processed_jobs": [],
+                    "verified_jobs": ["ppe-frozen-evaluation-contract-v1-revision-1"],
+                },
+            },
+            True,
+            "associated_jobs does not identify",
+        ),
         (
             "wrong_success_generation",
             {},
@@ -926,14 +965,6 @@ def test_legacy_publisher_marker_without_published_at_superseded_by_current_succ
             {},
             True,
             "branch",
-        ),
-        (
-            "pr_drift",
-            {},
-            {"pr_state": "closed"},
-            {},
-            True,
-            "PR state",
         ),
         (
             "gate_hash_drift",
@@ -982,6 +1013,30 @@ def test_legacy_publisher_marker_recovery_fails_closed_for_incoherent_evidence(
     publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
     assert publisher["ok"] is False
     assert error_text in publisher["error"]
+
+
+def test_legacy_publisher_marker_recovery_requires_current_generation_id(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    supervisor = config.build_next.host_root.parent / ".msos-autobuilder-supervisor"
+    witness = supervisor / "state" / "service-witnesses" / "publisher.json"
+    payload = json.loads(witness.read_text(encoding="utf-8"))
+    payload.pop("child_pid")
+    witness.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    _write_legacy_publisher_recovery_case(
+        config,
+        success_overrides={"generation_id": None},
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
+    assert publisher["ok"] is False
+    assert "generation cannot be derived" in publisher["error"]
 
 
 @pytest.mark.parametrize(
@@ -2883,7 +2938,7 @@ def test_malformed_targeted_revision_descendant_blocks_without_dispatching_b(
     tmp_path: Path, case_name: str, descendant_factory: object
 ) -> None:
     revision_id = "revision-a"
-    config, info = _seed_failed_source_with_revision_ledger(tmp_path / case_name, {})
+    config, info = _seed_failed_source_with_revision_ledger(tmp_path / "r", {})
     job_id = info["job_id"]
     _write_state_json(
         config,

@@ -962,6 +962,7 @@ class ControlledPublisher:
             self.evidence.prepare()
             ledger = self._load_ledger()
             processed: list[str] = []
+            verified: set[str] = set()
             for job_id, plan in self.config.plans.items():
                 associated = {
                     "job_id": job_id,
@@ -984,6 +985,7 @@ class ControlledPublisher:
                     except PublisherError as exc:
                         self._write_error_marker(exc, associated=associated)
                         raise
+                    verified.add(job_id)
                     continue
                 try:
                     report, results_commit = self.publish_job(job_id, plan)
@@ -1000,16 +1002,21 @@ class ControlledPublisher:
                     }
                     self._save_ledger(ledger)
                     processed.append(job_id)
+                    verified.add(job_id)
                 except (PublisherError, OSError, KeyError, TypeError, ValueError) as exc:
                     self._write_error_marker(exc, associated=associated)
                     raise
+            verified_jobs = sorted(verified)
             record_service_cycle_success(
                 state_root=self.state,
                 host_root=self.host_root,
                 service="publisher",
                 cycle_started_at=cycle_started_at,
-                associated_jobs=processed,
-                terminal_evidence={"processed_jobs": processed},
+                associated_jobs=verified_jobs,
+                terminal_evidence={
+                    "processed_jobs": sorted(set(processed)),
+                    "verified_jobs": verified_jobs,
+                },
             )
             return tuple(processed)
 

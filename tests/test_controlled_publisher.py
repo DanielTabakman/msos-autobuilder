@@ -43,6 +43,15 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def publisher_success(config_path: Path) -> dict[str, Any]:
+    config = load_publisher_config(config_path)
+    return json.loads(
+        (config.host_root / "state" / "publisher-service-success.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+
 class FakeGitHubClient(GitHubDraftClient):
     def __init__(self, product_bare: Path) -> None:
         self.product_bare = product_bare
@@ -259,6 +268,48 @@ def test_controlled_publisher_creates_one_draft_pr_and_is_repeat_safe(tmp_path: 
     assert len(client.pulls) == 1
 
 
+def test_newly_published_job_is_processed_and_verified(tmp_path: Path) -> None:
+    config_path, product_bare, _, job_id = make_fixture(tmp_path)
+    config = load_publisher_config(config_path)
+    publisher = ControlledPublisher(config, github_client=FakeGitHubClient(product_bare))
+
+    assert publisher.run_once() == (job_id,)
+
+    success = publisher_success(config_path)
+    assert success["associated_jobs"] == [job_id]
+    assert success["terminal_evidence"]["processed_jobs"] == [job_id]
+    assert success["terminal_evidence"]["verified_jobs"] == [job_id]
+
+
+def test_existing_valid_ledger_entry_is_verified_not_processed(tmp_path: Path) -> None:
+    config_path, product_bare, _, job_id = make_fixture(tmp_path)
+    config = load_publisher_config(config_path)
+    client = FakeGitHubClient(product_bare)
+    publisher = ControlledPublisher(config, github_client=client)
+    assert publisher.run_once() == (job_id,)
+
+    assert publisher.run_once() == ()
+
+    success = publisher_success(config_path)
+    assert success["associated_jobs"] == [job_id]
+    assert success["terminal_evidence"]["processed_jobs"] == []
+    assert success["terminal_evidence"]["verified_jobs"] == [job_id]
+
+
+def test_configured_cycle_cannot_claim_unplanned_historical_job_verified(
+    tmp_path: Path,
+) -> None:
+    config_path, product_bare, _, job_id = make_fixture(tmp_path)
+    config = load_publisher_config(config_path)
+    publisher = ControlledPublisher(config, github_client=FakeGitHubClient(product_bare))
+
+    assert publisher.run_once() == (job_id,)
+
+    success = publisher_success(config_path)
+    assert "historical-job" not in success["associated_jobs"]
+    assert "historical-job" not in success["terminal_evidence"]["verified_jobs"]
+
+
 def test_controlled_publisher_ledger_save_failure_records_job_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -321,6 +372,7 @@ def test_controlled_publisher_detects_branch_drift(tmp_path: Path) -> None:
     client = FakeGitHubClient(product_bare)
     publisher = ControlledPublisher(config, github_client=client)
     assert publisher.run_once() == (job_id,)
+    (config.host_root / "state" / "publisher-service-success.json").unlink()
 
     drift = tmp_path / "drift"
     git(None, "clone", str(product_bare), str(drift))
@@ -334,6 +386,59 @@ def test_controlled_publisher_detects_branch_drift(tmp_path: Path) -> None:
 
     with pytest.raises(PublisherError, match="branch drifted"):
         publisher.run_once()
+    assert not (config.host_root / "state" / "publisher-service-success.json").exists()
+
+
+@pytest.mark.parametrize(
+    "mutate_pull,error",
+    [
+        (lambda pull: pull.update({"state": "closed"}), "not open"),
+        (lambda pull: pull.update({"draft": False}), "not draft"),
+        (lambda pull: pull["head"].update({"sha": "0" * 40}), "head drifted"),
+    ],
+)
+def test_controlled_publisher_pr_drift_prevents_verified_success(
+    tmp_path: Path,
+    mutate_pull: object,
+    error: str,
+) -> None:
+    config_path, product_bare, _, job_id = make_fixture(tmp_path)
+    config = load_publisher_config(config_path)
+    client = FakeGitHubClient(product_bare)
+    publisher = ControlledPublisher(config, github_client=client)
+    assert publisher.run_once() == (job_id,)
+    (config.host_root / "state" / "publisher-service-success.json").unlink()
+    mutate_pull(client.pulls[0])
+
+    with pytest.raises(PublisherError, match=error):
+        publisher.run_once()
+    assert not (config.host_root / "state" / "publisher-service-success.json").exists()
+
+
+def test_controlled_publisher_gate_hash_drift_prevents_verified_success(
+    tmp_path: Path,
+) -> None:
+    config_path, product_bare, evidence_bare, job_id = make_fixture(tmp_path)
+    config = load_publisher_config(config_path)
+    publisher = ControlledPublisher(config, github_client=FakeGitHubClient(product_bare))
+    assert publisher.run_once() == (job_id,)
+    (config.host_root / "state" / "publisher-service-success.json").unlink()
+
+    edit = tmp_path / "evidence-gate-drift"
+    git(None, "clone", "--branch", "results", str(evidence_bare), str(edit))
+    git(edit, "config", "user.name", "Fixture")
+    git(edit, "config", "user.email", "fixture@example.invalid")
+    gate_path = edit / "results" / "MACHINE" / job_id / "gate-report.json"
+    gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    gate["checks"].append({"name": "drift", "passed": True, "returncode": 0})
+    write_json(gate_path, gate)
+    git(edit, "add", ".")
+    git(edit, "commit", "-m", "gate drift")
+    git(edit, "push", "origin", "HEAD:results")
+
+    with pytest.raises(PublisherError, match="passed gate report changed"):
+        publisher.run_once()
+    assert not (config.host_root / "state" / "publisher-service-success.json").exists()
 
 
 def test_config_rejects_merge_or_main_write_authority(tmp_path: Path) -> None:

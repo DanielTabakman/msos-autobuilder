@@ -373,6 +373,21 @@ def _publisher_ledger_identity_is_coherent(
     return True, None
 
 
+def _string_collection_contains(
+    raw: Any,
+    *,
+    item: str,
+    label: str,
+) -> tuple[bool, str | None]:
+    if not isinstance(raw, list):
+        return False, f"{label} must be a list of non-empty strings"
+    if not raw or not all(isinstance(value, str) and value.strip() for value in raw):
+        return False, f"{label} must be a list of non-empty strings"
+    if item not in raw:
+        return False, f"{label} does not identify the associated job"
+    return True, None
+
+
 def _publisher_legacy_recovery_supersedes(
     *,
     ledger: Mapping[str, Any],
@@ -384,6 +399,8 @@ def _publisher_legacy_recovery_supersedes(
     current_release: Any,
     job_id: str,
 ) -> tuple[bool, str | None]:
+    if current_generation_id is None:
+        return False, "current publisher generation cannot be derived"
     marker_release = marker.get("release_commit")
     marker_started = _parse_utc(marker.get("witness_started_at"))
     marker_generation = marker.get("generation_id")
@@ -419,8 +436,25 @@ def _publisher_legacy_recovery_supersedes(
         return False, "publisher service success evidence is not later than marker"
     if raw_success.get("release_commit") != current_release:
         return False, "publisher service success release does not match current release"
-    if current_generation_id and raw_success.get("generation_id") != current_generation_id:
+    if raw_success.get("generation_id") != current_generation_id:
         return False, "publisher service success generation does not match current service"
+    associated_ok, associated_error = _string_collection_contains(
+        raw_success.get("associated_jobs"),
+        item=job_id,
+        label="publisher service success associated_jobs",
+    )
+    if not associated_ok:
+        return False, associated_error
+    terminal_evidence = raw_success.get("terminal_evidence")
+    if not isinstance(terminal_evidence, dict):
+        return False, "publisher service success terminal_evidence must be a mapping"
+    verified_ok, verified_error = _string_collection_contains(
+        terminal_evidence.get("verified_jobs"),
+        item=job_id,
+        label="publisher service success verified_jobs",
+    )
+    if not verified_ok:
+        return False, verified_error
     return True, None
 
 
@@ -603,14 +637,17 @@ def evaluate_service_error_marker(
     if job_id is not None:
         evidence["associated_job_id"] = job_id
 
-    success, success_error = _success_supersedes(
-        path=success_path,
-        service=spec.service,
-        marker_recorded=recorded,
-        current_generation_id=current_generation,
-        current_release=current_release,
-        job_id=job_id,
-    )
+    success = False
+    success_error: str | None = None
+    if not (spec.service == "publisher" and job_id is not None):
+        success, success_error = _success_supersedes(
+            path=success_path,
+            service=spec.service,
+            marker_recorded=recorded,
+            current_generation_id=current_generation,
+            current_release=current_release,
+            job_id=job_id,
+        )
     if success:
         evidence.update(
             {

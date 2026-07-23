@@ -516,6 +516,58 @@ def test_current_generation_error_followed_by_same_generation_success_is_superse
     assert publisher["superseded_by"] == "later_same_generation_service_success"
 
 
+def test_current_generation_associated_publisher_error_uses_same_generation_success(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    generation = _generation_id()
+    _write_error_marker(
+        config,
+        "controlled-publisher-error.json",
+        {
+            "service": "publisher",
+            "release_commit": EXACT_RELEASE,
+            "witness_started_at": "2999-01-01T00:00:00+00:00",
+            "witness_pid": 123,
+            "generation_id": generation,
+            "recorded_at": "2999-01-01T00:00:01+00:00",
+            "associated": {"job_id": "current-job"},
+            "error_type": "PublisherError",
+            "message": "current associated failure",
+            "draft_pr_publication_enabled": True,
+            "merge_enabled": False,
+            "main_write_enabled": False,
+        },
+    )
+    _write_state_json(
+        config,
+        "publisher-service-success.json",
+        {
+            "version": 1,
+            "service": "publisher",
+            "release_commit": EXACT_RELEASE,
+            "witness_started_at": "2999-01-01T00:00:00+00:00",
+            "witness_pid": 123,
+            "generation_id": generation,
+            "recorded_at": "2999-01-01T00:00:02+00:00",
+            "cycle_started_at": "2999-01-01T00:00:01.5+00:00",
+            "finished_at": "2999-01-01T00:00:02+00:00",
+            "result": "success",
+            "associated_jobs": ["current-job"],
+            "terminal_evidence": {"processed_jobs": ["current-job"]},
+        },
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "QUEUED"
+    publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
+    assert publisher["ok"] is True
+    assert publisher["superseded_by"] == "later_same_generation_service_success"
+
+
 def test_idle_revision_success_supersedes_unassociated_same_generation_marker(
     tmp_path: Path,
 ) -> None:
@@ -2877,7 +2929,7 @@ def _seed_failed_source_with_revision_ledger(
 def test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b(
     tmp_path: Path, case_name: str, ledger_factory: object
 ) -> None:
-    config, info = _seed_failed_source_with_revision_ledger(tmp_path / case_name, {})
+    config, info = _seed_failed_source_with_revision_ledger(tmp_path / "r", {})
     job_id = info["job_id"]
     _write_state_json(config, "revision-loop-seen.json", ledger_factory(job_id))
 

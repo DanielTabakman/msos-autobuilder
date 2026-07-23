@@ -639,7 +639,14 @@ def evaluate_service_error_marker(
 
     success = False
     success_error: str | None = None
-    if not (spec.service == "publisher" and job_id is not None):
+    publisher_associated = spec.service == "publisher" and job_id is not None
+    current_publisher_generation = (
+        publisher_associated
+        and current_generation is not None
+        and raw.get("release_commit") == current_release
+        and raw.get("generation_id") == current_generation
+    )
+    if not publisher_associated or current_publisher_generation:
         success, success_error = _success_supersedes(
             path=success_path,
             service=spec.service,

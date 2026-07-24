@@ -848,6 +848,7 @@ def _write_legacy_publisher_recovery_case(
     *,
     marker_overrides: dict[str, object] | None = None,
     ledger_overrides: dict[str, object] | None = None,
+    ledger_remove_keys: tuple[str, ...] = (),
     success_overrides: dict[str, object] | None = None,
     write_success: bool = True,
 ) -> Path:
@@ -892,6 +893,8 @@ def _write_legacy_publisher_recovery_case(
         "status": "published-draft",
     }
     ledger_entry.update(ledger_overrides or {})
+    for key in ledger_remove_keys:
+        ledger_entry.pop(key, None)
     _write_state_json(
         config,
         "controlled-publisher-seen.json",
@@ -920,13 +923,20 @@ def _write_legacy_publisher_recovery_case(
     return marker_path
 
 
+@pytest.mark.parametrize("missing_status", [False, True])
 def test_legacy_publisher_marker_without_published_at_superseded_by_current_success(
     tmp_path: Path,
+    missing_status: bool,
 ) -> None:
     config = _refill_config(tmp_path)
     _write_host_status(config)
-    marker_path = _write_legacy_publisher_recovery_case(config)
+    marker_path = _write_legacy_publisher_recovery_case(
+        config,
+        ledger_remove_keys=("status",) if missing_status else (),
+    )
+    ledger_path = config.build_next.host_root / "state" / "controlled-publisher-seen.json"
     before = marker_path.read_bytes()
+    ledger_before = ledger_path.read_bytes()
     before_sha = hashlib.sha256(before).hexdigest()
     keep_one_running(config)
 
@@ -934,6 +944,7 @@ def test_legacy_publisher_marker_without_published_at_superseded_by_current_succ
 
     assert report.status == "QUEUED"
     assert marker_path.read_bytes() == before
+    assert ledger_path.read_bytes() == ledger_before
     publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
     assert publisher["ok"] is True
     assert publisher["marker_sha256"] == before_sha
@@ -989,6 +1000,14 @@ def test_legacy_publisher_marker_without_published_at_superseded_by_current_succ
             "generation does not match",
         ),
         (
+            "wrong_success_release",
+            {},
+            {},
+            {"release_commit": "9" * 40},
+            True,
+            "release does not match",
+        ),
+        (
             "current_generation_marker",
             {
                 "release_commit": EXACT_RELEASE,
@@ -1019,12 +1038,52 @@ def test_legacy_publisher_marker_without_published_at_superseded_by_current_succ
             "branch",
         ),
         (
+            "pr_number_drift",
+            {},
+            {"pr_number": 5352},
+            {},
+            True,
+            "identity drifted: pr_number",
+        ),
+        (
             "gate_hash_drift",
             {},
             {"gate_report_sha256": "a" * 64},
             {},
             True,
             "identity drifted: gate_report_sha256",
+        ),
+        (
+            "null_status",
+            {},
+            {"status": None},
+            {},
+            True,
+            "status",
+        ),
+        (
+            "blank_status",
+            {},
+            {"status": ""},
+            {},
+            True,
+            "status",
+        ),
+        (
+            "incompatible_status",
+            {},
+            {"status": "published"},
+            {},
+            True,
+            "status",
+        ),
+        (
+            "non_string_status",
+            {},
+            {"status": 1},
+            {},
+            True,
+            "status",
         ),
         (
             "success_before_marker",

@@ -347,11 +347,12 @@ def _publisher_ledger_identity_is_coherent(
         "pr_number": lambda value: isinstance(value, int) and not isinstance(value, bool),
         "pr_url": lambda value: isinstance(value, str) and value.startswith("http"),
         "results_commit": _is_exact_sha,
-        "status": lambda value: value == "published-draft",
     }
     for key, validator in required.items():
         if not validator(entry.get(key)):
             return False, f"publisher ledger entry is missing or invalid: {key}"
+    if "status" in entry and entry.get("status") != "published-draft":
+        return False, "publisher ledger entry is missing or invalid: status"
     optional_equal = (
         "gate_report_sha256",
         "source_report_sha256",

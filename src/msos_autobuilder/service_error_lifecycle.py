@@ -334,6 +334,130 @@ def _publisher_terminal_after(
     return True, None
 
 
+def _publisher_ledger_identity_is_coherent(
+    entry: Mapping[str, Any],
+    *,
+    marker: Mapping[str, Any],
+) -> tuple[bool, str | None]:
+    required = {
+        "gate_report_sha256": _is_sha256,
+        "source_report_sha256": _is_sha256,
+        "branch": lambda value: isinstance(value, str) and value.startswith("autobuilder/"),
+        "commit_sha": _is_exact_sha,
+        "pr_number": lambda value: isinstance(value, int) and not isinstance(value, bool),
+        "pr_url": lambda value: isinstance(value, str) and value.startswith("http"),
+        "results_commit": _is_exact_sha,
+        "status": lambda value: value == "published-draft",
+    }
+    for key, validator in required.items():
+        if not validator(entry.get(key)):
+            return False, f"publisher ledger entry is missing or invalid: {key}"
+    optional_equal = (
+        "gate_report_sha256",
+        "source_report_sha256",
+        "branch",
+        "commit_sha",
+        "pr_number",
+        "pr_url",
+        "results_commit",
+    )
+    associated = marker.get("associated")
+    if isinstance(associated, dict):
+        for key in optional_equal:
+            if key in associated and associated.get(key) != entry.get(key):
+                return False, f"publisher ledger identity drifted: {key}"
+    if "pr_state" in entry and entry.get("pr_state") != "open":
+        return False, "publisher ledger PR state is incompatible"
+    if "draft" in entry and entry.get("draft") is not True:
+        return False, "publisher ledger PR draft state is incompatible"
+    return True, None
+
+
+def _string_collection_contains(
+    raw: Any,
+    *,
+    item: str,
+    label: str,
+) -> tuple[bool, str | None]:
+    if not isinstance(raw, list):
+        return False, f"{label} must be a list of non-empty strings"
+    if not raw or not all(isinstance(value, str) and value.strip() for value in raw):
+        return False, f"{label} must be a list of non-empty strings"
+    if item not in raw:
+        return False, f"{label} does not identify the associated job"
+    return True, None
+
+
+def _publisher_legacy_recovery_supersedes(
+    *,
+    ledger: Mapping[str, Any],
+    success_path: Path,
+    marker: Mapping[str, Any],
+    marker_recorded: datetime,
+    witness: Mapping[str, Any],
+    current_generation_id: str | None,
+    current_release: Any,
+    job_id: str,
+) -> tuple[bool, str | None]:
+    if current_generation_id is None:
+        return False, "current publisher generation cannot be derived"
+    marker_release = marker.get("release_commit")
+    marker_started = _parse_utc(marker.get("witness_started_at"))
+    marker_generation = marker.get("generation_id")
+    if marker_release is None or marker_started is None or marker_generation is None:
+        return False, "legacy publisher recovery requires complete historical generation metadata"
+    if marker_release == current_release:
+        return False, "current-generation publisher marker remains unresolved"
+    witness_started = _parse_utc(witness.get("started_at"))
+    if witness_started is None or marker_started >= witness_started:
+        return False, "historical publisher marker is not older than current generation"
+    entry = ledger.get(job_id)
+    if not isinstance(entry, dict):
+        return False, "publisher ledger lacks a matching job entry"
+    if entry.get("published_at") is not None:
+        return False, "publisher ledger should use explicit published_at ordering"
+    coherent, coherent_error = _publisher_ledger_identity_is_coherent(entry, marker=marker)
+    if not coherent:
+        return False, coherent_error
+
+    raw_success, success_error = _load_json_mapping(success_path, "service success")
+    if success_error:
+        return False, f"service success evidence is invalid: {success_error}"
+    if not raw_success:
+        return False, "publisher service success evidence is missing"
+    if raw_success.get("service") != "publisher":
+        return False, "service success evidence does not identify publisher"
+    if raw_success.get("result") != "success":
+        return False, "publisher service success evidence did not record success"
+    finished = _parse_utc(raw_success.get("finished_at"))
+    if finished is None:
+        return False, "publisher service success evidence lacks valid finished_at"
+    if finished <= marker_recorded:
+        return False, "publisher service success evidence is not later than marker"
+    if raw_success.get("release_commit") != current_release:
+        return False, "publisher service success release does not match current release"
+    if raw_success.get("generation_id") != current_generation_id:
+        return False, "publisher service success generation does not match current service"
+    associated_ok, associated_error = _string_collection_contains(
+        raw_success.get("associated_jobs"),
+        item=job_id,
+        label="publisher service success associated_jobs",
+    )
+    if not associated_ok:
+        return False, associated_error
+    terminal_evidence = raw_success.get("terminal_evidence")
+    if not isinstance(terminal_evidence, dict):
+        return False, "publisher service success terminal_evidence must be a mapping"
+    verified_ok, verified_error = _string_collection_contains(
+        terminal_evidence.get("verified_jobs"),
+        item=job_id,
+        label="publisher service success verified_jobs",
+    )
+    if not verified_ok:
+        return False, verified_error
+    return True, None
+
+
 def _gate_terminal_after(
     ledger: Mapping[str, Any],
     job_id: str,
@@ -513,14 +637,24 @@ def evaluate_service_error_marker(
     if job_id is not None:
         evidence["associated_job_id"] = job_id
 
-    success, success_error = _success_supersedes(
-        path=success_path,
-        service=spec.service,
-        marker_recorded=recorded,
-        current_generation_id=current_generation,
-        current_release=current_release,
-        job_id=job_id,
+    success = False
+    success_error: str | None = None
+    publisher_associated = spec.service == "publisher" and job_id is not None
+    current_publisher_generation = (
+        publisher_associated
+        and current_generation is not None
+        and raw.get("release_commit") == current_release
+        and raw.get("generation_id") == current_generation
     )
+    if not publisher_associated or current_publisher_generation:
+        success, success_error = _success_supersedes(
+            path=success_path,
+            service=spec.service,
+            marker_recorded=recorded,
+            current_generation_id=current_generation,
+            current_release=current_release,
+            job_id=job_id,
+        )
     if success:
         evidence.update(
             {
@@ -553,6 +687,32 @@ def evaluate_service_error_marker(
                     "preserved": True,
                 }
             )
+            return evidence
+        if (
+            spec.service == "publisher"
+            and terminal_error == "publisher ledger entry lacks explicit published_at ordering"
+        ):
+            legacy, legacy_error = _publisher_legacy_recovery_supersedes(
+                ledger=ledger,
+                success_path=success_path,
+                marker=raw,
+                marker_recorded=recorded,
+                witness=witness,
+                current_generation_id=current_generation,
+                current_release=current_release,
+                job_id=job_id,
+            )
+            if legacy:
+                evidence.update(
+                    {
+                        "ok": True,
+                        "state": "superseded",
+                        "superseded_by": "legacy_publisher_success_and_coherent_publication",
+                        "preserved": True,
+                    }
+                )
+                return evidence
+            evidence["error"] = legacy_error or terminal_error
             return evidence
         evidence["error"] = terminal_error or "associated job has no terminal evidence"
         return evidence

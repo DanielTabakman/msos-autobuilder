@@ -516,6 +516,58 @@ def test_current_generation_error_followed_by_same_generation_success_is_superse
     assert publisher["superseded_by"] == "later_same_generation_service_success"
 
 
+def test_current_generation_associated_publisher_error_uses_same_generation_success(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    generation = _generation_id()
+    _write_error_marker(
+        config,
+        "controlled-publisher-error.json",
+        {
+            "service": "publisher",
+            "release_commit": EXACT_RELEASE,
+            "witness_started_at": "2999-01-01T00:00:00+00:00",
+            "witness_pid": 123,
+            "generation_id": generation,
+            "recorded_at": "2999-01-01T00:00:01+00:00",
+            "associated": {"job_id": "current-job"},
+            "error_type": "PublisherError",
+            "message": "current associated failure",
+            "draft_pr_publication_enabled": True,
+            "merge_enabled": False,
+            "main_write_enabled": False,
+        },
+    )
+    _write_state_json(
+        config,
+        "publisher-service-success.json",
+        {
+            "version": 1,
+            "service": "publisher",
+            "release_commit": EXACT_RELEASE,
+            "witness_started_at": "2999-01-01T00:00:00+00:00",
+            "witness_pid": 123,
+            "generation_id": generation,
+            "recorded_at": "2999-01-01T00:00:02+00:00",
+            "cycle_started_at": "2999-01-01T00:00:01.5+00:00",
+            "finished_at": "2999-01-01T00:00:02+00:00",
+            "result": "success",
+            "associated_jobs": ["current-job"],
+            "terminal_evidence": {"processed_jobs": ["current-job"]},
+        },
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "QUEUED"
+    publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
+    assert publisher["ok"] is True
+    assert publisher["superseded_by"] == "later_same_generation_service_success"
+
+
 def test_idle_revision_success_supersedes_unassociated_same_generation_marker(
     tmp_path: Path,
 ) -> None:
@@ -789,6 +841,343 @@ def test_restart_with_proven_later_terminal_disposition_is_nonblocking(tmp_path:
     publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
     assert publisher["ok"] is True
     assert publisher["superseded_by"] == "later_authoritative_terminal_job_evidence"
+
+
+def _write_legacy_publisher_recovery_case(
+    config: RefillConfig,
+    *,
+    marker_overrides: dict[str, object] | None = None,
+    ledger_overrides: dict[str, object] | None = None,
+    success_overrides: dict[str, object] | None = None,
+    write_success: bool = True,
+) -> Path:
+    old_release = "6" * 40
+    old_started = "2026-07-21T09:57:31.000000+00:00"
+    old_pid = 321
+    marker = {
+        "service": "publisher",
+        "release_commit": old_release,
+        "witness_started_at": old_started,
+        "witness_pid": old_pid,
+        "generation_id": _generation_id(
+            release_commit=old_release,
+            started_at=old_started,
+            pid=old_pid,
+        ),
+        "recorded_at": "2026-07-21T09:58:31.613177+00:00",
+        "associated": {
+            "job_id": "ppe-frozen-evaluation-contract-v1-revision-1",
+            "repository": SOURCE_REPO,
+            "branch": "autobuilder/ppe-frozen-evaluation-contract-v1-revision-1",
+            "commit_sha": "4" * 40,
+            "pr_number": 5351,
+            "gate_report_sha256": "d" * 64,
+        },
+        "error_type": "PublisherError",
+        "message": "GitHub fetch failed: Empty reply from server",
+        "draft_pr_publication_enabled": True,
+        "merge_enabled": False,
+        "main_write_enabled": False,
+    }
+    marker.update(marker_overrides or {})
+    marker_path = _write_error_marker(config, "controlled-publisher-error.json", marker)
+    ledger_entry = {
+        "gate_report_sha256": "d" * 64,
+        "source_report_sha256": "e" * 64,
+        "branch": "autobuilder/ppe-frozen-evaluation-contract-v1-revision-1",
+        "commit_sha": "4" * 40,
+        "pr_number": 5351,
+        "pr_url": "https://example.invalid/pull/5351",
+        "results_commit": "5" * 40,
+        "status": "published-draft",
+    }
+    ledger_entry.update(ledger_overrides or {})
+    _write_state_json(
+        config,
+        "controlled-publisher-seen.json",
+        {"ppe-frozen-evaluation-contract-v1-revision-1": ledger_entry},
+    )
+    if write_success:
+        success = {
+            "version": 1,
+            "service": "publisher",
+            "release_commit": EXACT_RELEASE,
+            "witness_started_at": "2999-01-01T00:00:00+00:00",
+            "witness_pid": 123,
+            "generation_id": _generation_id(),
+            "recorded_at": "2999-01-01T00:00:02+00:00",
+            "cycle_started_at": "2999-01-01T00:00:01+00:00",
+            "finished_at": "2999-01-01T00:00:02+00:00",
+            "result": "success",
+            "associated_jobs": ["ppe-frozen-evaluation-contract-v1-revision-1"],
+            "terminal_evidence": {
+                "processed_jobs": [],
+                "verified_jobs": ["ppe-frozen-evaluation-contract-v1-revision-1"],
+            },
+        }
+        success.update(success_overrides or {})
+        _write_state_json(config, "publisher-service-success.json", success)
+    return marker_path
+
+
+def test_legacy_publisher_marker_without_published_at_superseded_by_current_success(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    marker_path = _write_legacy_publisher_recovery_case(config)
+    before = marker_path.read_bytes()
+    before_sha = hashlib.sha256(before).hexdigest()
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "QUEUED"
+    assert marker_path.read_bytes() == before
+    publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
+    assert publisher["ok"] is True
+    assert publisher["marker_sha256"] == before_sha
+    assert publisher["superseded_by"] == "legacy_publisher_success_and_coherent_publication"
+
+
+@pytest.mark.parametrize(
+    "case_name,marker_overrides,ledger_overrides,success_overrides,write_success,error_text",
+    [
+        ("no_later_success", {}, {}, {}, False, "success evidence is missing"),
+        (
+            "success_without_job_lists",
+            {},
+            {},
+            {"associated_jobs": [], "terminal_evidence": {"processed_jobs": []}},
+            True,
+            "associated_jobs must be a list of non-empty strings",
+        ),
+        (
+            "processed_without_verified",
+            {},
+            {},
+            {
+                "associated_jobs": ["ppe-frozen-evaluation-contract-v1-revision-1"],
+                "terminal_evidence": {
+                    "processed_jobs": ["ppe-frozen-evaluation-contract-v1-revision-1"],
+                    "verified_jobs": [],
+                },
+            },
+            True,
+            "verified_jobs must be a list of non-empty strings",
+        ),
+        (
+            "verified_without_associated",
+            {},
+            {},
+            {
+                "associated_jobs": ["other-job"],
+                "terminal_evidence": {
+                    "processed_jobs": [],
+                    "verified_jobs": ["ppe-frozen-evaluation-contract-v1-revision-1"],
+                },
+            },
+            True,
+            "associated_jobs does not identify",
+        ),
+        (
+            "wrong_success_generation",
+            {},
+            {},
+            {"generation_id": "9" * 64},
+            True,
+            "generation does not match",
+        ),
+        (
+            "current_generation_marker",
+            {
+                "release_commit": EXACT_RELEASE,
+                "witness_started_at": "2999-01-01T00:00:00+00:00",
+                "witness_pid": 123,
+                "generation_id": _generation_id(),
+                "recorded_at": "2999-01-01T00:00:03+00:00",
+            },
+            {},
+            {},
+            True,
+            "current-generation",
+        ),
+        (
+            "malformed_marker_generation",
+            {"generation_id": "not-a-generation"},
+            {},
+            {},
+            True,
+            "generation_id is malformed",
+        ),
+        (
+            "branch_drift",
+            {},
+            {"branch": "manual/ppe-frozen-evaluation-contract-v1-revision-1"},
+            {},
+            True,
+            "branch",
+        ),
+        (
+            "gate_hash_drift",
+            {},
+            {"gate_report_sha256": "a" * 64},
+            {},
+            True,
+            "identity drifted: gate_report_sha256",
+        ),
+        (
+            "success_before_marker",
+            {},
+            {},
+            {
+                "finished_at": "2026-07-21T09:58:31.000000+00:00",
+                "recorded_at": "2026-07-21T09:58:31.000000+00:00",
+            },
+            True,
+            "not later than marker",
+        ),
+    ],
+)
+def test_legacy_publisher_marker_recovery_fails_closed_for_incoherent_evidence(
+    tmp_path: Path,
+    case_name: str,
+    marker_overrides: dict[str, object],
+    ledger_overrides: dict[str, object],
+    success_overrides: dict[str, object],
+    write_success: bool,
+    error_text: str,
+) -> None:
+    config = _refill_config(tmp_path / case_name)
+    _write_host_status(config)
+    _write_legacy_publisher_recovery_case(
+        config,
+        marker_overrides=marker_overrides,
+        ledger_overrides=ledger_overrides,
+        success_overrides=success_overrides,
+        write_success=write_success,
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
+    assert publisher["ok"] is False
+    assert error_text in publisher["error"]
+
+
+def test_legacy_publisher_marker_recovery_requires_current_generation_id(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    supervisor = config.build_next.host_root.parent / ".msos-autobuilder-supervisor"
+    witness = supervisor / "state" / "service-witnesses" / "publisher.json"
+    payload = json.loads(witness.read_text(encoding="utf-8"))
+    payload.pop("child_pid")
+    witness.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    _write_legacy_publisher_recovery_case(
+        config,
+        success_overrides={"generation_id": None},
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
+    assert publisher["ok"] is False
+    assert "generation cannot be derived" in publisher["error"]
+
+
+@pytest.mark.parametrize(
+    "marker_name,ledger_name,service,ledger_entry,error_text",
+    [
+        (
+            "candidate-gate-error.json",
+            "candidate-gate-seen.json",
+            "gate",
+            {
+                "source_report_sha256": "2" * 64,
+                "results_commit": "1" * 40,
+                "status": "passed",
+            },
+            "processed_at",
+        ),
+        (
+            "revision-loop-error.json",
+            "revision-loop-seen.json",
+            "revision",
+            {
+                "gate_report_sha256": "3" * 64,
+                "revision_job_id": "legacy-associated-job",
+                "jobs_commit": "4" * 40,
+            },
+            "queued_at",
+        ),
+    ],
+)
+def test_legacy_publisher_rule_does_not_apply_to_gate_or_revision_markers(
+    tmp_path: Path,
+    marker_name: str,
+    ledger_name: str,
+    service: str,
+    ledger_entry: dict[str, object],
+    error_text: str,
+) -> None:
+    config = _refill_config(tmp_path / service)
+    _write_host_status(config)
+    old_release = "6" * 40
+    old_started = "2026-07-21T09:57:31.000000+00:00"
+    _write_error_marker(
+        config,
+        marker_name,
+        {
+            "service": service,
+            "release_commit": old_release,
+            "witness_started_at": old_started,
+            "witness_pid": 321,
+            "generation_id": _generation_id(
+                release_commit=old_release,
+                started_at=old_started,
+                pid=321,
+            ),
+            "recorded_at": "2026-07-21T09:58:31.613177+00:00",
+            "associated": {"job_id": "legacy-associated-job"},
+            "error_type": "ServiceError",
+            "message": "legacy associated marker",
+            "publication_enabled": False,
+        },
+    )
+    _write_state_json(config, ledger_name, {"legacy-associated-job": ledger_entry})
+    _write_state_json(
+        config,
+        f"{service}-service-success.json",
+        {
+            "version": 1,
+            "service": service,
+            "release_commit": EXACT_RELEASE,
+            "witness_started_at": "2999-01-01T00:00:00+00:00",
+            "witness_pid": 123,
+            "generation_id": _generation_id(),
+            "recorded_at": "2999-01-01T00:00:02+00:00",
+            "cycle_started_at": "2999-01-01T00:00:01+00:00",
+            "finished_at": "2999-01-01T00:00:02+00:00",
+            "result": "success",
+            "associated_jobs": [],
+        },
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    marker = report.decision_evidence["health"]["checks"]["service_error_markers"]["services"][
+        service
+    ]
+    assert marker["ok"] is False
+    assert error_text in marker["error"]
 
 
 def test_ledger_entry_before_marker_cannot_supersede(tmp_path: Path) -> None:
@@ -2540,7 +2929,7 @@ def _seed_failed_source_with_revision_ledger(
 def test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b(
     tmp_path: Path, case_name: str, ledger_factory: object
 ) -> None:
-    config, info = _seed_failed_source_with_revision_ledger(tmp_path / case_name, {})
+    config, info = _seed_failed_source_with_revision_ledger(tmp_path / "r", {})
     job_id = info["job_id"]
     _write_state_json(config, "revision-loop-seen.json", ledger_factory(job_id))
 
@@ -2601,7 +2990,7 @@ def test_malformed_targeted_revision_descendant_blocks_without_dispatching_b(
     tmp_path: Path, case_name: str, descendant_factory: object
 ) -> None:
     revision_id = "revision-a"
-    config, info = _seed_failed_source_with_revision_ledger(tmp_path / case_name, {})
+    config, info = _seed_failed_source_with_revision_ledger(tmp_path / "r", {})
     job_id = info["job_id"]
     _write_state_json(
         config,

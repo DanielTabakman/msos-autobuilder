@@ -55,6 +55,11 @@ def stable_contract_sha256(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(_canonical_json(stable).encode("utf-8")).hexdigest()
 
 
+def canonical_dependency_source_sha256(raw_bytes: bytes) -> str:
+    canonical = raw_bytes.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def _safe_relative(value: Any, label: str) -> str:
     text = str(value or "").strip().replace("\\", "/")
     parts = tuple(part for part in text.split("/") if part)

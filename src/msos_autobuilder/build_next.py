@@ -26,7 +26,10 @@ import yaml
 
 from .codex_shadow import load_codex_host_config
 from .persistent_host import HostPaths, load_persistent_host_config, parse_host_job
-from .validation_contract import build_ppe_validation_contract
+from .validation_contract import (
+    build_ppe_validation_contract,
+    canonical_dependency_source_sha256,
+)
 
 
 class BuildNextError(RuntimeError):
@@ -1333,7 +1336,9 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             evidence_identity=evidence_identity,
             prerequisite_evidence=prerequisite_evidence,
             requested_by=config.requested_by,
-            dependency_source_sha256=_sha256_file(requirements_path),
+            dependency_source_sha256=canonical_dependency_source_sha256(
+                requirements_path.read_bytes()
+            ),
             refill_attempt=refill_attempt,
         )
         submission = _submit_feed_job(config, job)

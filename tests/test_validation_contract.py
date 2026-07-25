@@ -7,6 +7,7 @@ import pytest
 from msos_autobuilder.validation_contract import (
     ValidationContractError,
     build_ppe_validation_contract,
+    canonical_dependency_source_sha256,
     load_validation_contract,
     stable_contract_sha256,
 )
@@ -31,6 +32,27 @@ def _contract() -> dict:
 def _rehash(contract: dict) -> dict:
     contract["contract_sha256"] = stable_contract_sha256(contract)
     return contract
+
+
+def test_canonical_dependency_source_hash_matches_lf_crlf_and_crlf() -> None:
+    lf = b"pytest==8.2.0\nruff==0.5.0\n"
+    crlf = b"pytest==8.2.0\r\nruff==0.5.0\r\n"
+
+    assert canonical_dependency_source_sha256(lf) == canonical_dependency_source_sha256(crlf)
+    assert canonical_dependency_source_sha256(crlf) == canonical_dependency_source_sha256(crlf)
+
+
+def test_canonical_dependency_source_hash_handles_lone_cr() -> None:
+    expected = hashlib.sha256(b"pytest==8.2.0\nruff==0.5.0\n").hexdigest()
+
+    assert canonical_dependency_source_sha256(b"pytest==8.2.0\rruff==0.5.0\r") == expected
+
+
+def test_canonical_dependency_source_hash_changes_on_content_drift() -> None:
+    baseline = canonical_dependency_source_sha256(b"pytest==8.2.0\n")
+    drifted = canonical_dependency_source_sha256(b"pytest==8.2.1\n")
+
+    assert baseline != drifted
 
 
 def test_validation_contract_parses_required_fields() -> None:

@@ -29,6 +29,7 @@ import yaml
 from .service_error_lifecycle import record_service_cycle_success, write_service_error_marker
 from .validation_contract import (
     ValidationContractError,
+    canonical_dependency_source_sha256,
     load_validation_contract,
 )
 
@@ -623,7 +624,7 @@ class CandidateGate:
         if not dependency_source.is_file():
             raise CandidateGateError(f"dependency source is missing: {rel.as_posix()}")
         expected = str(policy.get("dependency_source_sha256") or "")
-        actual = _sha256_file(dependency_source)
+        actual = canonical_dependency_source_sha256(dependency_source.read_bytes())
         if actual != expected:
             raise CandidateGateError("dependency source SHA-256 does not match contract")
 

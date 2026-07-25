@@ -11,12 +11,15 @@ import pytest
 import yaml
 
 from msos_autobuilder.candidate_gate import (
+    CandidateEnvironment,
     CandidateGate,
     CandidateGateError,
+    GateCheck,
     load_candidate_gate_config,
 )
 from msos_autobuilder.validation_contract import (
     build_ppe_validation_contract,
+    canonical_dependency_source_sha256,
     stable_contract_sha256,
 )
 
@@ -97,6 +100,18 @@ def _init_repo(path: Path) -> Path:
 def _candidate_patch(source: Path) -> tuple[str, tuple[str, ...]]:
     (source / "app.txt").write_bytes(b"candidate\n")
     (source / "new.txt").write_bytes(b"new\n")
+    _git(source, "add", "-N", "new.txt")
+    patch = _git(source, "diff", "--binary", "HEAD") + "\n"
+    changed = tuple(sorted(_git(source, "diff", "--name-only", "HEAD").splitlines()))
+    _git(source, "reset", "--hard", "HEAD")
+    _git(source, "clean", "-fd")
+    return patch, changed
+
+
+def _candidate_patch_with_dependency_drift(source: Path) -> tuple[str, tuple[str, ...]]:
+    (source / "app.txt").write_bytes(b"candidate\n")
+    (source / "new.txt").write_bytes(b"new\n")
+    (source / "requirements.txt").write_bytes(b"# changed fixture requirements\n")
     _git(source, "add", "-N", "new.txt")
     patch = _git(source, "diff", "--binary", "HEAD") + "\n"
     changed = tuple(sorted(_git(source, "diff", "--name-only", "HEAD").splitlines()))
@@ -333,6 +348,45 @@ def _read_gate_report(root: Path, remote: Path, job_id: str = "job-1") -> dict:
     return json.loads(report_path.read_text(encoding="utf-8"))
 
 
+def _stub_candidate_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = tmp_path / "stub-env"
+    scripts = env / ("Scripts" if sys.platform == "win32" else "bin")
+    support = env / "support"
+    scripts.mkdir(parents=True)
+    support.mkdir()
+    python = scripts / ("python.exe" if sys.platform == "win32" else "python")
+    python.write_text("", encoding="utf-8")
+
+    def fake_create_environment(self: CandidateGate, candidate: Path) -> CandidateEnvironment:
+        return CandidateEnvironment(path=env, python=python, scripts=scripts, support=support)
+
+    def fake_run_check(
+        candidate: Path,
+        check: GateCheck,
+        *,
+        candidate_env: CandidateEnvironment | None = None,
+    ) -> dict:
+        return {
+            "name": check.name,
+            "argv": list(check.argv),
+            "cwd": check.cwd,
+            "required": check.required,
+            "phase": check.phase,
+            "passed": True,
+            "skipped": False,
+            "returncode": 0,
+            "timed_out": False,
+            "stdout": "",
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(CandidateGate, "_create_candidate_environment", fake_create_environment)
+    monkeypatch.setattr("msos_autobuilder.candidate_gate.run_check", fake_run_check)
+
+
 def _edit_results_remote(root: Path, remote: Path, edit) -> None:
     checkout = root / "edit"
     if checkout.exists():
@@ -535,6 +589,86 @@ def test_candidate_gate_discovers_generic_build_next_contract(tmp_path: Path) ->
     assert report["candidate_environment_removed"] is True
     assert all(check["required"] is True for check in [*report["bootstrap"], *report["checks"]])
     assert _pip_freeze() == packages_before
+
+
+def test_generic_dependency_hash_accepts_crlf_contract_for_lf_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_candidate_environment(tmp_path, monkeypatch)
+    source = _init_repo(tmp_path / "source")
+    source_head = _git(source, "rev-parse", "HEAD")
+    patch, changed_paths = _candidate_patch(source)
+    job_id = "build-next-ppe-fixture-work-Fixture-Slice002-abcdef123456"
+    contract = _generic_contract(
+        job_id=job_id,
+        source_head=source_head,
+        changed_paths=changed_paths,
+    )
+    contract["dependency_policy"][
+        "dependency_source_sha256"
+    ] = canonical_dependency_source_sha256(b"# fixture requirements\r\n")
+    contract["contract_sha256"] = stable_contract_sha256(contract)
+    remote = _results_remote(
+        tmp_path,
+        source_head=source_head,
+        patch=patch,
+        changed_paths=changed_paths,
+        job_id=job_id,
+        job_yaml=_generic_job_yaml(job_id, source_head, changed_paths, contract),
+    )
+    config_path = _write_generic_config(
+        tmp_path,
+        host_root=tmp_path / "host",
+        source=source,
+        remote=remote,
+    )
+
+    assert CandidateGate(load_candidate_gate_config(config_path)).run_once() == (job_id,)
+    report = _read_gate_report(tmp_path, remote, job_id=job_id)
+    assert report["status"] == "passed"
+    assert report["errors"] == []
+
+
+def test_generic_dependency_hash_rejects_candidate_dependency_content_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_candidate_environment(tmp_path, monkeypatch)
+    source = _init_repo(tmp_path / "source")
+    source_head = _git(source, "rev-parse", "HEAD")
+    patch, changed_paths = _candidate_patch_with_dependency_drift(source)
+    job_id = "build-next-ppe-fixture-work-Fixture-Slice002-abcdef123456"
+    contract = _generic_contract(
+        job_id=job_id,
+        source_head=source_head,
+        changed_paths=changed_paths,
+    )
+    contract["dependency_policy"][
+        "dependency_source_sha256"
+    ] = canonical_dependency_source_sha256(b"# fixture requirements\n")
+    contract["contract_sha256"] = stable_contract_sha256(contract)
+    remote = _results_remote(
+        tmp_path,
+        source_head=source_head,
+        patch=patch,
+        changed_paths=changed_paths,
+        job_id=job_id,
+        job_yaml=_generic_job_yaml(job_id, source_head, changed_paths, contract),
+    )
+    config_path = _write_generic_config(
+        tmp_path,
+        host_root=tmp_path / "host",
+        source=source,
+        remote=remote,
+    )
+
+    assert CandidateGate(load_candidate_gate_config(config_path)).run_once() == (job_id,)
+    report = _read_gate_report(tmp_path, remote, job_id=job_id)
+    assert report["status"] == "failed"
+    assert "dependency source SHA-256" in report["errors"][0]["message"]
+    assert report["bootstrap"] == []
+    assert report["checks"] == []
 
 
 def test_candidate_gate_report_publication_failure_records_job_identity(
@@ -790,9 +924,9 @@ def test_failed_dependency_bootstrap_cannot_pass(tmp_path: Path) -> None:
         source_head=source_head,
         changed_paths=changed_paths,
     )
-    contract["dependency_policy"]["dependency_source_sha256"] = hashlib.sha256(
-        (source / "requirements.txt").read_bytes()
-    ).hexdigest()
+    contract["dependency_policy"][
+        "dependency_source_sha256"
+    ] = canonical_dependency_source_sha256((source / "requirements.txt").read_bytes())
     contract["contract_sha256"] = stable_contract_sha256(contract)
     remote = _results_remote(
         tmp_path,

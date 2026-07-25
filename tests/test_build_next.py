@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import subprocess
@@ -20,7 +19,10 @@ from msos_autobuilder.build_next import (
     _select_native_slice,
     build_next,
 )
-from msos_autobuilder.validation_contract import stable_contract_sha256
+from msos_autobuilder.validation_contract import (
+    canonical_dependency_source_sha256,
+    stable_contract_sha256,
+)
 
 SOURCE_REPO = "DanielTabakman/Probability-prediction-engine"
 
@@ -364,6 +366,9 @@ def _config(
 
 def test_build_next_submits_exactly_one_selected_item(tmp_path: Path) -> None:
     ppe = _write_ppe(tmp_path / "ppe")
+    (ppe / "requirements.txt").write_bytes(b"# PPE fixture requirements\r\n")
+    _commit_all(ppe, "crlf requirements")
+    _git(ppe, "push", "-q", "origin", "main")
     feed = _feed_repo(tmp_path / "feed-work")
 
     receipt = build_next(_config(tmp_path, ppe, feed))
@@ -400,9 +405,9 @@ def test_build_next_submits_exactly_one_selected_item(tmp_path: Path) -> None:
     assert validation["allowed_changed_paths"] == ["src/viz/panel.py", "tests/test_panel.py"]
     assert validation["dependency_policy"]["profile_id"] == "ppe-ci-pytest-v1"
     assert validation["dependency_policy"]["dependency_source_path"] == "requirements.txt"
-    assert validation["dependency_policy"]["dependency_source_sha256"] == hashlib.sha256(
-        b"# PPE fixture requirements\n"
-    ).hexdigest()
+    assert validation["dependency_policy"][
+        "dependency_source_sha256"
+    ] == canonical_dependency_source_sha256(b"# PPE fixture requirements\n")
     assert [step["name"] for step in validation["bootstrap"]] == [
         "upgrade-pip",
         "install-requirements",

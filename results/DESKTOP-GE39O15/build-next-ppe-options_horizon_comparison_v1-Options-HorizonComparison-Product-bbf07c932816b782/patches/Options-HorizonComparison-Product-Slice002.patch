@@ -1,0 +1,754 @@
+diff --git a/apps/msos-web/src/components/OptionsHorizonClient.tsx b/apps/msos-web/src/components/OptionsHorizonClient.tsx
+index 18a68a49..b3b6d585 100644
+--- a/apps/msos-web/src/components/OptionsHorizonClient.tsx
++++ b/apps/msos-web/src/components/OptionsHorizonClient.tsx
+@@ -2,16 +2,21 @@
+ 
+ import Link from "next/link";
+ import type { ChangeEvent } from "react";
+-import { useCallback, useEffect, useState } from "react";
++import { useCallback, useEffect, useMemo, useState } from "react";
+ 
+ import { LabeledDistributionChart } from "@/components/LabeledDistributionChart";
+ import { OptionsHorizonChart } from "@/components/OptionsHorizonChart";
++import { OptionsHorizonComparisonPanel } from "@/components/OptionsHorizonComparisonPanel";
+ import {
+   fetchHorizonChartPayload,
+   fetchHorizonRegionPreview,
+   strategyLabDeepLink,
+   type HorizonChartPayload,
+ } from "@/lib/horizonChartPayload";
++import {
++  buildOptionsHorizonComparison,
++  type OptionsHorizonComparisonPayload,
++} from "@/lib/optionsHorizonComparison";
+ import {
+   fetchHorizonRegion,
+   newRegionId,
+@@ -31,6 +36,8 @@ export function OptionsHorizonClient({ initialPayload }: OptionsHorizonClientPro
+   const [payload, setPayload] = useState<HorizonChartPayload | null>(initialPayload);
+   const [region, setRegion] = useState<HorizonRegionIntent | null>(null);
+   const [preview, setPreview] = useState<string | null>(null);
++  const [comparison, setComparison] = useState<OptionsHorizonComparisonPayload | null>(null);
++  const [comparisonLoading, setComparisonLoading] = useState(false);
+   const [loading, setLoading] = useState(!initialPayload);
+   const [expiryLoading, setExpiryLoading] = useState(false);
+ 
+@@ -92,11 +99,43 @@ export function OptionsHorizonClient({ initialPayload }: OptionsHorizonClientPro
+     [payload],
+   );
+ 
+-  const expiryOptions =
+-    payload?.forward.curve.map((pt) => ({
+-      expiryDate: pt.expiry_date,
+-      expiryTs: expiryTsFromUtc(pt.expiry_utc),
+-    })) ?? [];
++  const expiryOptions = useMemo(
++    () =>
++      payload?.forward.curve.map((pt) => ({
++        expiryDate: pt.expiry_date,
++        expiryTs: expiryTsFromUtc(pt.expiry_utc),
++      })) ?? [],
++    [payload],
++  );
++
++  const expiryOptionKey = expiryOptions.map((option) => option.expiryTs).join(",");
++
++  useEffect(() => {
++    if (!payload || !expiryOptions.length) {
++      setComparison(null);
++      setComparisonLoading(false);
++      return;
++    }
++    let active = true;
++    void (async () => {
++      setComparisonLoading(true);
++      const impliedEntries = await Promise.all(
++        expiryOptions.map(async (option) => {
++          if (payload.implied?.expiry_ts === option.expiryTs) {
++            return [option.expiryTs, payload.implied] as const;
++          }
++          const expiryPayload = await fetchHorizonChartPayload({ expiryTs: option.expiryTs });
++          return [option.expiryTs, expiryPayload?.implied ?? null] as const;
++        }),
++      );
++      if (!active) return;
++      setComparison(buildOptionsHorizonComparison(payload, Object.fromEntries(impliedEntries)));
++      setComparisonLoading(false);
++    })();
++    return () => {
++      active = false;
++    };
++  }, [payload, expiryOptions, expiryOptionKey]);
+ 
+   const selectedExpiryTs = payload?.implied?.expiry_ts ?? expiryOptions[0]?.expiryTs ?? "";
+   const impliedChartLayout = { width: 360, height: 260, padLeft: 54, padRight: 14, padTop: 14, padBottom: 38 };
+@@ -215,6 +254,8 @@ export function OptionsHorizonClient({ initialPayload }: OptionsHorizonClientPro
+         </aside>
+       </div>
+ 
++      <OptionsHorizonComparisonPanel comparison={comparison} loading={comparisonLoading} />
++
+       {preview ? (
+         <div className="panel-sub options-horizon-preview" role="status">
+           <strong>Thesis region</strong>
+diff --git a/apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx b/apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx
+new file mode 100644
+index 00000000..15ec1561
+--- /dev/null
++++ b/apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx
+@@ -0,0 +1,69 @@
++import type { OptionsHorizonComparisonPayload } from "@/lib/optionsHorizonComparison";
++
++type OptionsHorizonComparisonPanelProps = {
++  comparison: OptionsHorizonComparisonPayload | null;
++  loading?: boolean;
++};
++
++function money(value: number | null): string {
++  if (value === null) return "Unavailable";
++  return `$${value.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
++}
++
++function iv(value: number | null): string {
++  if (value === null) return "Unavailable";
++  return `${(value * 100).toFixed(1)}%`;
++}
++
++export function OptionsHorizonComparisonPanel({
++  comparison,
++  loading = false,
++}: OptionsHorizonComparisonPanelProps) {
++  return (
++    <section className="options-horizon-panel" aria-label="Expiry window comparison">
++      <div>
++        <p className="eyebrow">Horizon comparison</p>
++        <h2>Listed expiry windows</h2>
++      </div>
++      {loading ? <p className="micro">Loading comparison rows.</p> : null}
++      {!loading && comparison?.rows.length ? (
++        <div className="table-scroll">
++          <table className="data-table">
++            <thead>
++              <tr>
++                <th>Target</th>
++                <th>Expiry</th>
++                <th>Days</th>
++                <th>Forward</th>
++                <th>ATM IV</th>
++                <th>1 sigma</th>
++                <th>Context</th>
++                <th>Flags</th>
++              </tr>
++            </thead>
++            <tbody>
++              {comparison.rows.map((row) => (
++                <tr key={row.expiry_ts}>
++                  <td>{row.target_bucket_label}</td>
++                  <td>{row.expiry_date}</td>
++                  <td>{row.days_out}</td>
++                  <td>{money(row.forward_usd)}</td>
++                  <td>{iv(row.atm_iv_annual)}</td>
++                  <td>{money(row.one_sigma_move_usd)}</td>
++                  <td>{row.time_decay_language}</td>
++                  <td>{row.data_flags.length ? row.data_flags.join(", ") : "none"}</td>
++                </tr>
++              ))}
++            </tbody>
++          </table>
++        </div>
++      ) : null}
++      {!loading && !comparison?.rows.length ? (
++        <p className="micro">No listed future expiries are available for comparison.</p>
++      ) : null}
++      <p className="micro">
++        Educational only; this table compares time windows and is not a recommendation, ranking, order ticket, or execution surface.
++      </p>
++    </section>
++  );
++}
+diff --git a/apps/msos-web/src/lib/optionsHorizonComparison.ts b/apps/msos-web/src/lib/optionsHorizonComparison.ts
+new file mode 100644
+index 00000000..8f085e98
+--- /dev/null
++++ b/apps/msos-web/src/lib/optionsHorizonComparison.ts
+@@ -0,0 +1,127 @@
++import type { HorizonChartPayload } from "@/lib/horizonChartPayload";
++
++export const HORIZON_COMPARISON_TARGETS_DAYS = [30, 60, 90, 180, 365] as const;
++
++export type OptionsHorizonComparisonRow = {
++  target_bucket_days: number;
++  target_bucket_label: string;
++  expiry_ts: number;
++  expiry_date: string;
++  days_out: number;
++  forward_usd: number | null;
++  atm_iv_annual: number | null;
++  one_sigma_move_usd: number | null;
++  time_decay_language: string;
++  data_flags: string[];
++};
++
++export type OptionsHorizonComparisonPayload = {
++  schema_version: number;
++  kind: "options_horizon_comparison";
++  as_of_utc: string;
++  target_buckets_days: number[];
++  rows: OptionsHorizonComparisonRow[];
++  limitations: string[];
++  meta: {
++    read_only: boolean;
++    simulation_only: boolean;
++    no_advice: boolean;
++  };
++};
++
++function expiryMs(expiryUtc: string): number {
++  const parsed = new Date(expiryUtc).getTime();
++  return Number.isFinite(parsed) ? parsed : 0;
++}
++
++function daysOut(asOfUtc: string, expiryUtc: string): number {
++  const deltaMs = expiryMs(expiryUtc) - new Date(asOfUtc).getTime();
++  return Math.max(0, Math.round(deltaMs / 86_400_000));
++}
++
++function labelForTarget(days: number): string {
++  if (days < 60) return "about 30 days";
++  if (days < 90) return "about 60 days";
++  if (days < 180) return "about 90 days";
++  if (days < 365) return "about 180 days";
++  return "about 365 days";
++}
++
++function timeDecayLanguage(days: number): string {
++  if (days <= 45) return "Short window: time decay is more visible and thesis timing matters more.";
++  if (days <= 75) return "Near-term window: time decay is meaningful but there is more room than the front month.";
++  if (days <= 120) return "Quarterly window: balances thesis timing with more time for the view to develop.";
++  if (days <= 240) return "Medium window: slower time decay, with more premium tied to the extra time.";
++  return "Long window: time decay is slower, but upfront premium and volatility exposure are larger.";
++}
++
++function nearestExpiry(payload: HorizonChartPayload, targetDays: number) {
++  return payload.forward.curve
++    .filter((point) => daysOut(payload.as_of_utc, point.expiry_utc) > 0)
++    .sort((a, b) => {
++      const daysA = daysOut(payload.as_of_utc, a.expiry_utc);
++      const daysB = daysOut(payload.as_of_utc, b.expiry_utc);
++      return (
++        Math.abs(daysA - targetDays) - Math.abs(daysB - targetDays) ||
++        daysA - daysB ||
++        expiryMs(a.expiry_utc) - expiryMs(b.expiry_utc)
++      );
++    })[0];
++}
++
++export function buildOptionsHorizonComparison(
++  payload: HorizonChartPayload,
++  impliedByExpiry: Record<number, HorizonChartPayload["implied"]>,
++): OptionsHorizonComparisonPayload {
++  const seen = new Set<number>();
++  const rows: OptionsHorizonComparisonRow[] = [];
++
++  for (const target of HORIZON_COMPARISON_TARGETS_DAYS) {
++    const expiry = nearestExpiry(payload, target);
++    if (!expiry) continue;
++    const ts = Math.floor(expiryMs(expiry.expiry_utc) / 1000);
++    if (seen.has(ts)) continue;
++    seen.add(ts);
++    const implied = impliedByExpiry[ts] ?? null;
++    const days = daysOut(payload.as_of_utc, expiry.expiry_utc);
++    const forward = implied?.forward_usd ?? expiry.mark_price_usd ?? null;
++    const iv = implied?.atm_iv_annual ?? null;
++    const oneSigma =
++      forward && iv && days > 0 ? Math.round(forward * iv * Math.sqrt(days / 365.25) * 100) / 100 : null;
++    const flags: string[] = [];
++    if (!implied) flags.push("missing_quote");
++    if (!forward || forward <= 0) flags.push("missing_forward");
++    if (!iv || iv <= 0) flags.push("missing_atm_iv");
++    rows.push({
++      target_bucket_days: target,
++      target_bucket_label: labelForTarget(target),
++      expiry_ts: ts,
++      expiry_date: expiry.expiry_date,
++      days_out: days,
++      forward_usd: forward,
++      atm_iv_annual: iv,
++      one_sigma_move_usd: oneSigma,
++      time_decay_language: timeDecayLanguage(days),
++      data_flags: flags,
++    });
++  }
++
++  rows.sort((a, b) => a.days_out - b.days_out || a.expiry_ts - b.expiry_ts || a.target_bucket_days - b.target_bucket_days);
++  return {
++    schema_version: 1,
++    kind: "options_horizon_comparison",
++    as_of_utc: payload.as_of_utc,
++    target_buckets_days: [...HORIZON_COMPARISON_TARGETS_DAYS],
++    rows,
++    limitations: [
++      "Educational comparison only; not a recommendation or order ticket.",
++      "Rows compare listed expiry windows before any expression selection.",
++      "Missing, stale, or thin inputs are flagged instead of inferred.",
++    ],
++    meta: {
++      read_only: true,
++      simulation_only: true,
++      no_advice: true,
++    },
++  };
++}
+diff --git a/src/engine/options_horizon_comparison.py b/src/engine/options_horizon_comparison.py
+new file mode 100644
+index 00000000..dd0675d0
+--- /dev/null
++++ b/src/engine/options_horizon_comparison.py
+@@ -0,0 +1,224 @@
++"""Deterministic option expiry horizon comparison."""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from datetime import UTC, datetime
++import math
++from typing import Any
++
++DEFAULT_TARGET_BUCKETS_DAYS = (30, 60, 90, 180, 365)
++DEFAULT_STALE_AFTER_HOURS = 24.0
++THIN_LIQUIDITY_OPEN_INTEREST = 10.0
++THIN_LIQUIDITY_SCORE = 0.25
++
++
++@dataclass(frozen=True)
++class ListedExpiryEvidence:
++    expiry_ts: int
++    expiry_date: str
++    forward_usd: float | None = None
++    atm_iv_annual: float | None = None
++    quote_as_of_utc: str | None = None
++    open_interest: float | None = None
++    liquidity_score: float | None = None
++
++
++def _parse_utc(value: str | datetime) -> datetime:
++    if isinstance(value, datetime):
++        parsed = value
++    else:
++        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
++    if parsed.tzinfo is None:
++        parsed = parsed.replace(tzinfo=UTC)
++    return parsed.astimezone(UTC)
++
++
++def _expiry_ms_to_datetime(expiry_ts: int) -> datetime:
++    ts = int(expiry_ts)
++    seconds = ts / 1000 if ts > 10_000_000_000 else ts
++    return datetime.fromtimestamp(seconds, tz=UTC)
++
++
++def _coerce_float(value: Any) -> float | None:
++    if value is None:
++        return None
++    try:
++        out = float(value)
++    except (TypeError, ValueError):
++        return None
++    return out if math.isfinite(out) else None
++
++
++def _days_out(as_of: datetime, expiry_ts: int) -> int:
++    delta = _expiry_ms_to_datetime(expiry_ts) - as_of
++    return max(0, int(round(delta.total_seconds() / 86_400)))
++
++
++def _target_label(days: int) -> str:
++    if days < 60:
++        return "about 30 days"
++    if days < 90:
++        return "about 60 days"
++    if days < 180:
++        return "about 90 days"
++    if days < 365:
++        return "about 180 days"
++    return "about 365 days"
++
++
++def _time_decay_language(days_out: int) -> str:
++    if days_out <= 45:
++        return "Short window: time decay is more visible and thesis timing matters more."
++    if days_out <= 75:
++        return "Near-term window: time decay is meaningful but there is more room than the front month."
++    if days_out <= 120:
++        return "Quarterly window: balances thesis timing with more time for the view to develop."
++    if days_out <= 240:
++        return "Medium window: slower time decay, with more premium tied to the extra time."
++    return "Long window: time decay is slower, but upfront premium and volatility exposure are larger."
++
++
++def _data_flags(
++    expiry: ListedExpiryEvidence,
++    *,
++    as_of: datetime,
++    stale_after_hours: float,
++) -> list[str]:
++    flags: list[str] = []
++    if expiry.forward_usd is None or expiry.forward_usd <= 0:
++        flags.append("missing_forward")
++    if expiry.atm_iv_annual is None or expiry.atm_iv_annual <= 0:
++        flags.append("missing_atm_iv")
++    if expiry.quote_as_of_utc is None:
++        flags.append("missing_quote_time")
++    else:
++        try:
++            quote_dt = _parse_utc(expiry.quote_as_of_utc)
++        except (TypeError, ValueError):
++            flags.append("invalid_quote_time")
++        else:
++            age_hours = (as_of - quote_dt).total_seconds() / 3600
++            if age_hours > stale_after_hours:
++                flags.append("stale_quote")
++    if expiry.open_interest is not None and expiry.open_interest < THIN_LIQUIDITY_OPEN_INTEREST:
++        flags.append("thin_liquidity")
++    if expiry.liquidity_score is not None and expiry.liquidity_score < THIN_LIQUIDITY_SCORE:
++        if "thin_liquidity" not in flags:
++            flags.append("thin_liquidity")
++    return flags
++
++
++def select_nearest_listed_expiry(
++    *,
++    as_of_utc: str | datetime,
++    listed_expiries: list[ListedExpiryEvidence],
++    target_days: int,
++) -> ListedExpiryEvidence | None:
++    """
++    Select the nearest listed expiry for a target bucket.
++
++    Tie-breaks are deterministic: smallest absolute distance to the target, then
++    shorter listed horizon, then earlier expiry timestamp.
++    """
++    as_of = _parse_utc(as_of_utc)
++    future_expiries = [expiry for expiry in listed_expiries if _days_out(as_of, expiry.expiry_ts) > 0]
++    if not future_expiries:
++        return None
++    return min(
++        future_expiries,
++        key=lambda expiry: (
++            abs(_days_out(as_of, expiry.expiry_ts) - int(target_days)),
++            _days_out(as_of, expiry.expiry_ts),
++            int(expiry.expiry_ts),
++        ),
++    )
++
++
++def build_options_horizon_comparison(
++    *,
++    as_of_utc: str | datetime,
++    listed_expiries: list[ListedExpiryEvidence],
++    target_buckets_days: tuple[int, ...] = DEFAULT_TARGET_BUCKETS_DAYS,
++    stale_after_hours: float = DEFAULT_STALE_AFTER_HOURS,
++) -> dict[str, Any]:
++    """Build deterministic educational comparison rows for listed option expiries."""
++    as_of = _parse_utc(as_of_utc)
++    selected: list[tuple[int, ListedExpiryEvidence]] = []
++    seen_expiry_ts: set[int] = set()
++
++    for bucket in target_buckets_days:
++        expiry = select_nearest_listed_expiry(
++            as_of_utc=as_of,
++            listed_expiries=listed_expiries,
++            target_days=bucket,
++        )
++        if expiry is None or int(expiry.expiry_ts) in seen_expiry_ts:
++            continue
++        seen_expiry_ts.add(int(expiry.expiry_ts))
++        selected.append((int(bucket), expiry))
++
++    rows: list[dict[str, Any]] = []
++    for bucket, expiry in selected:
++        days = _days_out(as_of, expiry.expiry_ts)
++        t_years = max(days / 365.25, 0.0)
++        forward = _coerce_float(expiry.forward_usd)
++        iv = _coerce_float(expiry.atm_iv_annual)
++        one_sigma = None
++        if forward is not None and forward > 0 and iv is not None and iv > 0 and t_years > 0:
++            one_sigma = forward * iv * math.sqrt(t_years)
++        rows.append(
++            {
++                "target_bucket_days": bucket,
++                "target_bucket_label": _target_label(bucket),
++                "expiry_ts": int(expiry.expiry_ts),
++                "expiry_date": expiry.expiry_date,
++                "days_out": days,
++                "forward_usd": forward,
++                "atm_iv_annual": iv,
++                "one_sigma_move_usd": round(one_sigma, 2) if one_sigma is not None else None,
++                "time_decay_language": _time_decay_language(days),
++                "data_flags": _data_flags(
++                    expiry,
++                    as_of=as_of,
++                    stale_after_hours=float(stale_after_hours),
++                ),
++            }
++        )
++
++    rows.sort(key=lambda row: (row["days_out"], row["expiry_ts"], row["target_bucket_days"]))
++    return {
++        "schema_version": 1,
++        "kind": "options_horizon_comparison",
++        "as_of_utc": as_of.isoformat(),
++        "target_buckets_days": list(target_buckets_days),
++        "rows": rows,
++        "limitations": [
++            "Educational comparison only; not a recommendation or order ticket.",
++            "Rows compare listed expiry windows before any expression selection.",
++            "Missing, stale, or thin inputs are flagged instead of inferred.",
++        ],
++        "meta": {
++            "read_only": True,
++            "simulation_only": True,
++            "no_advice": True,
++        },
++    }
++
++
++def listed_expiry_from_mapping(row: dict[str, Any]) -> ListedExpiryEvidence:
++    """Normalize a mapping into ListedExpiryEvidence for boundary adapters."""
++    expiry_ts = row.get("expiry_ts")
++    if expiry_ts is None and row.get("expiry_utc"):
++        expiry_ts = int(_parse_utc(str(row["expiry_utc"])).timestamp() * 1000)
++    if expiry_ts is None:
++        raise ValueError("listed expiry requires expiry_ts or expiry_utc")
++    return ListedExpiryEvidence(
++        expiry_ts=int(expiry_ts),
++        expiry_date=str(row.get("expiry_date") or row.get("expiry_date_str") or "")[:10],
++        forward_usd=_coerce_float(row.get("forward_usd") or row.get("mark_price_usd")),
++        atm_iv_annual=_coerce_float(row.get("atm_iv_annual")),
++        quote_as_of_utc=row.get("quote_as_of_utc"),
++        open_interest=_coerce_float(row.get("open_interest")),
++        liquidity_score=_coerce_float(row.get("liquidity_score")),
++    )
+diff --git a/src/viz/options_horizon_comparison_boundary.py b/src/viz/options_horizon_comparison_boundary.py
+new file mode 100644
+index 00000000..48138d77
+--- /dev/null
++++ b/src/viz/options_horizon_comparison_boundary.py
+@@ -0,0 +1,51 @@
++"""Display boundary for deterministic option horizon comparison payloads."""
++
++from __future__ import annotations
++
++from typing import Any
++
++from src.engine.options_horizon_comparison import (
++    build_options_horizon_comparison,
++    listed_expiry_from_mapping,
++)
++
++COMPARISON_HTTP_PATH = "/ppe-display-api/horizon/comparison.json"
++
++
++def build_options_horizon_comparison_response(payload: dict[str, Any]) -> dict[str, Any]:
++    """
++    Build a read-only comparison response from an Options Horizon-like payload.
++
++    This adapter is intentionally pure for the product slice; routing/publication is
++    left to the controlled display publisher.
++    """
++    as_of_utc = str(payload.get("as_of_utc") or "")
++    forward_curve = ((payload.get("forward") or {}).get("curve") or [])
++    implied_by_expiry = payload.get("implied_by_expiry") or {}
++
++    listed = []
++    for point in forward_curve:
++        row = dict(point)
++        expiry_ts = row.get("expiry_ts")
++        if expiry_ts is None and row.get("expiry_utc"):
++            from src.engine.options_horizon_comparison import _parse_utc  # local pure helper
++
++            expiry_ts = int(_parse_utc(str(row["expiry_utc"])).timestamp() * 1000)
++            row["expiry_ts"] = expiry_ts
++        implied = implied_by_expiry.get(str(expiry_ts)) or implied_by_expiry.get(expiry_ts) or {}
++        row.setdefault("forward_usd", implied.get("forward_usd") or point.get("mark_price_usd"))
++        row.setdefault("atm_iv_annual", implied.get("atm_iv_annual"))
++        row.setdefault("quote_as_of_utc", implied.get("quote_as_of_utc") or payload.get("as_of_utc"))
++        row.setdefault("open_interest", implied.get("open_interest"))
++        row.setdefault("liquidity_score", implied.get("liquidity_score"))
++        listed.append(listed_expiry_from_mapping(row))
++
++    comparison = build_options_horizon_comparison(
++        as_of_utc=as_of_utc,
++        listed_expiries=listed,
++    )
++    comparison["meta"] = {
++        **comparison["meta"],
++        "http_path": COMPARISON_HTTP_PATH,
++    }
++    return comparison
+diff --git a/tests/test_msos_web_options_horizon_comparison.py b/tests/test_msos_web_options_horizon_comparison.py
+new file mode 100644
+index 00000000..752bd1de
+--- /dev/null
++++ b/tests/test_msos_web_options_horizon_comparison.py
+@@ -0,0 +1,41 @@
++"""MSOS Options Horizon comparison surface tests."""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++REPO_ROOT = Path(__file__).resolve().parents[1]
++MSOS_WEB = REPO_ROOT / "apps" / "msos-web"
++
++
++def test_msos_horizon_comparison_lib_has_deterministic_contract() -> None:
++    lib = (MSOS_WEB / "src" / "lib" / "optionsHorizonComparison.ts").read_text(
++        encoding="utf-8"
++    )
++    assert "HORIZON_COMPARISON_TARGETS_DAYS = [30, 60, 90, 180, 365]" in lib
++    assert "Math.abs(daysA - targetDays)" in lib
++    assert "daysA - daysB" in lib
++    assert "seen.has(ts)" in lib
++    assert "Educational comparison only; not a recommendation or order ticket." in lib
++
++
++def test_msos_horizon_comparison_panel_is_non_executable_and_educational() -> None:
++    panel = (
++        MSOS_WEB / "src" / "components" / "OptionsHorizonComparisonPanel.tsx"
++    ).read_text(encoding="utf-8")
++    assert "Expiry window comparison" in panel
++    assert "Horizon comparison" in panel
++    assert "Listed expiry windows" in panel
++    assert "not a recommendation, ranking, order ticket, or execution surface" in panel
++    assert "Open order" not in panel
++    assert "Trade now" not in panel
++    assert "Buy" not in panel
++
++
++def test_options_horizon_client_mounts_comparison_panel_and_uses_chart_payload() -> None:
++    client = (MSOS_WEB / "src" / "components" / "OptionsHorizonClient.tsx").read_text(
++        encoding="utf-8"
++    )
++    assert "OptionsHorizonComparisonPanel" in client
++    assert "buildOptionsHorizonComparison" in client
++    assert "fetchHorizonChartPayload({ expiryTs: option.expiryTs })" in client
+diff --git a/tests/test_options_horizon_comparison.py b/tests/test_options_horizon_comparison.py
+new file mode 100644
+index 00000000..c9e3a892
+--- /dev/null
++++ b/tests/test_options_horizon_comparison.py
+@@ -0,0 +1,112 @@
++"""Tests for deterministic option horizon comparison."""
++
++from __future__ import annotations
++
++from datetime import UTC, datetime, timedelta
++
++from src.engine.options_horizon_comparison import (
++    ListedExpiryEvidence,
++    build_options_horizon_comparison,
++    select_nearest_listed_expiry,
++)
++from src.viz.options_horizon_comparison_boundary import (
++    build_options_horizon_comparison_response,
++)
++
++
++AS_OF = datetime(2026, 1, 1, tzinfo=UTC)
++
++
++def _expiry(days: int, **overrides: object) -> ListedExpiryEvidence:
++    expiry_dt = AS_OF + timedelta(days=days)
++    values = {
++        "expiry_ts": int(expiry_dt.timestamp() * 1000),
++        "expiry_date": expiry_dt.strftime("%Y-%m-%d"),
++        "forward_usd": 100_000.0 + days,
++        "atm_iv_annual": 0.5,
++        "quote_as_of_utc": AS_OF.isoformat(),
++        "open_interest": 100.0,
++        "liquidity_score": 0.8,
++    }
++    values.update(overrides)
++    return ListedExpiryEvidence(**values)  # type: ignore[arg-type]
++
++
++def test_nearest_expiry_tie_breaks_to_shorter_horizon() -> None:
++    selected = select_nearest_listed_expiry(
++        as_of_utc=AS_OF,
++        listed_expiries=[_expiry(35), _expiry(25)],
++        target_days=30,
++    )
++
++    assert selected is not None
++    assert selected.expiry_date == "2026-01-26"
++
++
++def test_comparison_deduplicates_when_buckets_share_expiry_and_orders_rows() -> None:
++    payload = build_options_horizon_comparison(
++        as_of_utc=AS_OF,
++        listed_expiries=[_expiry(31), _expiry(92), _expiry(185), _expiry(370)],
++    )
++
++    assert [row["target_bucket_days"] for row in payload["rows"]] == [30, 90, 180, 365]
++    assert [row["days_out"] for row in payload["rows"]] == [31, 92, 185, 370]
++    assert payload["meta"]["no_advice"] is True
++    assert "not a recommendation" in payload["limitations"][0]
++
++
++def test_missing_stale_and_thin_data_are_flagged_without_inference() -> None:
++    payload = build_options_horizon_comparison(
++        as_of_utc=AS_OF,
++        listed_expiries=[
++            _expiry(
++                30,
++                forward_usd=None,
++                atm_iv_annual=None,
++                quote_as_of_utc=(AS_OF - timedelta(hours=30)).isoformat(),
++                open_interest=1.0,
++            )
++        ],
++    )
++
++    row = payload["rows"][0]
++    assert row["forward_usd"] is None
++    assert row["atm_iv_annual"] is None
++    assert row["one_sigma_move_usd"] is None
++    assert row["data_flags"] == [
++        "missing_forward",
++        "missing_atm_iv",
++        "stale_quote",
++        "thin_liquidity",
++    ]
++
++
++def test_boundary_payload_shape_from_horizon_chart_like_payload() -> None:
++    expiry_dt = AS_OF + timedelta(days=60)
++    expiry_ts = int(expiry_dt.timestamp() * 1000)
++    payload = build_options_horizon_comparison_response(
++        {
++            "as_of_utc": AS_OF.isoformat(),
++            "forward": {
++                "curve": [
++                    {
++                        "expiry_utc": expiry_dt.isoformat(),
++                        "expiry_date": expiry_dt.strftime("%Y-%m-%d"),
++                        "mark_price_usd": 101_000.0,
++                    }
++                ]
++            },
++            "implied_by_expiry": {
++                str(expiry_ts): {
++                    "forward_usd": 101_000.0,
++                    "atm_iv_annual": 0.55,
++                    "quote_as_of_utc": AS_OF.isoformat(),
++                }
++            },
++        }
++    )
++
++    assert payload["kind"] == "options_horizon_comparison"
++    assert payload["rows"][0]["expiry_ts"] == expiry_ts
++    assert payload["rows"][0]["data_flags"] == []
++    assert payload["meta"]["http_path"] == "/ppe-display-api/horizon/comparison.json"

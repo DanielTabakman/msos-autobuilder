@@ -1,0 +1,48 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "apps/msos-web/src/components/OptionsHorizonClient.tsx",
+          "apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx",
+          "apps/msos-web/src/lib/optionsHorizonComparison.ts",
+          "src/engine/options_horizon_comparison.py",
+          "src/viz/options_horizon_comparison_boundary.py",
+          "tests/test_msos_web_options_horizon_comparison.py",
+          "tests/test_options_horizon_comparison.py"
+        ],
+        "metadata": {
+          "output_tail": " bounded Options Horizon comparison slice as workspace changes only.\n\nChanged:\n- Added deterministic Python engine: [options_horizon_comparison.py](C:/Users/USER/.msos-autobuilder/workspaces/Options-HorizonComparison-Product-Slice002/src/engine/options_horizon_comparison.py)\n- Added pure display boundary adapter: [options_horizon_comparison_boundary.py](C:/Users/USER/.msos-autobuilder/workspaces/Options-HorizonComparison-Product-Slice002/src/viz/options_horizon_comparison_boundary.py)\n- Added MSOS comparison builder and panel:\n  - [optionsHorizonComparison.ts](C:/Users/USER/.msos-autobuilder/workspaces/Options-HorizonComparison-Product-Slice002/apps/msos-web/src/lib/optionsHorizonComparison.ts)\n  - [OptionsHorizonComparisonPanel.tsx](C:/Users/USER/.msos-autobuilder/workspaces/Options-HorizonComparison-Product-Slice002/apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx)\n- Mounted the panel in [OptionsHorizonClient.tsx](C:/Users/USER/.msos-autobuilder/workspaces/Options-HorizonComparison-Product-Slice002/apps/msos-web/src/components/OptionsHorizonClient.tsx)\n- Added focused tests for engine, boundary, and MSOS wiring/copy.\n\nValidation:\n- `python -m pytest tests/test_options_horizon_comparison.py tests/test_msos_web_options_horizon_comparison.py` passed: 7 passed.\n- `python -m pytest tests/test_horizon_region.py tests/test_msos_web_horizon_region_workflow.py tests/test_options_horizon_comparison.py tests/test_msos_web_options_horizon_comparison.py` passed: 14 passed.\n- `python -m py_compile src/engine/options_horizon_comparison.py src/viz/options_horizon_comparison_boundary.py` passed.\n- `python scripts/run_pushable_gate.py` exited 0, reporting `tier=0 (no changes)` because the slice remains uncommitted workspace changes.\n- `npm.cmd run lint` could not run because `next` is not installed locally: `'next' is not recognized`.\n\nWorkspace status is limited to the allowed slice files. No commit, push, PR, smoke, closeout, or control-plane mutation was performed.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder\\workspaces\\Options-HorizonComparison-Product-Slice002"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 7 changed path(s)",
+        "task_id": "Options-HorizonComparison-Product-Slice002"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "43cc8123d49d6d9cf1c01e56159aa9e66b6df897",
+    "status": "completed"
+  },
+  "completed_at": "2026-07-25T14:37:51.576115+00:00",
+  "job_id": "build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-bbf07c932816b782",
+  "job_sha256": "fd83b1b68807ba0f48fe0f50dd6eb03f932f2f9eed1699146734f45b5765501a",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "lane_id": "Options-HorizonComparison-Product-Slice002",
+      "patch_file": "patches/Options-HorizonComparison-Product-Slice002.patch",
+      "patch_sha256": "01e40dd3b579ae1ffc8129443bc506ebf10d97aabcbb52b3365a9015cdd45f1b",
+      "task_id": "Options-HorizonComparison-Product-Slice002"
+    }
+  ],
+  "publication_enabled": false,
+  "requested_by": "capacity-one refill controller",
+  "source": "C:\\Users\\USER\\.msos-autobuilder\\queue\\pending\\build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-bbf07c932816b782.yaml",
+  "version": 1
+}

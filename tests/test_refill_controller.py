@@ -1811,6 +1811,58 @@ def _generation_sha256(config: RefillConfig) -> str:
     return hashlib.sha256(_generation_file(config).read_bytes()).hexdigest()
 
 
+def _capture_supersession_bytes(
+    config: RefillConfig,
+    generation: dict[str, object],
+    generation_sha256: str,
+) -> dict[str, bytes | None]:
+    archive = _generation_history_file(config, generation)
+    receipt = _supersession_receipt_file(config, generation, generation_sha256)
+    return {
+        "policy": _policy_file(config).read_bytes(),
+        "generation": _generation_file(config).read_bytes(),
+        "archive": archive.read_bytes() if archive.exists() else None,
+        "receipt": receipt.read_bytes() if receipt.exists() else None,
+    }
+
+
+def _assert_supersession_bytes_unchanged(
+    config: RefillConfig,
+    generation: dict[str, object],
+    generation_sha256: str,
+    expected: dict[str, bytes | None],
+) -> None:
+    assert _capture_supersession_bytes(config, generation, generation_sha256) == expected
+
+
+def _create_partial_supersession_receipt(
+    config: RefillConfig,
+    generation: dict[str, object],
+    generation_sha256: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, object]:
+    real_save = refill_controller.save_refill_generation
+
+    def crash_before_active_replace(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("active replace interrupted")
+
+    monkeypatch.setattr(refill_controller, "save_refill_generation", crash_before_active_replace)
+    with pytest.raises(RuntimeError, match="active replace interrupted"):
+        supersede_refill_generation(
+            config,
+            expected_generation_id=str(generation["generation_id"]),
+            expected_generation_sha256=generation_sha256,
+        )
+    monkeypatch.setattr(refill_controller, "save_refill_generation", real_save)
+    receipt = json.loads(
+        _supersession_receipt_file(config, generation, generation_sha256).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert _generation_history_file(config, generation).exists()
+    return receipt
+
+
 def _seed_paused_revision_ambiguity(tmp_path: Path) -> tuple[RefillConfig, dict[str, object], str]:
     ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
     feed = _feed_repo(tmp_path / "feed-work")
@@ -2760,6 +2812,56 @@ def test_supersession_mismatched_id_or_sha_fails_without_mutation(tmp_path: Path
     assert _generation_file(sha_config).read_bytes() == sha_generation_bytes
 
 
+@pytest.mark.parametrize(
+    "malformed_sha",
+    [
+        "A" * 64,
+        "a" * 63,
+        "a" * 65,
+        f"{'a' * 63} ",
+        f" {'a' * 63}",
+        "../" + "a" * 64,
+        "..\\" + "a" * 64,
+        "a" * 32 + "/" + "b" * 31,
+        "a" * 32 + "\\" + "b" * 31,
+        "..",
+        "C:" + "a" * 62,
+        "C:\\" + "a" * 61,
+        "/tmp/" + "a" * 59,
+        "",
+    ],
+)
+def test_supersession_malformed_expected_sha_fails_before_path_lookup_or_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    malformed_sha: str,
+) -> None:
+    config, generation, valid_sha = _seed_paused_revision_ambiguity(tmp_path)
+    before = _capture_supersession_bytes(config, generation, valid_sha)
+    outside = tmp_path / "outside-marker.json"
+    outside.write_text("outside unchanged\n", encoding="utf-8")
+
+    def receipt_path_should_not_be_called(*_args: object, **_kwargs: object) -> Path:
+        raise AssertionError("receipt path should not be constructed")
+
+    monkeypatch.setattr(
+        refill_controller,
+        "_supersession_receipt_path",
+        receipt_path_should_not_be_called,
+    )
+
+    with pytest.raises(RefillControllerError, match="64 lowercase hexadecimal"):
+        supersede_refill_generation(
+            config,
+            expected_generation_id=str(generation["generation_id"]),
+            expected_generation_sha256=malformed_sha,
+        )
+
+    _assert_supersession_bytes_unchanged(config, generation, valid_sha, before)
+    assert outside.read_text(encoding="utf-8") == "outside unchanged\n"
+    assert not (config.build_next.host_root / "state" / "refill-generation-supersessions").exists()
+
+
 def test_supersession_prepared_dispatch_and_capacity_fail_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2899,22 +3001,10 @@ def test_supersession_retry_is_idempotent_and_crash_preserves_archive(
 ) -> None:
     config, generation, generation_sha = _seed_paused_revision_ambiguity(tmp_path)
     old_bytes = _generation_file(config).read_bytes()
-    real_save = refill_controller.save_refill_generation
-
-    def crash_before_active_replace(*_args: object, **_kwargs: object) -> object:
-        raise RuntimeError("active replace interrupted")
-
-    monkeypatch.setattr(refill_controller, "save_refill_generation", crash_before_active_replace)
-    with pytest.raises(RuntimeError, match="active replace interrupted"):
-        supersede_refill_generation(
-            config,
-            expected_generation_id=str(generation["generation_id"]),
-            expected_generation_sha256=generation_sha,
-        )
+    _create_partial_supersession_receipt(config, generation, generation_sha, monkeypatch)
     assert _generation_file(config).read_bytes() == old_bytes
     assert _generation_history_file(config, generation).read_bytes() == old_bytes
 
-    monkeypatch.setattr(refill_controller, "save_refill_generation", real_save)
     first = supersede_refill_generation(
         config,
         expected_generation_id=str(generation["generation_id"]),
@@ -2937,6 +3027,245 @@ def test_supersession_retry_is_idempotent_and_crash_preserves_archive(
     ]
     assert second.build_next_receipt is None
     assert first_active["item_scoped_terminal_exclusions"] == []
+
+
+def test_supersession_partial_retry_health_red_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, generation, generation_sha = _seed_paused_revision_ambiguity(tmp_path)
+    _create_partial_supersession_receipt(config, generation, generation_sha, monkeypatch)
+    before = _capture_supersession_bytes(config, generation, generation_sha)
+
+    real_snapshot = refill_controller._capacity_snapshot
+
+    def red_snapshot(*args: object, **kwargs: object) -> refill_controller.CapacitySnapshot:
+        snapshot = real_snapshot(*args, **kwargs)
+        return refill_controller.CapacitySnapshot(
+            running=snapshot.running,
+            queued=snapshot.queued,
+            feed_awaiting_import=snapshot.feed_awaiting_import,
+            awaiting_review=snapshot.awaiting_review,
+            health={**snapshot.health, "ok": False},
+        )
+
+    monkeypatch.setattr(refill_controller, "_capacity_snapshot", red_snapshot)
+
+    with pytest.raises(RefillControllerError, match="green runtime health"):
+        supersede_refill_generation(
+            config,
+            expected_generation_id=str(generation["generation_id"]),
+            expected_generation_sha256=generation_sha,
+        )
+
+    _assert_supersession_bytes_unchanged(config, generation, generation_sha, before)
+
+
+@pytest.mark.parametrize(
+    ("queue_name", "message"),
+    [
+        ("running", "zero running jobs"),
+        ("pending", "zero pending jobs"),
+    ],
+)
+def test_supersession_partial_retry_capacity_appears_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    queue_name: str,
+    message: str,
+) -> None:
+    config, generation, generation_sha = _seed_paused_revision_ambiguity(tmp_path)
+    _create_partial_supersession_receipt(config, generation, generation_sha, monkeypatch)
+    queue = config.build_next.host_root / "queue" / queue_name
+    queue.mkdir(parents=True, exist_ok=True)
+    (queue / "manual.yaml").write_text("version: 1\n", encoding="utf-8")
+    before = _capture_supersession_bytes(config, generation, generation_sha)
+
+    with pytest.raises(RefillControllerError, match=message):
+        supersede_refill_generation(
+            config,
+            expected_generation_id=str(generation["generation_id"]),
+            expected_generation_sha256=generation_sha,
+        )
+
+    _assert_supersession_bytes_unchanged(config, generation, generation_sha, before)
+
+
+def test_supersession_partial_retry_feed_awaiting_import_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, generation, generation_sha = _seed_paused_revision_ambiguity(tmp_path)
+    _create_partial_supersession_receipt(config, generation, generation_sha, monkeypatch)
+    before = _capture_supersession_bytes(config, generation, generation_sha)
+    monkeypatch.setattr(
+        refill_controller,
+        "_feed_awaiting_import",
+        lambda *_args: (1, ["feed-only"], {"ok": True, "job_ids": ["feed-only"]}),
+    )
+
+    with pytest.raises(RefillControllerError, match="zero feed-awaiting-import jobs"):
+        supersede_refill_generation(
+            config,
+            expected_generation_id=str(generation["generation_id"]),
+            expected_generation_sha256=generation_sha,
+        )
+
+    _assert_supersession_bytes_unchanged(config, generation, generation_sha, before)
+
+
+def test_supersession_partial_retry_unpaused_policy_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, generation, generation_sha = _seed_paused_revision_ambiguity(tmp_path)
+    _create_partial_supersession_receipt(config, generation, generation_sha, monkeypatch)
+    save_refill_policy(config, RefillPolicy(enabled=True, desired_capacity=0))
+    before = _capture_supersession_bytes(config, generation, generation_sha)
+
+    with pytest.raises(RefillControllerError, match="paused desired capacity zero"):
+        supersede_refill_generation(
+            config,
+            expected_generation_id=str(generation["generation_id"]),
+            expected_generation_sha256=generation_sha,
+        )
+
+    _assert_supersession_bytes_unchanged(config, generation, generation_sha, before)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("new_generation_id", "wrong-generation", "receipt conflicts"),
+        ("ambiguity_evidence", {"changed": True}, "receipt conflicts"),
+    ],
+)
+def test_supersession_completed_retry_modified_receipt_fails_closed(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    config, generation, generation_sha = _seed_paused_revision_ambiguity(tmp_path)
+    supersede_refill_generation(
+        config,
+        expected_generation_id=str(generation["generation_id"]),
+        expected_generation_sha256=generation_sha,
+    )
+    receipt = _supersession_receipt_file(config, generation, generation_sha)
+    payload = json.loads(receipt.read_text(encoding="utf-8"))
+    payload[field] = value
+    receipt.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    before = _capture_supersession_bytes(config, generation, generation_sha)
+
+    with pytest.raises(RefillControllerError, match=message):
+        supersede_refill_generation(
+            config,
+            expected_generation_id=str(generation["generation_id"]),
+            expected_generation_sha256=generation_sha,
+        )
+
+    _assert_supersession_bytes_unchanged(config, generation, generation_sha, before)
+
+
+def test_supersession_completed_retry_missing_archive_fails_closed(tmp_path: Path) -> None:
+    config, generation, generation_sha = _seed_paused_revision_ambiguity(tmp_path)
+    supersede_refill_generation(
+        config,
+        expected_generation_id=str(generation["generation_id"]),
+        expected_generation_sha256=generation_sha,
+    )
+    _generation_history_file(config, generation).unlink()
+    before = _capture_supersession_bytes(config, generation, generation_sha)
+
+    with pytest.raises(RefillControllerError, match="archive is missing"):
+        supersede_refill_generation(
+            config,
+            expected_generation_id=str(generation["generation_id"]),
+            expected_generation_sha256=generation_sha,
+        )
+
+    _assert_supersession_bytes_unchanged(config, generation, generation_sha, before)
+
+
+def test_supersession_completed_retry_modified_archive_fails_closed(tmp_path: Path) -> None:
+    config, generation, generation_sha = _seed_paused_revision_ambiguity(tmp_path)
+    supersede_refill_generation(
+        config,
+        expected_generation_id=str(generation["generation_id"]),
+        expected_generation_sha256=generation_sha,
+    )
+    _generation_history_file(config, generation).write_text("modified\n", encoding="utf-8")
+    before = _capture_supersession_bytes(config, generation, generation_sha)
+
+    with pytest.raises(RefillControllerError, match="archive SHA-256 verification failed"):
+        supersede_refill_generation(
+            config,
+            expected_generation_id=str(generation["generation_id"]),
+            expected_generation_sha256=generation_sha,
+        )
+
+    _assert_supersession_bytes_unchanged(config, generation, generation_sha, before)
+
+
+def test_supersession_valid_partial_retry_completes_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, generation, generation_sha = _seed_paused_revision_ambiguity(tmp_path)
+    receipt = _create_partial_supersession_receipt(
+        config, generation, generation_sha, monkeypatch
+    )
+    before_feed_jobs = sorted(_feed_job_path(config, "*.yaml").parent.glob("*.yaml"))
+
+    first = supersede_refill_generation(
+        config,
+        expected_generation_id=str(generation["generation_id"]),
+        expected_generation_sha256=generation_sha,
+    )
+    active_after_first = load_refill_generation(config)
+    second = supersede_refill_generation(
+        config,
+        expected_generation_id=str(generation["generation_id"]),
+        expected_generation_sha256=generation_sha,
+    )
+    active_after_second = load_refill_generation(config)
+    after_feed_jobs = sorted(_feed_job_path(config, "*.yaml").parent.glob("*.yaml"))
+
+    assert first.status == "SUPERSEDED"
+    assert second.status == "SUPERSEDED"
+    assert first.decision_evidence["idempotent"] is True
+    assert second.decision_evidence["idempotent"] is True
+    assert active_after_first == active_after_second == receipt["new_generation"]
+    assert before_feed_jobs == after_feed_jobs
+    assert first.build_next_receipt is None
+    assert second.build_next_receipt is None
+
+
+def test_supersession_valid_completed_retry_remains_idempotent(tmp_path: Path) -> None:
+    config, generation, generation_sha = _seed_paused_revision_ambiguity(tmp_path)
+    first = supersede_refill_generation(
+        config,
+        expected_generation_id=str(generation["generation_id"]),
+        expected_generation_sha256=generation_sha,
+    )
+    archive = _generation_history_file(config, generation)
+    receipt = _supersession_receipt_file(config, generation, generation_sha)
+    generation_before = _generation_file(config).read_bytes()
+    archive_before = archive.read_bytes()
+    receipt_before = receipt.read_bytes()
+    feed_jobs_before = sorted(_feed_job_path(config, "*.yaml").parent.glob("*.yaml"))
+    second = supersede_refill_generation(
+        config,
+        expected_generation_id=str(generation["generation_id"]),
+        expected_generation_sha256=generation_sha,
+    )
+    feed_jobs_after = sorted(_feed_job_path(config, "*.yaml").parent.glob("*.yaml"))
+
+    assert first.status == "SUPERSEDED"
+    assert second.status == "SUPERSEDED"
+    assert second.decision_evidence["idempotent"] is True
+    assert second.build_next_receipt is None
+    assert _generation_file(config).read_bytes() == generation_before
+    assert archive.read_bytes() == archive_before
+    assert receipt.read_bytes() == receipt_before
+    assert feed_jobs_after == feed_jobs_before
 
 
 def test_conflicting_history_leaves_policy_generation_and_history_bytes_unchanged(

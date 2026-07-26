@@ -35,3 +35,20 @@ def test_refill_keep_one_requires_complete_supersession_binding() -> None:
 
     with pytest.raises(SystemExit, match="requires both"):
         _refill_keep_one_command(args)
+
+
+def test_refill_keep_one_rejects_malformed_supersession_sha_before_config_load() -> None:
+    args = build_parser().parse_args(
+        [
+            "refill-keep-one",
+            "--service-config",
+            "service-that-does-not-need-to-exist.yaml",
+            "--supersede-generation",
+            "refill-old",
+            "--expected-generation-sha256",
+            "A" * 64,
+        ]
+    )
+
+    with pytest.raises(SystemExit, match="64 lowercase hexadecimal"):
+        _refill_keep_one_command(args)

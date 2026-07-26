@@ -295,6 +295,18 @@ class CapacitySnapshot:
     health: dict[str, Any]
 
 
+_EXPECTED_GENERATION_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def validate_expected_generation_sha256(value: str) -> str:
+    if not isinstance(value, str) or not _EXPECTED_GENERATION_SHA256_RE.fullmatch(value):
+        raise RefillControllerError(
+            "refill supersession expected generation SHA-256 must be exactly "
+            "64 lowercase hexadecimal characters"
+        )
+    return value
+
+
 def _generation_path(config: RefillConfig) -> Path:
     return _host_paths(config).state / "refill-generation.json"
 
@@ -445,6 +457,11 @@ def _assert_supersession_receipt_matches(
     classification: Mapping[str, Any],
 ) -> None:
     new_generation = receipt.get("new_generation")
+    expected_new_generation_id = _new_superseded_generation_id(
+        old_generation_id=old_generation_id,
+        old_generation_sha256=old_generation_sha256,
+    )
+    classification_evidence = dict(classification.get("evidence") or {})
     if (
         receipt.get("old_generation_id") != old_generation_id
         or receipt.get("old_generation_sha256") != old_generation_sha256
@@ -454,20 +471,55 @@ def _assert_supersession_receipt_matches(
         or receipt.get("old_job_id") != old_job_id
         or receipt.get("old_work_item_id") != old_work_item_id
         or receipt.get("classification") != dict(classification)
+        or receipt.get("ambiguity_evidence") != classification_evidence
         or not isinstance(new_generation, dict)
-        or new_generation.get("generation_id")
-        != _new_superseded_generation_id(
-            old_generation_id=old_generation_id,
-            old_generation_sha256=old_generation_sha256,
-        )
+        or receipt.get("new_generation_id") != new_generation.get("generation_id")
+        or new_generation.get("generation_id") != expected_new_generation_id
+        or new_generation.get("version") != 1
+        or new_generation.get("created_at") != receipt.get("superseded_at")
+        or new_generation.get("founder_intent") != "refill-keep-one"
+        or new_generation.get("desired_capacity") != 1
+        or new_generation.get("source_ppe_identity") is not None
         or new_generation.get("current_attempt") is not None
         or new_generation.get("attempt_sequence") != []
+        or new_generation.get("attempted_work_item_ids") != []
         or new_generation.get("item_scoped_terminal_exclusions") != []
         or new_generation.get("provider_failure") is not None
         or new_generation.get("trustworthy_retry_at") is not None
         or new_generation.get("provider_retry_consumed") is not False
+        or new_generation.get("state") != "READY"
     ):
         raise RefillControllerError("refill supersession receipt conflicts with request")
+
+
+def _assert_completed_supersession_receipt_matches(
+    receipt: Mapping[str, Any],
+    *,
+    old_generation_id: str,
+    old_generation_sha256: str,
+    archive_path: Path,
+    requested_by: str,
+) -> None:
+    classification = receipt.get("classification")
+    if not isinstance(classification, dict):
+        raise RefillControllerError("refill supersession receipt conflicts with request")
+    _assert_supersession_receipt_matches(
+        receipt,
+        old_generation_id=old_generation_id,
+        old_generation_sha256=old_generation_sha256,
+        archive_path=archive_path,
+        requested_by=requested_by,
+        active_release_commit=str(receipt.get("active_release_commit") or ""),
+        old_job_id=(
+            str(receipt.get("old_job_id")) if receipt.get("old_job_id") is not None else None
+        ),
+        old_work_item_id=(
+            str(receipt.get("old_work_item_id"))
+            if receipt.get("old_work_item_id") is not None
+            else None
+        ),
+        classification=classification,
+    )
 
 
 def _save_or_verify_supersession_archive(
@@ -483,6 +535,33 @@ def _save_or_verify_supersession_archive(
     else:
         _atomic_write_bytes(archive_path, old_generation_bytes)
         archive_bytes = archive_path.read_bytes()
+    if hashlib.sha256(archive_bytes).hexdigest() != old_generation_sha256:
+        raise RefillControllerError("refill supersession archive SHA-256 verification failed")
+
+
+def _verify_supersession_archive(
+    *,
+    archive_path: Path,
+    old_generation_bytes: bytes,
+    old_generation_sha256: str,
+) -> None:
+    if not archive_path.exists():
+        raise RefillControllerError("refill supersession archive is missing")
+    archive_bytes = archive_path.read_bytes()
+    if archive_bytes != old_generation_bytes:
+        raise RefillControllerError("refill supersession archive conflicts with request")
+    if hashlib.sha256(archive_bytes).hexdigest() != old_generation_sha256:
+        raise RefillControllerError("refill supersession archive SHA-256 verification failed")
+
+
+def _verify_supersession_archive_sha(
+    *,
+    archive_path: Path,
+    old_generation_sha256: str,
+) -> None:
+    if not archive_path.exists():
+        raise RefillControllerError("refill supersession archive is missing")
+    archive_bytes = archive_path.read_bytes()
     if hashlib.sha256(archive_bytes).hexdigest() != old_generation_sha256:
         raise RefillControllerError("refill supersession archive SHA-256 verification failed")
 
@@ -711,6 +790,9 @@ def supersede_refill_generation(
     expected_generation_id: str,
     expected_generation_sha256: str,
 ) -> RefillReport:
+    expected_generation_sha256 = validate_expected_generation_sha256(
+        expected_generation_sha256
+    )
     with ReconcileFileLock(_reconcile_lock_path(config)):
         return _supersede_refill_generation_locked(
             config,
@@ -2001,12 +2083,50 @@ def _supersession_current_attempt(generation: Mapping[str, Any]) -> dict[str, An
     return current
 
 
+def _assert_supersession_preconditions(
+    *,
+    policy: RefillPolicy,
+    snapshot: CapacitySnapshot,
+    generation: Mapping[str, Any],
+    classification: Mapping[str, Any],
+) -> None:
+    if policy.enabled or policy.desired_capacity != 0:
+        raise RefillControllerError("refill supersession requires paused desired capacity zero")
+    if not snapshot.health.get("ok"):
+        raise RefillControllerError("refill supersession requires green runtime health")
+    if snapshot.running:
+        raise RefillControllerError("refill supersession requires zero running jobs")
+    if snapshot.queued:
+        raise RefillControllerError("refill supersession requires zero pending jobs")
+    if snapshot.feed_awaiting_import:
+        raise RefillControllerError("refill supersession requires zero feed-awaiting-import jobs")
+    if isinstance(generation.get("prepared_dispatch"), dict):
+        raise RefillControllerError("refill supersession refuses prepared_dispatch")
+
+    category = classification.get("category")
+    if category == "in_flight":
+        raise RefillControllerError("refill supersession refuses in-flight attempt")
+    if category == "item_terminal":
+        raise RefillControllerError("refill supersession refuses item-terminal attempt")
+    if (
+        category == "provider_systemic"
+        and classification.get("retryable") is True
+        and generation.get("provider_retry_consumed") is not True
+    ):
+        raise RefillControllerError("refill supersession refuses authorized provider retry")
+    if category != "unknown":
+        raise RefillControllerError("refill supersession requires acknowledged ambiguity")
+
+
 def _supersede_refill_generation_locked(
     config: RefillConfig,
     *,
     expected_generation_id: str,
     expected_generation_sha256: str,
 ) -> RefillReport:
+    expected_generation_sha256 = validate_expected_generation_sha256(
+        expected_generation_sha256
+    )
     generation_path = _generation_path(config)
     if not generation_path.exists():
         raise RefillControllerError("refill supersession requires an active generation")
@@ -2020,6 +2140,21 @@ def _supersede_refill_generation_locked(
     retry_receipt = _load_supersession_receipt(retry_receipt_path)
     retry_active = load_refill_generation(config)
     if old_generation_sha256 != expected_generation_sha256 and retry_receipt is not None:
+        retry_archive_path = _generation_history_path(
+            config,
+            {"generation_id": expected_generation_id},
+        )
+        _assert_completed_supersession_receipt_matches(
+            retry_receipt,
+            old_generation_id=expected_generation_id,
+            old_generation_sha256=expected_generation_sha256,
+            archive_path=retry_archive_path,
+            requested_by=config.build_next.requested_by,
+        )
+        _verify_supersession_archive_sha(
+            archive_path=retry_archive_path,
+            old_generation_sha256=expected_generation_sha256,
+        )
         if (
             retry_active is not None
             and retry_active.get("generation_id") == retry_receipt.get("new_generation_id")
@@ -2034,6 +2169,7 @@ def _supersede_refill_generation_locked(
                 receipt=retry_receipt,
                 idempotent=True,
             )
+        raise RefillControllerError("refill supersession active generation conflicts with receipt")
     if old_generation_sha256 != expected_generation_sha256:
         raise RefillControllerError("refill supersession generation SHA-256 mismatch")
     generation = retry_active
@@ -2072,10 +2208,16 @@ def _supersede_refill_generation_locked(
             old_work_item_id=old_work_item_id,
             classification=classification,
         )
-        _save_or_verify_supersession_archive(
+        _verify_supersession_archive(
             archive_path=archive_path,
             old_generation_bytes=old_generation_bytes,
             old_generation_sha256=old_generation_sha256,
+        )
+        _assert_supersession_preconditions(
+            policy=policy,
+            snapshot=snapshot,
+            generation=generation,
+            classification=classification,
         )
         new_generation = dict(existing_receipt["new_generation"])
         save_refill_generation(config, new_generation)
@@ -2088,32 +2230,12 @@ def _supersede_refill_generation_locked(
             idempotent=True,
         )
 
-    if policy.enabled or policy.desired_capacity != 0:
-        raise RefillControllerError("refill supersession requires paused desired capacity zero")
-    if not snapshot.health.get("ok"):
-        raise RefillControllerError("refill supersession requires green runtime health")
-    if snapshot.running:
-        raise RefillControllerError("refill supersession requires zero running jobs")
-    if snapshot.queued:
-        raise RefillControllerError("refill supersession requires zero pending jobs")
-    if snapshot.feed_awaiting_import:
-        raise RefillControllerError("refill supersession requires zero feed-awaiting-import jobs")
-    if isinstance(generation.get("prepared_dispatch"), dict):
-        raise RefillControllerError("refill supersession refuses prepared_dispatch")
-
-    category = classification.get("category")
-    if category == "in_flight":
-        raise RefillControllerError("refill supersession refuses in-flight attempt")
-    if category == "item_terminal":
-        raise RefillControllerError("refill supersession refuses item-terminal attempt")
-    if (
-        category == "provider_systemic"
-        and classification.get("retryable") is True
-        and generation.get("provider_retry_consumed") is not True
-    ):
-        raise RefillControllerError("refill supersession refuses authorized provider retry")
-    if category != "unknown":
-        raise RefillControllerError("refill supersession requires acknowledged ambiguity")
+    _assert_supersession_preconditions(
+        policy=policy,
+        snapshot=snapshot,
+        generation=generation,
+        classification=classification,
+    )
 
     saved_policy = _superseded_policy(policy)
     now = config.clock().isoformat()

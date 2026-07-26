@@ -29,6 +29,7 @@ from .persistent_host import (
 from .process_witness import render_process_witness_json, run_process_witness
 from .refill_controller import (
     RefillConfig,
+    RefillControllerError,
     RefillService,
     keep_one_running_and_reconcile,
     load_refill_policy,
@@ -38,6 +39,7 @@ from .refill_controller import (
     render_refill_service_status_json,
     resume_builds_and_reconcile,
     supersede_refill_generation,
+    validate_expected_generation_sha256,
 )
 from .workspace_witness import render_workspace_witness_json, run_workspace_witness
 
@@ -220,10 +222,16 @@ def _refill_keep_one_command(args: argparse.Namespace) -> int:
                 "refill-keep-one supersession requires both --supersede-generation "
                 "and --expected-generation-sha256"
             )
+        try:
+            expected_generation_sha256 = validate_expected_generation_sha256(
+                args.expected_generation_sha256
+            )
+        except RefillControllerError as exc:
+            raise SystemExit(str(exc)) from exc
         report = supersede_refill_generation(
             _refill_config(args, submit=False),
             expected_generation_id=args.supersede_generation,
-            expected_generation_sha256=args.expected_generation_sha256,
+            expected_generation_sha256=expected_generation_sha256,
         )
         _write_or_print(render_refill_report_json(report), args.json_out)
         return 0

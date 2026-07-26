@@ -163,6 +163,7 @@ class RefillPolicy:
     enabled: bool = False
     desired_capacity: int = 1
     resume_desired_capacity: int | None = None
+    completed_supersession_id: str | None = None
     dispatch_window: dict[str, Any] = field(
         default_factory=lambda: {"mode": "always", "suppression_enabled": False}
     )
@@ -180,6 +181,10 @@ class RefillPolicy:
             and self.resume_desired_capacity not in {0, 1}
         ):
             raise RefillControllerError("v1 refill resume capacity must be 0 or 1")
+        if self.completed_supersession_id is not None and not isinstance(
+            self.completed_supersession_id, str
+        ):
+            raise RefillControllerError("completed_supersession_id must be a string or null")
         if self.queue_cap < 0:
             raise RefillControllerError("queue_cap must be non-negative")
         if self.review_cap_per_repository < 0:
@@ -200,11 +205,17 @@ class RefillPolicy:
             not isinstance(resume_raw, int) or isinstance(resume_raw, bool)
         ):
             raise RefillControllerError("resume_desired_capacity must be an integer or null")
+        completed_supersession_id = raw.get("completed_supersession_id")
+        if completed_supersession_id is not None and not isinstance(
+            completed_supersession_id, str
+        ):
+            raise RefillControllerError("completed_supersession_id must be a string or null")
         return cls(
             version=_required_int(raw, "version", 1),
             enabled=_required_bool(raw, "enabled", False),
             desired_capacity=_required_int(raw, "desired_capacity", 0),
             resume_desired_capacity=resume_raw,
+            completed_supersession_id=completed_supersession_id,
             dispatch_window=dict(dispatch_window),
             queue_cap=_required_int(raw, "queue_cap", 4),
             review_cap_per_repository=_required_int(raw, "review_cap_per_repository", 2),
@@ -499,6 +510,7 @@ def _assert_completed_supersession_receipt_matches(
     old_generation_sha256: str,
     archive_path: Path,
     requested_by: str,
+    active_release_commit: str,
 ) -> None:
     classification = receipt.get("classification")
     if not isinstance(classification, dict):
@@ -509,7 +521,7 @@ def _assert_completed_supersession_receipt_matches(
         old_generation_sha256=old_generation_sha256,
         archive_path=archive_path,
         requested_by=requested_by,
-        active_release_commit=str(receipt.get("active_release_commit") or ""),
+        active_release_commit=active_release_commit,
         old_job_id=(
             str(receipt.get("old_job_id")) if receipt.get("old_job_id") is not None else None
         ),
@@ -520,6 +532,14 @@ def _assert_completed_supersession_receipt_matches(
         ),
         classification=classification,
     )
+
+
+def _supersession_completion_id(
+    *,
+    old_generation_id: str,
+    old_generation_sha256: str,
+) -> str:
+    return f"{old_generation_id}:{old_generation_sha256}"
 
 
 def _save_or_verify_supersession_archive(
@@ -583,27 +603,74 @@ def _supersession_report(
         active_queued=snapshot.queued,
         feed_awaiting_import=snapshot.feed_awaiting_import,
         awaiting_review=snapshot.awaiting_review,
-        evidence={
-            "reason": "generation_superseded",
-            "idempotent": idempotent,
-            "supersession": {
-                key: receipt.get(key)
-                for key in (
-                    "old_generation_id",
-                    "old_generation_sha256",
-                    "old_job_id",
-                    "old_work_item_id",
-                    "classification",
-                    "ambiguity_evidence",
-                    "requested_by",
-                    "active_release_commit",
-                    "superseded_at",
-                    "new_generation_id",
-                    "archive_path",
-                )
-            },
-            "health": snapshot.health,
+        evidence=_supersession_evidence(
+            snapshot=snapshot,
+            receipt=receipt,
+            idempotent=idempotent,
+        ),
+    )
+
+
+def _supersession_evidence(
+    *,
+    snapshot: CapacitySnapshot,
+    receipt: Mapping[str, Any],
+    idempotent: bool,
+) -> dict[str, Any]:
+    return {
+        "reason": "generation_superseded",
+        "idempotent": idempotent,
+        "supersession": {
+            key: receipt.get(key)
+            for key in (
+                "old_generation_id",
+                "old_generation_sha256",
+                "old_job_id",
+                "old_work_item_id",
+                "classification",
+                "ambiguity_evidence",
+                "requested_by",
+                "active_release_commit",
+                "superseded_at",
+                "new_generation_id",
+                "archive_path",
+            )
         },
+        "health": snapshot.health,
+    }
+
+
+def _read_only_supersession_report(
+    *,
+    policy: RefillPolicy,
+    snapshot: CapacitySnapshot,
+    receipt: Mapping[str, Any],
+) -> RefillReport:
+    status = "SUPERSEDED"
+    message = "Refill generation supersession was already complete."
+    decision = {
+        "decided_at": _utc_now(),
+        "status": status,
+        "message": message,
+        "enabled": policy.enabled,
+        "desired_capacity": policy.desired_capacity,
+        "active_running": snapshot.running,
+        "active_queued": snapshot.queued,
+        "feed_awaiting_import": snapshot.feed_awaiting_import,
+        "awaiting_review": dict(snapshot.awaiting_review),
+        **_supersession_evidence(snapshot=snapshot, receipt=receipt, idempotent=True),
+    }
+    return RefillReport(
+        status=status,
+        enabled=policy.enabled,
+        desired_capacity=policy.desired_capacity,
+        active_running=snapshot.running,
+        active_queued=snapshot.queued,
+        feed_awaiting_import=snapshot.feed_awaiting_import,
+        awaiting_review=dict(snapshot.awaiting_review),
+        message=message,
+        decision_evidence=decision,
+        build_next_receipt=None,
     )
 
 
@@ -696,6 +763,7 @@ def _keep_one_running_locked(config: RefillConfig) -> RefillPolicy:
         enabled=True,
         desired_capacity=1,
         resume_desired_capacity=1,
+        completed_supersession_id=policy.completed_supersession_id,
         dispatch_window=policy.dispatch_window,
         queue_cap=policy.queue_cap,
         review_cap_per_repository=policy.review_cap_per_repository,
@@ -731,6 +799,7 @@ def _pause_builds_locked(config: RefillConfig) -> RefillPolicy:
         enabled=False,
         desired_capacity=0,
         resume_desired_capacity=resume_capacity,
+        completed_supersession_id=policy.completed_supersession_id,
         dispatch_window=policy.dispatch_window,
         queue_cap=policy.queue_cap,
         review_cap_per_repository=policy.review_cap_per_repository,
@@ -764,6 +833,7 @@ def _resume_builds_locked(config: RefillConfig) -> RefillPolicy:
         enabled=True,
         desired_capacity=capacity,
         resume_desired_capacity=capacity,
+        completed_supersession_id=policy.completed_supersession_id,
         dispatch_window=policy.dispatch_window,
         queue_cap=policy.queue_cap,
         review_cap_per_repository=policy.review_cap_per_repository,
@@ -2044,6 +2114,7 @@ def _report(
         enabled=policy.enabled,
         desired_capacity=policy.desired_capacity,
         resume_desired_capacity=policy.resume_desired_capacity,
+        completed_supersession_id=policy.completed_supersession_id,
         dispatch_window=policy.dispatch_window,
         queue_cap=policy.queue_cap,
         review_cap_per_repository=policy.review_cap_per_repository,
@@ -2064,11 +2135,16 @@ def _report(
     )
 
 
-def _superseded_policy(policy: RefillPolicy) -> RefillPolicy:
+def _superseded_policy(
+    policy: RefillPolicy,
+    *,
+    completed_supersession_id: str,
+) -> RefillPolicy:
     return RefillPolicy(
         enabled=True,
         desired_capacity=1,
         resume_desired_capacity=1,
+        completed_supersession_id=completed_supersession_id,
         dispatch_window=policy.dispatch_window,
         queue_cap=policy.queue_cap,
         review_cap_per_repository=policy.review_cap_per_repository,
@@ -2140,9 +2216,18 @@ def _supersede_refill_generation_locked(
     retry_receipt = _load_supersession_receipt(retry_receipt_path)
     retry_active = load_refill_generation(config)
     if old_generation_sha256 != expected_generation_sha256 and retry_receipt is not None:
+        policy = load_refill_policy(config)
+        snapshot = _capacity_snapshot(config, _host_paths(config))
+        active_release_commit = str(
+            snapshot.health.get("checks", {}).get("active_release", {}).get("commit") or ""
+        )
         retry_archive_path = _generation_history_path(
             config,
             {"generation_id": expected_generation_id},
+        )
+        completion_id = _supersession_completion_id(
+            old_generation_id=expected_generation_id,
+            old_generation_sha256=expected_generation_sha256,
         )
         _assert_completed_supersession_receipt_matches(
             retry_receipt,
@@ -2150,6 +2235,7 @@ def _supersede_refill_generation_locked(
             old_generation_sha256=expected_generation_sha256,
             archive_path=retry_archive_path,
             requested_by=config.build_next.requested_by,
+            active_release_commit=active_release_commit,
         )
         _verify_supersession_archive_sha(
             archive_path=retry_archive_path,
@@ -2158,13 +2244,30 @@ def _supersede_refill_generation_locked(
         if (
             retry_active is not None
             and retry_active.get("generation_id") == retry_receipt.get("new_generation_id")
-            and retry_active == retry_receipt.get("new_generation")
         ):
-            policy = load_refill_policy(config)
-            snapshot = _capacity_snapshot(config, _host_paths(config))
+            if policy.completed_supersession_id == completion_id:
+                return _read_only_supersession_report(
+                    policy=policy,
+                    snapshot=snapshot,
+                    receipt=retry_receipt,
+                )
+            if retry_active != retry_receipt.get("new_generation"):
+                raise RefillControllerError(
+                    "refill supersession active generation conflicts with receipt"
+                )
+            _assert_supersession_preconditions(
+                policy=policy,
+                snapshot=snapshot,
+                generation=retry_active,
+                classification=dict(retry_receipt.get("classification") or {}),
+            )
+            saved_policy = save_refill_policy(
+                config,
+                _superseded_policy(policy, completed_supersession_id=completion_id),
+            )
             return _supersession_report(
                 config=config,
-                policy=_superseded_policy(policy),
+                policy=saved_policy,
                 snapshot=snapshot,
                 receipt=retry_receipt,
                 idempotent=True,
@@ -2195,6 +2298,10 @@ def _supersede_refill_generation_locked(
     classification = _classify_attempt(config, _host_paths(config), current)
     old_job_id = str(current.get("job_id") or "") or None
     old_work_item_id = str(current.get("work_item_id") or "") or None
+    completion_id = _supersession_completion_id(
+        old_generation_id=old_generation_id,
+        old_generation_sha256=old_generation_sha256,
+    )
 
     if existing_receipt is not None:
         _assert_supersession_receipt_matches(
@@ -2221,7 +2328,10 @@ def _supersede_refill_generation_locked(
         )
         new_generation = dict(existing_receipt["new_generation"])
         save_refill_generation(config, new_generation)
-        saved_policy = save_refill_policy(config, _superseded_policy(policy))
+        saved_policy = save_refill_policy(
+            config,
+            _superseded_policy(policy, completed_supersession_id=completion_id),
+        )
         return _supersession_report(
             config=config,
             policy=saved_policy,
@@ -2237,7 +2347,7 @@ def _supersede_refill_generation_locked(
         classification=classification,
     )
 
-    saved_policy = _superseded_policy(policy)
+    saved_policy = _superseded_policy(policy, completed_supersession_id=completion_id)
     now = config.clock().isoformat()
     new_generation = _new_superseded_generation(
         saved_policy,

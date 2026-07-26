@@ -8,6 +8,8 @@ This repository is in **controlled draft-publication** mode. It can run approved
 
 For the current operating model, founder boundary, and idea-to-PR flow, see [`docs/AUTOBUILDER_OPERATING_MANUAL_V1.md`](docs/AUTOBUILDER_OPERATING_MANUAL_V1.md). For the current chapter closeout and exact next Codex objective, see [`docs/CURRENT_STATE_AND_CODEX_NEXT_2026-07-13.md`](docs/CURRENT_STATE_AND_CODEX_NEXT_2026-07-13.md).
 
+For the draft adopt-before-build policy, reusable task-packet section, and first PPE/MSOS open-source capability audit, see [`docs/ADOPT_BEFORE_BUILD_V1.md`](docs/ADOPT_BEFORE_BUILD_V1.md), [`docs/REUSE_ASSESSMENT_TASK_PACKET_V1.md`](docs/REUSE_ASSESSMENT_TASK_PACKET_V1.md), and [`docs/INITIAL_CAPABILITY_REUSE_AUDIT_2026-07-25.md`](docs/INITIAL_CAPABILITY_REUSE_AUDIT_2026-07-25.md).
+
 It may:
 
 - load and validate a product contract;

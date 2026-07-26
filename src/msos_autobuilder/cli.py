@@ -37,6 +37,7 @@ from .refill_controller import (
     render_refill_report_json,
     render_refill_service_status_json,
     resume_builds_and_reconcile,
+    supersede_refill_generation,
 )
 from .workspace_witness import render_workspace_witness_json, run_workspace_witness
 
@@ -213,6 +214,19 @@ def _refill_config(args: argparse.Namespace, *, submit: bool = True) -> RefillCo
 
 
 def _refill_keep_one_command(args: argparse.Namespace) -> int:
+    if args.supersede_generation or args.expected_generation_sha256:
+        if not args.supersede_generation or not args.expected_generation_sha256:
+            raise SystemExit(
+                "refill-keep-one supersession requires both --supersede-generation "
+                "and --expected-generation-sha256"
+            )
+        report = supersede_refill_generation(
+            _refill_config(args, submit=False),
+            expected_generation_id=args.supersede_generation,
+            expected_generation_sha256=args.expected_generation_sha256,
+        )
+        _write_or_print(render_refill_report_json(report), args.json_out)
+        return 0
     report = keep_one_running_and_reconcile(_refill_config(args))
     _write_or_print(render_refill_report_json(report), args.json_out)
     return 0 if report.enabled else 2
@@ -432,6 +446,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="persist founder intent to keep one approved build running",
     )
     _refill_arguments(refill_keep_one)
+    refill_keep_one.add_argument("--supersede-generation")
+    refill_keep_one.add_argument("--expected-generation-sha256")
     refill_keep_one.set_defaults(func=_refill_keep_one_command)
 
     refill_pause = subparsers.add_parser(

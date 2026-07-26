@@ -67,6 +67,8 @@ The managed `refill-run` service holds a singleton process lock, writes `refill-
 
 Queue and review pressure return `BACKPRESSURE`, not `BLOCKED`. Paused mode returns `PAUSED` and is recorded as automatic-mode evidence. Runtime health failures, stale host heartbeat, malformed policy, missing feed configuration, stale registry/source evidence, or missing dispatch authority fail closed before a new job is submitted. Item-level source/path/authority validation remains owned by `build-next`; refill owns runtime health and capacity evidence.
 
+Paused unresolved generations are not replaced by ordinary `refill-keep-one`. A founder may use the explicit supersession form only when policy is disabled at desired capacity zero, runtime health is green, capacity is empty, and the request names both the active generation ID and exact active-generation SHA-256: `refill-keep-one --supersede-generation <generation-id> --expected-generation-sha256 <sha256>`. Supersession archives the old generation bytes, writes a durable receipt, installs one clean `refill-keep-one` generation, and does not dispatch during the transaction.
+
 Mandatory coordination status for an enabled installation:
 
 - `refill-status.json` is fresh and bound to the running exact release;

@@ -9,9 +9,11 @@ from threading import Event, Thread
 from time import sleep
 
 import pytest
+import yaml
 from test_build_next import _commit_all, _config, _feed_repo, _git, _snapshot, _write_ppe
 
 import msos_autobuilder.refill_controller as refill_controller
+from msos_autobuilder.cli import _refill_keep_one_command, build_parser
 from msos_autobuilder.refill_controller import (
     RefillConfig,
     RefillControllerError,
@@ -1915,6 +1917,58 @@ def _completed_supersession_id(
     return f"{generation['generation_id']}:{generation_sha256}"
 
 
+def _write_refill_service_config(config: RefillConfig, tmp_path: Path) -> Path:
+    codex_config = tmp_path / "codex-host.yaml"
+    codex_config.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "publication_enabled": False,
+                "source_repo": str(config.build_next.ppe_repo),
+                "workspace_root": str(tmp_path / "workspaces"),
+                "runtime_root": str(tmp_path / "runtime"),
+                "owner_id": "test-host",
+                "codex": {"sandbox_mode": "workspace-write", "max_concurrency": 1},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    service_config = tmp_path / "service.yaml"
+    service_config.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "publication_enabled": False,
+                "host_root": str(config.build_next.host_root),
+                "codex_host_config": str(codex_config),
+                "job_feed": {
+                    "enabled": True,
+                    "repo_url": config.build_next.feed_repo_url,
+                    "branch": config.build_next.jobs_branch,
+                    "path": config.build_next.jobs_path,
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return service_config
+
+
+def _overwrite_supersession_receipt_field(
+    config: RefillConfig,
+    generation: dict[str, object],
+    generation_sha256: str,
+    field: str,
+    value: object,
+) -> None:
+    receipt = _supersession_receipt_file(config, generation, generation_sha256)
+    payload = json.loads(receipt.read_text(encoding="utf-8"))
+    payload[field] = value
+    receipt.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def _seed_paused_revision_ambiguity(tmp_path: Path) -> tuple[RefillConfig, dict[str, object], str]:
     ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
     feed = _feed_repo(tmp_path / "feed-work")
@@ -3323,6 +3377,56 @@ def test_supersession_valid_completed_retry_remains_idempotent(tmp_path: Path) -
     assert feed_jobs_after == feed_jobs_before
 
 
+def test_supersession_cli_feed_awaiting_import_blocks_without_mutation(
+    tmp_path: Path,
+) -> None:
+    config, generation, generation_sha = _seed_paused_revision_ambiguity(tmp_path)
+    old_job_id = str(generation["current_attempt"]["job_id"])
+    extra_job_id = "cli-awaiting-import"
+    feed_job = _feed_job_path(config, old_job_id)
+    extra_job = _feed_job_path(config, extra_job_id)
+    extra_job.write_text(
+        feed_job.read_text(encoding="utf-8").replace(old_job_id, extra_job_id),
+        encoding="utf-8",
+    )
+    _git(config.build_next.checkout_root, "add", str(extra_job))
+    _git(config.build_next.checkout_root, "commit", "-qm", "add awaiting import job")
+    _git(config.build_next.checkout_root, "push", "-q", "origin", "jobs")
+    service_config = _write_refill_service_config(config, tmp_path)
+    before = _capture_supersession_bytes(config, generation, generation_sha)
+    args = build_parser().parse_args(
+        [
+            "refill-keep-one",
+            "--service-config",
+            str(service_config),
+            "--checkout-root",
+            str(config.build_next.checkout_root),
+            "--supersede-generation",
+            str(generation["generation_id"]),
+            "--expected-generation-sha256",
+            generation_sha,
+        ]
+    )
+
+    with pytest.raises(RefillControllerError, match="zero feed-awaiting-import jobs"):
+        _refill_keep_one_command(args)
+
+    _assert_supersession_bytes_unchanged(config, generation, generation_sha, before)
+    assert not _generation_history_file(config, generation).exists()
+    assert not _supersession_receipt_file(config, generation, generation_sha).exists()
+
+    extra_job.unlink()
+    feed_job.unlink()
+    _git(config.build_next.checkout_root, "add", "-u", str(extra_job), str(feed_job))
+    _git(config.build_next.checkout_root, "commit", "-qm", "empty approved feed")
+    _git(config.build_next.checkout_root, "push", "-q", "origin", "jobs")
+
+    assert _refill_keep_one_command(args) == 0
+    active = load_refill_generation(config)
+    assert active is not None
+    assert active["generation_id"] != generation["generation_id"]
+
+
 def test_supersession_completed_retry_preserves_later_founder_pause(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3420,6 +3524,131 @@ def test_supersession_retry_after_active_replace_finishes_policy_once(
         generation, generation_sha
     )
     assert before_feed_jobs == after_feed_jobs
+
+
+def test_supersession_active_replaced_retry_item_terminal_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, generation, generation_sha = _seed_paused_revision_ambiguity(tmp_path)
+    _create_active_replaced_without_policy_completion(
+        config, generation, generation_sha, monkeypatch
+    )
+    old_job_id = str(generation["current_attempt"]["job_id"])
+    _write_state_json(config, "controlled-publisher-seen.json", {old_job_id: {}})
+    before = _capture_supersession_bytes(config, generation, generation_sha)
+
+    with pytest.raises(RefillControllerError, match="classification changed"):
+        supersede_refill_generation(
+            config,
+            expected_generation_id=str(generation["generation_id"]),
+            expected_generation_sha256=generation_sha,
+        )
+
+    _assert_supersession_bytes_unchanged(config, generation, generation_sha, before)
+
+
+def test_supersession_active_replaced_retry_provider_retry_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, generation, generation_sha = _seed_paused_revision_ambiguity(tmp_path)
+    _create_active_replaced_without_policy_completion(
+        config, generation, generation_sha, monkeypatch
+    )
+    old_job_id = str(generation["current_attempt"]["job_id"])
+    completed = config.build_next.host_root / "queue" / "completed" / old_job_id
+    failed = config.build_next.host_root / "queue" / "failed" / old_job_id
+    failed.parent.mkdir(parents=True, exist_ok=True)
+    completed.rename(failed)
+    (failed / "error.json").write_text(
+        json.dumps(
+            {
+                "provider_failure": {
+                    "version": 1,
+                    "scope": "provider",
+                    "temporary": True,
+                    "retryable": True,
+                    "retry_at": "2026-07-25T15:04:00Z",
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    before = _capture_supersession_bytes(config, generation, generation_sha)
+
+    with pytest.raises(RefillControllerError, match="classification changed"):
+        supersede_refill_generation(
+            config,
+            expected_generation_id=str(generation["generation_id"]),
+            expected_generation_sha256=generation_sha,
+        )
+
+    _assert_supersession_bytes_unchanged(config, generation, generation_sha, before)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("old_job_id", "different-job"),
+        ("old_work_item_id", "different-work-item"),
+        ("classification", {"category": "unknown", "stage": "changed"}),
+        ("ambiguity_evidence", {"changed": True}),
+    ],
+)
+def test_supersession_active_replaced_retry_receipt_archive_mismatch_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    config, generation, generation_sha = _seed_paused_revision_ambiguity(tmp_path)
+    _create_active_replaced_without_policy_completion(
+        config, generation, generation_sha, monkeypatch
+    )
+    _overwrite_supersession_receipt_field(config, generation, generation_sha, field, value)
+    before = _capture_supersession_bytes(config, generation, generation_sha)
+
+    with pytest.raises(
+        RefillControllerError,
+        match="receipt conflicts|conflicts with archive|classification changed",
+    ):
+        supersede_refill_generation(
+            config,
+            expected_generation_id=str(generation["generation_id"]),
+            expected_generation_sha256=generation_sha,
+        )
+
+    _assert_supersession_bytes_unchanged(config, generation, generation_sha, before)
+
+
+def test_supersession_active_replaced_retry_mismatched_completion_binding_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, generation, generation_sha = _seed_paused_revision_ambiguity(tmp_path)
+    _create_active_replaced_without_policy_completion(
+        config, generation, generation_sha, monkeypatch
+    )
+    save_refill_policy(
+        config,
+        RefillPolicy(
+            enabled=False,
+            desired_capacity=0,
+            completed_supersession_id="different:" + "b" * 64,
+        ),
+    )
+    before = _capture_supersession_bytes(config, generation, generation_sha)
+
+    with pytest.raises(RefillControllerError, match="completion binding conflicts"):
+        supersede_refill_generation(
+            config,
+            expected_generation_id=str(generation["generation_id"]),
+            expected_generation_sha256=generation_sha,
+        )
+
+    _assert_supersession_bytes_unchanged(config, generation, generation_sha, before)
 
 
 def test_supersession_completed_retry_active_release_mismatch_fails_closed(

@@ -229,7 +229,7 @@ def _refill_keep_one_command(args: argparse.Namespace) -> int:
         except RefillControllerError as exc:
             raise SystemExit(str(exc)) from exc
         report = supersede_refill_generation(
-            _refill_config(args, submit=False),
+            _refill_config(args),
             expected_generation_id=args.supersede_generation,
             expected_generation_sha256=expected_generation_sha256,
         )

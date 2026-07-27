@@ -144,6 +144,27 @@ def test_keep_one_reconciles_through_accepted_build_next_path(tmp_path: Path) ->
     assert policy.last_decision_evidence["build_next"]["job_id"] == report.build_next_receipt.job_id
 
 
+def test_refill_blocks_before_build_next_when_source_freshness_unproven(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    keep_one_running(config)
+    (config.build_next.ppe_repo / "untracked.txt").write_text("dirty\n", encoding="utf-8")
+
+    def fail_if_called(build_config: object) -> object:
+        raise AssertionError("build_next must not be called before source freshness proof")
+
+    monkeypatch.setattr(refill_controller, "build_next", fail_if_called)
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    assert report.build_next_receipt is None
+    assert report.decision_evidence["reason"] == "source_freshness"
+    assert report.decision_evidence["source_freshness"]["block_reason"] == "dirty_checkout"
+
+
 def test_existing_running_and_queued_jobs_fill_capacity_without_dispatch(tmp_path: Path) -> None:
     config = _refill_config(tmp_path)
     _write_host_status(config)
@@ -2318,6 +2339,35 @@ def test_ppe_source_movement_blocks_exclusion_rerank(tmp_path: Path) -> None:
     assert report.build_next_receipt is None
     assert report.decision_evidence["reason"] == "source_pin_mismatch"
     assert generation["item_scoped_terminal_exclusions"] == []
+
+
+def test_pinned_generation_remote_advancement_does_not_mutate_checkout_head(
+    tmp_path: Path,
+) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_two_items())
+    feed = _feed_repo(tmp_path / "feed-work")
+    config = _refill_config(tmp_path, ppe=ppe, feed=feed)
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    pinned = load_refill_generation(config)["source_ppe_identity"]["commit"]
+    origin_url = _git(ppe, "remote", "get-url", "origin")
+    upstream = tmp_path / "upstream"
+    _git(None, "clone", "-q", origin_url, str(upstream))
+    _git(upstream, "config", "user.email", "test@example.com")
+    _git(upstream, "config", "user.name", "Test")
+    (upstream / "movement.txt").write_text("moved upstream\n", encoding="utf-8")
+    advanced = _commit_all(upstream, "advance origin only")
+    _git(upstream, "push", "-q", "origin", "main")
+    _archive_attempt(config, job_id)
+    _write_state_json(config, "controlled-publisher-seen.json", {job_id: {"status": "published"}})
+
+    report = reconcile_refill(config)
+
+    assert advanced != pinned
+    assert _git(ppe, "rev-parse", "HEAD") == pinned
+    assert report.status == "BLOCKED"
+    assert report.build_next_receipt is None
+    assert report.decision_evidence["reason"] == "source_pin_mismatch"
 
 
 def test_ppe_source_movement_blocks_provider_retry(tmp_path: Path) -> None:

@@ -25,6 +25,12 @@ from typing import Any
 import yaml
 
 from .codex_shadow import load_codex_host_config
+from .managed_source import (
+    ManagedSourceSyncError,
+    SourceIdentity,
+    ensure_managed_source_fresh,
+    normalize_github_repository,
+)
 from .persistent_host import HostPaths, load_persistent_host_config, parse_host_job
 from .validation_contract import (
     build_ppe_validation_contract,
@@ -76,16 +82,6 @@ BROAD_WRITABLE_ROOTS = {
     "artifacts",
     "artifacts/",
 }
-
-
-@dataclass(frozen=True)
-class SourceIdentity:
-    remote: str
-    remote_url: str
-    repository: str
-    ref: str
-    remote_ref: str
-    commit: str
 
 
 @dataclass(frozen=True)
@@ -454,18 +450,7 @@ def _validate_selection_context(
 
 
 def _normalize_github_repository(url: str) -> str | None:
-    text = str(url or "").strip()
-    patterns = (
-        r"^https://github\.com/([^/\s]+)/([^/\s]+?)(?:\.git)?/?$",
-        r"^git@github\.com:([^/\s]+)/([^/\s]+?)(?:\.git)?$",
-        r"^ssh://git@github\.com/([^/\s]+)/([^/\s]+?)(?:\.git)?/?$",
-    )
-    for pattern in patterns:
-        match = re.fullmatch(pattern, text, flags=re.IGNORECASE)
-        if match:
-            owner, repo = match.groups()
-            return f"{owner}/{repo}"
-    return None
+    return normalize_github_repository(url)
 
 
 def _pipeline(registry: Mapping[str, Any], pipeline_id: str) -> dict[str, Any]:
@@ -746,49 +731,23 @@ def _plan_text(ppe_repo: Path, rel: str) -> tuple[dict[str, Any], str, str]:
     return data, safe_rel, text
 
 
-def _source_identity(config: BuildNextConfig, ppe_repo: Path) -> SourceIdentity:
-    remote_url = _git(ppe_repo, "remote", "get-url", config.source_remote)
-    repository = _normalize_github_repository(remote_url)
-    if repository is None:
-        if config.allow_test_local_source_remote:
-            repository = config.expected_source_repository
-        else:
-            raise BuildNextError(
-                f"PPE source remote {config.source_remote!r} is not a canonical GitHub URL"
-            )
-    if repository != config.expected_source_repository:
-        raise BuildNextError(
-            "PPE source remote resolves to "
-            f"{repository!r}, expected {config.expected_source_repository!r}"
-        )
-    _git(ppe_repo, "fetch", "--no-tags", config.source_remote, config.source_ref)
-    remote_ref = f"{config.source_remote}/{config.source_ref}"
-    remote_commit = _git(ppe_repo, "rev-parse", remote_ref)
-    commit = _git(ppe_repo, "rev-parse", "HEAD")
-    if not re.fullmatch(r"[0-9a-f]{40}", commit):
-        raise BuildNextError("PPE source commit is not a full SHA")
-    if not re.fullmatch(r"[0-9a-f]{40}", remote_commit):
-        raise BuildNextError("PPE remote source commit is not a full SHA")
-    dirty = _git(ppe_repo, "status", "--porcelain")
-    if dirty:
-        raise BuildNextError("PPE source checkout is dirty; cannot pin an exact source identity")
-    if commit != remote_commit:
-        raise BuildNextError(
-            f"PPE source HEAD {commit} does not match freshly fetched {remote_ref} {remote_commit}"
-        )
-    if config.expected_source_commit is not None and commit != config.expected_source_commit:
-        raise BuildNextError(
-            f"PPE source commit {commit} does not match pinned generation source "
-            f"{config.expected_source_commit}"
-        )
-    return SourceIdentity(
-        remote=config.source_remote,
-        remote_url=remote_url,
-        repository=repository,
-        ref=config.source_ref,
-        remote_ref=remote_ref,
-        commit=commit,
+def _source_freshness(
+    config: BuildNextConfig,
+    ppe_repo: Path,
+) -> tuple[SourceIdentity, dict[str, Any]]:
+    result = ensure_managed_source_fresh(
+        ppe_repo,
+        source_remote=config.source_remote,
+        source_ref=config.source_ref,
+        expected_source_repository=config.expected_source_repository,
+        allow_test_local_source_remote=config.allow_test_local_source_remote,
+        expected_source_commit=config.expected_source_commit,
     )
+    return result.identity, result.evidence
+
+
+def _source_identity(config: BuildNextConfig, ppe_repo: Path) -> SourceIdentity:
+    return _source_freshness(config, ppe_repo)[0]
 
 
 def _evidence_identity(
@@ -1222,8 +1181,10 @@ def _blocked_receipt(message: str, evidence: Mapping[str, Any] | None = None) ->
 
 def build_next(config: BuildNextConfig) -> BuildNextReceipt:
     ppe_repo = config.ppe_repo.expanduser().resolve()
+    source_freshness_evidence: dict[str, Any] | None = None
     try:
-        source_identity = _source_identity(config, ppe_repo)
+        source_identity, source_freshness = _source_freshness(config, ppe_repo)
+        source_freshness_evidence = source_freshness
         snapshot = _collect_snapshot(ppe_repo, config.exclude_work_item_ids)
         _validate_selection_context(snapshot, config.exclude_work_item_ids)
         _validate_snapshot(snapshot, config.max_snapshot_age_seconds)
@@ -1239,7 +1200,10 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                 feed_path=None,
                 feed_commit=None,
                 message="No safe READY_TO_BUILD work item was selected by PPE.",
-                evidence={"snapshot_as_of": snapshot.get("as_of")},
+                evidence={
+                    "snapshot_as_of": snapshot.get("as_of"),
+                    "source_freshness": source_freshness,
+                },
                 submitted=False,
             )
         if rec.get("state") != "READY_TO_BUILD" or rec.get("action_type") != "build":
@@ -1253,7 +1217,10 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                 feed_path=None,
                 feed_commit=None,
                 message=f"PPE selected non-dispatchable state {rec.get('state')!r}.",
-                evidence={"recommended_next_action": rec},
+                evidence={
+                    "recommended_next_action": rec,
+                    "source_freshness": source_freshness,
+                },
                 submitted=False,
             )
 
@@ -1298,6 +1265,10 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             refill_attempt=refill_attempt,
             requested_exclusions=config.exclude_work_item_ids,
         )
+        receipt_evidence_identity = {
+            **evidence_identity,
+            "source_freshness": source_freshness,
+        }
         job_id = _job_id(
             pipeline_id,
             work_item_id,
@@ -1317,7 +1288,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                 feed_path=None,
                 feed_commit=None,
                 message=f"Job {job_id} is already {state.lower()}; no duplicate was submitted.",
-                evidence=evidence_identity,
+                evidence=receipt_evidence_identity,
                 submitted=False,
             )
         if state == "BLOCKED":
@@ -1356,7 +1327,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                     "Dry run constructed one immutable approved build-next job; "
                     "no feed submission occurred."
                 ),
-                evidence=evidence_identity,
+                evidence=receipt_evidence_identity,
                 submitted=False,
                 projected_status="QUEUED",
             )
@@ -1377,11 +1348,16 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                     "no duplicate was submitted."
                 )
             ),
-            evidence=evidence_identity,
+            evidence=receipt_evidence_identity,
             submitted=submission.created,
         )
-    except BuildNextError as exc:
-        return _blocked_receipt(str(exc))
+    except (BuildNextError, ManagedSourceSyncError) as exc:
+        evidence = None
+        if isinstance(exc, ManagedSourceSyncError):
+            evidence = {"source_freshness": exc.evidence}
+        elif source_freshness_evidence is not None:
+            evidence = {"source_freshness": source_freshness_evidence}
+        return _blocked_receipt(str(exc), evidence=evidence)
 
 
 def render_receipt_json(receipt: BuildNextReceipt) -> str:

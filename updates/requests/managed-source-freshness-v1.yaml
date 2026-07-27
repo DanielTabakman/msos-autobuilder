@@ -28,6 +28,7 @@ expected_files:
   - src/msos_autobuilder/inventory.py
   - src/msos_autobuilder/lanes.py
   - src/msos_autobuilder/leases.py
+  - src/msos_autobuilder/managed_source.py
   - src/msos_autobuilder/models.py
   - src/msos_autobuilder/persistent_host.py
   - src/msos_autobuilder/process_witness.py

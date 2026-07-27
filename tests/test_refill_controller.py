@@ -2341,6 +2341,35 @@ def test_ppe_source_movement_blocks_exclusion_rerank(tmp_path: Path) -> None:
     assert generation["item_scoped_terminal_exclusions"] == []
 
 
+def test_pinned_generation_remote_advancement_does_not_mutate_checkout_head(
+    tmp_path: Path,
+) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_two_items())
+    feed = _feed_repo(tmp_path / "feed-work")
+    config = _refill_config(tmp_path, ppe=ppe, feed=feed)
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    pinned = load_refill_generation(config)["source_ppe_identity"]["commit"]
+    origin_url = _git(ppe, "remote", "get-url", "origin")
+    upstream = tmp_path / "upstream"
+    _git(None, "clone", "-q", origin_url, str(upstream))
+    _git(upstream, "config", "user.email", "test@example.com")
+    _git(upstream, "config", "user.name", "Test")
+    (upstream / "movement.txt").write_text("moved upstream\n", encoding="utf-8")
+    advanced = _commit_all(upstream, "advance origin only")
+    _git(upstream, "push", "-q", "origin", "main")
+    _archive_attempt(config, job_id)
+    _write_state_json(config, "controlled-publisher-seen.json", {job_id: {"status": "published"}})
+
+    report = reconcile_refill(config)
+
+    assert advanced != pinned
+    assert _git(ppe, "rev-parse", "HEAD") == pinned
+    assert report.status == "BLOCKED"
+    assert report.build_next_receipt is None
+    assert report.decision_evidence["reason"] == "source_pin_mismatch"
+
+
 def test_ppe_source_movement_blocks_provider_retry(tmp_path: Path) -> None:
     ppe = _write_ppe(tmp_path / "ppe")
     feed = _feed_repo(tmp_path / "feed-work")

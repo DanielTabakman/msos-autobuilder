@@ -26,6 +26,7 @@ from .build_next import (
     _source_identity,
     build_next,
 )
+from .managed_source import ManagedSourceSyncError, ensure_managed_source_fresh
 from .persistent_host import HostPaths, HostProcessLock, parse_host_job
 from .service_error_lifecycle import (
     GATE_ERROR_SPEC,
@@ -1956,6 +1957,22 @@ def _source_pin_block(config: RefillConfig, generation: Mapping[str, Any]) -> di
     }
 
 
+def _prove_refill_source_freshness(
+    config: RefillConfig,
+    *,
+    expected_source_commit: str | None,
+) -> dict[str, Any]:
+    result = ensure_managed_source_fresh(
+        config.build_next.ppe_repo,
+        source_remote=config.build_next.source_remote,
+        source_ref=config.build_next.source_ref,
+        expected_source_repository=config.build_next.expected_source_repository,
+        allow_test_local_source_remote=config.build_next.allow_test_local_source_remote,
+        expected_source_commit=expected_source_commit,
+    )
+    return result.evidence
+
+
 def _active_release_evidence(path: Path) -> dict[str, Any]:
     evidence: dict[str, Any] = {"ok": False, "path": str(path)}
     try:
@@ -2819,6 +2836,30 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
         exclusions = tuple(item for item in exclusions if item != retry_same_item)
     attempt_ordinal = len(generation.get("attempt_sequence") or []) + 1
     pinned_commit = _pinned_source_commit(generation)
+    try:
+        source_freshness = _prove_refill_source_freshness(
+            config,
+            expected_source_commit=pinned_commit,
+        )
+    except ManagedSourceSyncError as exc:
+        generation["state"] = "BLOCKED"
+        save_refill_generation(config, generation)
+        return _report(
+            config=config,
+            policy=policy,
+            status="BLOCKED",
+            message=str(exc),
+            active_running=active_running,
+            active_queued=active_queued,
+            feed_awaiting_import=feed_awaiting_import,
+            awaiting_review=awaiting_review,
+            evidence={
+                "reason": "source_freshness",
+                "source_freshness": exc.evidence,
+                "generation": generation,
+                "health": snapshot.health,
+            },
+        )
     prepared, dry_receipt = _prepare_dispatch(
         config,
         generation,
@@ -2830,6 +2871,29 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
         pinned_commit=pinned_commit,
         consume_provider_retry=retry_reason == "provider_retry",
     )
+    if (
+        dry_receipt.source_commit
+        and source_freshness.get("new_commit") != dry_receipt.source_commit
+    ):
+        generation["state"] = "BLOCKED"
+        save_refill_generation(config, generation)
+        return _report(
+            config=config,
+            policy=policy,
+            status="BLOCKED",
+            message="Refill source freshness proof disagrees with build-next source identity.",
+            active_running=active_running,
+            active_queued=active_queued,
+            feed_awaiting_import=feed_awaiting_import,
+            awaiting_review=awaiting_review,
+            evidence={
+                "reason": "source_freshness_mismatch",
+                "source_freshness": source_freshness,
+                "build_next": asdict(dry_receipt),
+                "generation": generation,
+                "health": snapshot.health,
+            },
+        )
     if not prepared:
         receipt = dry_receipt
     else:

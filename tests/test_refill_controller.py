@@ -144,6 +144,27 @@ def test_keep_one_reconciles_through_accepted_build_next_path(tmp_path: Path) ->
     assert policy.last_decision_evidence["build_next"]["job_id"] == report.build_next_receipt.job_id
 
 
+def test_refill_blocks_before_build_next_when_source_freshness_unproven(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    keep_one_running(config)
+    (config.build_next.ppe_repo / "untracked.txt").write_text("dirty\n", encoding="utf-8")
+
+    def fail_if_called(build_config: object) -> object:
+        raise AssertionError("build_next must not be called before source freshness proof")
+
+    monkeypatch.setattr(refill_controller, "build_next", fail_if_called)
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    assert report.build_next_receipt is None
+    assert report.decision_evidence["reason"] == "source_freshness"
+    assert report.decision_evidence["source_freshness"]["block_reason"] == "dirty_checkout"
+
+
 def test_existing_running_and_queued_jobs_fill_capacity_without_dispatch(tmp_path: Path) -> None:
     config = _refill_config(tmp_path)
     _write_host_status(config)

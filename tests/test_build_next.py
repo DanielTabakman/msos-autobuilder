@@ -648,7 +648,9 @@ def test_no_ready_work_returns_unfilled(tmp_path: Path) -> None:
     assert receipt.status == "UNFILLED"
 
 
-def test_stale_clean_branch_and_clean_feature_branch_fail_closed(tmp_path: Path) -> None:
+def test_stale_clean_branch_fast_forwards_and_clean_feature_branch_fails_closed(
+    tmp_path: Path,
+) -> None:
     ppe_stale = _write_ppe(tmp_path / "ppe-stale")
     (ppe_stale / "new-main.txt").write_text("new main\n", encoding="utf-8")
     _commit_all(ppe_stale, "advance main")
@@ -668,10 +670,11 @@ def test_stale_clean_branch_and_clean_feature_branch_fail_closed(tmp_path: Path)
         _config(tmp_path / "feature", ppe_feature, _feed_repo(tmp_path / "feed-feature"))
     )
 
-    assert stale_receipt.status == "BLOCKED"
-    assert "does not match freshly fetched origin/main" in stale_receipt.message
+    assert stale_receipt.status == "QUEUED"
+    assert stale_receipt.evidence["source_freshness"]["action"] == "fast_forward"
     assert feature_receipt.status == "BLOCKED"
-    assert "does not match freshly fetched origin/main" in feature_receipt.message
+    assert "expected managed" in feature_receipt.message
+    assert feature_receipt.evidence["source_freshness"]["block_reason"] == "unexpected_branch"
 
 
 def test_exact_origin_main_succeeds_and_records_source_evidence(tmp_path: Path) -> None:
@@ -686,6 +689,7 @@ def test_exact_origin_main_succeeds_and_records_source_evidence(tmp_path: Path) 
     assert receipt.evidence["source"]["remote"] == "origin"
     assert receipt.evidence["source"]["remote_ref"] == "origin/main"
     assert receipt.evidence["source"]["repository"] == SOURCE_REPO
+    assert receipt.evidence["source_freshness"]["action"] == "already_current"
     review = tmp_path / "review"
     _git(None, "clone", "-q", "--branch", "jobs", str(feed), str(review))
     job = yaml.safe_load(next((review / "jobs" / "approved").glob("build-next-*.yaml")).read_text())

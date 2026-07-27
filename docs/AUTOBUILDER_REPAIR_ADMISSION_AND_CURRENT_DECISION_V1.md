@@ -22,16 +22,17 @@ Issue #50 owns this witness.
 Current repository evidence:
 
 - Issue #89 is complete.
-- PR #90 merged the evidence-preserving refill-generation supersession capability into `main` as commit `6159071cbb7e7d58480cf8f4fbbb24052d483edf`.
-- The currently approved installed release manifest still points to `canonical-dependency-source-hash-v1` at commit `a6bb9849cb6bdea9feed7209316f0cec146d194e`.
-- Therefore the supersession repair is merged in GitHub but is not yet proven in the managed Windows installation.
+- PR #90 merged the evidence-preserving refill-generation supersession capability as commit `6159071cbb7e7d58480cf8f4fbbb24052d483edf`.
+- PR #91 merged the managed release request as commit `3d32616760a1f1e9f34cc8a42f269aa788ceaa25`.
+- The canonical `updates` manifest now approves release `refill-generation-supersession-v1` at exact commit `3d32616760a1f1e9f34cc8a42f269aa788ceaa25` with required `test` and `windows-test` contexts.
+- The remaining evidence gap is managed Windows installation and the real Issue #50 witness.
 
 The selected next sequence is:
 
-1. Prepare and review one managed release request containing the merged PR #90 capability.
-2. Publish and install that exact approved release through the existing external supervisor.
-3. Confirm all managed services identify the exact installed release and refill remains paused before mutation.
-4. Explicitly supersede the preserved unresolved generation using its exact generation ID and SHA-256.
+1. Install exact approved release `3d32616760a1f1e9f34cc8a42f269aa788ceaa25` through the existing external supervisor.
+2. Confirm all six managed services identify that exact release and refill remains paused before mutation.
+3. Explicitly supersede the preserved unresolved generation using its exact generation ID and SHA-256.
+4. Verify the old generation remains immutably archived and the durable receipt is coherent.
 5. Run the locked Issue #50 A -> automatic B witness.
 6. Pause after B and prove no C dispatch.
 
@@ -76,16 +77,7 @@ Codex must not treat every newly observed failure as automatically authorized fo
 
 ### GitHub
 
-GitHub remains the source of truth for:
-
-- the selected witness;
-- accepted decisions;
-- incident history;
-- implementation ownership;
-- PR review;
-- test and runtime evidence.
-
-Chat context helps coordinate the work but is not canonical by itself.
+GitHub remains the source of truth for the selected witness, accepted decisions, incident history, implementation ownership, PR review, and test/runtime evidence. Chat context coordinates the work but is not canonical by itself.
 
 ## 4. Repair admission classification
 
@@ -93,13 +85,7 @@ After a real witness fails, classify the incident before authorizing code change
 
 ### A. Operational failure
 
-Examples:
-
-- transient network or GitHub failure;
-- expired authentication;
-- incomplete installation;
-- stale local checkout;
-- stopped process or malformed operator invocation.
+Examples: transient network or GitHub failure, expired authentication, incomplete installation, stale checkout, stopped process, or malformed operator invocation.
 
 Default response:
 
@@ -111,13 +97,13 @@ A general rule is implemented incorrectly.
 
 Example:
 
-> Identical committed dependency content must have the same identity across Windows CRLF and Linux LF working-tree representation.
+> Identical committed dependency content must have the same identity across Windows CRLF and Linux LF representation.
 
 Default response:
 
 > Permit a bounded repair in one canonical shared implementation, with regression tests covering the whole failure class.
 
-A good invariant repair should compress or centralize logic rather than add an incident-specific exception.
+A good invariant repair compresses or centralizes logic rather than adding an incident-specific exception.
 
 ### C. Missing lifecycle state
 
@@ -162,7 +148,7 @@ The same failure family includes ambiguity involving:
 - a historical operation overriding later founder pause or resume intent;
 - inability to determine whether A is terminal and B may be selected.
 
-PR #90 / Issue #89 is admitted as one legitimate missing-lifecycle-state repair and should be installed and tested.
+PR #90 / Issue #89 is admitted as one legitimate missing-lifecycle-state repair and should now be installed and tested through release `refill-generation-supersession-v1`.
 
 **Circuit breaker:**
 
@@ -202,11 +188,9 @@ Founder decision required:
 yes | no
 ```
 
-The record exists to support global judgment, not to create paperwork. A comment is sufficient unless an architecture review is triggered.
+The record supports global judgment, not paperwork. A comment is sufficient unless an architecture review is triggered.
 
 ## 7. Evidence of convergence
-
-A repair is not justified only because it is bounded. It must also plausibly advance the selected witness.
 
 For Issue #50, the relevant progression is:
 
@@ -235,14 +219,14 @@ When the circuit breaker triggers:
 1. Freeze new refill capability and incident-specific repair work.
 2. Gather the related issues, PRs, runtime reports, and preserved evidence.
 3. Define one canonical work-item lifecycle and terminal-disposition contract.
-4. Assign one owner for each transition and each persistent record.
+4. Assign one owner for each transition and persistent record.
 5. Make refill consume the canonical disposition instead of reconstructing truth independently from multiple service artifacts.
 6. Define one compatibility or migration boundary for historical evidence.
-7. identify duplicated branches, markers, or classifications that can be deleted.
+7. Identify duplicated branches, markers, or classifications that can be deleted.
 8. Replay all prior incidents as regression fixtures.
 9. Resume the A -> B witness only after the simplified boundary is reviewed.
 
-The objective of redesign is not to restart the Autobuilder. It is to make the failing boundary smaller and more authoritative.
+The objective is not to restart the Autobuilder. It is to make the failing boundary smaller and more authoritative.
 
 ## 9. Exit decisions
 
@@ -264,7 +248,7 @@ The objective of redesign is not to restart the Autobuilder. It is to make the f
 
 ### Simpler system dominates
 
-If evidence shows continuous refill costs more to maintain than it saves, preserve the working governed semi-automatic path: approved one-shot dispatch, isolated execution, validation, revision, and draft publication.
+If continuous refill costs more to maintain than it saves, preserve the working governed semi-automatic path: approved one-shot dispatch, isolated execution, validation, revision, and draft publication.
 
 ## 10. Non-goals
 
@@ -281,10 +265,10 @@ This document does not:
 ## COORDINATION STATUS
 
 Agreement: aligned  
-Compared: founder direction in the current control-room thread; `Probability-prediction-engine/docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md`; Autobuilder Issues #50, #82, #89; PR #90; current approved release manifest  
+Compared: founder direction in the current control-room thread; `Probability-prediction-engine/docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md`; Autobuilder Issues #50, #82, #89; PRs #90/#91; current approved release manifest  
 Disagreement: none  
-Evidence gap: independent review and merge of this control-plane document; managed release and installed A -> B witness remain outstanding  
+Evidence gap: independent review and merge of this control-plane document; managed Windows installation and installed A -> B witness remain outstanding  
 Ownership overlap: this document governs classification and handoff only; Codex and existing runtime issues retain implementation ownership  
 Risk if unresolved: locally reasonable repairs may continue without a global circuit breaker or durable founder-readable decision state  
-Recommended default: review and merge this document without interrupting the already-selected PR #90 release and Issue #50 witness sequence  
+Recommended default: review and merge this document without interrupting installation of release `refill-generation-supersession-v1` and the Issue #50 witness sequence  
 Founder decision required: no

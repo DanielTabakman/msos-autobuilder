@@ -1,0 +1,166 @@
+{
+  "attempt_id": "20260727T213559.056633Z-fba4b76248c5",
+  "attempted_at": "2026-07-27T21:35:59.065337+00:00",
+  "checks": [
+    {
+      "argv": [
+        "git",
+        "init",
+        "--quiet"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\f3a891ebddd9783b67021a43ca9fb4434f7dbc8c",
+      "duration_seconds": 0.08119469997473061,
+      "name": "git-init",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "git",
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/DanielTabakman/msos-autobuilder.git"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\f3a891ebddd9783b67021a43ca9fb4434f7dbc8c",
+      "duration_seconds": 0.056878000032156706,
+      "name": "git-add-origin",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-c",
+        "core.autocrlf=false",
+        "fetch",
+        "--depth",
+        "1",
+        "origin",
+        "f3a891ebddd9783b67021a43ca9fb4434f7dbc8c"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\f3a891ebddd9783b67021a43ca9fb4434f7dbc8c",
+      "duration_seconds": 0.6306425000075251,
+      "name": "git-fetch-exact-commit",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "From https://github.com/DanielTabakman/msos-autobuilder\n * branch            f3a891ebddd9783b67021a43ca9fb4434f7dbc8c -> FETCH_HEAD\n",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-c",
+        "core.autocrlf=false",
+        "checkout",
+        "--detach",
+        "FETCH_HEAD"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\f3a891ebddd9783b67021a43ca9fb4434f7dbc8c",
+      "duration_seconds": 0.17865100014023483,
+      "name": "git-checkout-exact-commit",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "HEAD is now at f3a891e Merge pull request #93 from DanielTabakman/codex/issue-79-source-freshness\n",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\f3a891ebddd9783b67021a43ca9fb4434f7dbc8c",
+      "duration_seconds": 0.045668600127100945,
+      "name": "git-rev-parse-head",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "f3a891ebddd9783b67021a43ca9fb4434f7dbc8c\n"
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\bootstrap-venv\\Scripts\\python.exe",
+        "-m",
+        "venv",
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\f3a891ebddd9783b67021a43ca9fb4434f7dbc8c\\.venv"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\f3a891ebddd9783b67021a43ca9fb4434f7dbc8c",
+      "duration_seconds": 6.579728899989277,
+      "name": "create-version-venv",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\f3a891ebddd9783b67021a43ca9fb4434f7dbc8c\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+        "-e",
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\f3a891ebddd9783b67021a43ca9fb4434f7dbc8c[dev]"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\f3a891ebddd9783b67021a43ca9fb4434f7dbc8c",
+      "duration_seconds": 13.505569600034505,
+      "name": "install-release",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "Obtaining file:///C:/Users/USER/.msos-autobuilder-supervisor/versions/f3a891ebddd9783b67021a43ca9fb4434f7dbc8c\n  Installing build dependencies: started\n  Installing build dependencies: finished with status 'done'\n  Checking if build backend supports build_editable: started\n  Checking if build backend supports build_editable: finished with status 'done'\n  Getting requirements to build editable: started\n  Getting requirements to build editable: finished with status 'done'\n  Preparing editable metadata (pyproject.toml): started\n  Preparing editable metadata (pyproject.toml): finished with status 'done'\nCollecting PyYAML>=6.0 (from msos-autobuilder==0.1.0)\n  Using cached pyyaml-6.0.3-cp314-cp314-win_amd64.whl.metadata (2.4 kB)\nCollecting pytest>=8.0 (from msos-autobuilder==0.1.0)\n  Using cached pytest-9.1.1-py3-none-any.whl.metadata (7.6 kB)\nCollecting ruff>=0.9 (from msos-autobuilder==0.1.0)\n  Using cached ruff-0.16.0-py3-none-win_amd64.whl.metadata (26 kB)\nCollecting colorama>=0.4 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached colorama-0.4.6-py2.py3-none-any.whl.metadata (17 kB)\nCollecting iniconfig>=1.0.1 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached iniconfig-2.3.0-py3-none-any.whl.metadata (2.5 kB)\nCollecting packaging>=22 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached packaging-26.2-py3-none-any.whl.metadata (3.5 kB)\nCollecting pluggy<2,>=1.5 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached pluggy-1.6.0-py3-none-any.whl.metadata (4.8 kB)\nCollecting pygments>=2.7.2 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached pygments-2.20.0-py3-none-any.whl.metadata (2.5 kB)\nUsing cached pytest-9.1.1-py3-none-any.whl (386 kB)\nUsing cached pluggy-1.6.0-py3-none-any.whl (20 kB)\nUsing cached colorama-0.4.6-py2.py3-none-any.whl (25 kB)\nUsing cached iniconfig-2.3.0-py3-none-any.whl (7.5 kB)\nUsing cached packaging-26.2-py3-none-any.whl (100 kB)\nUsing cached pygments-2.20.0-py3-none-any.whl (1.2 MB)\nUsing cached pyyaml-6.0.3-cp314-cp314-win_amd64.whl (156 kB)\nUsing cached ruff-0.16.0-py3-none-win_amd64.whl (11.9 MB)\nBuilding wheels for collected packages: msos-autobuilder\n  Building editable for msos-autobuilder (pyproject.toml): started\n  Building editable for msos-autobuilder (pyproject.toml): finished with status 'done'\n  Created wheel for msos-autobuilder: filename=msos_autobuilder-0.1.0-0.editable-py3-none-any.whl size=5119 sha256=fdfe5424e38b97a65439f928ee221e22680efb0aba62f094033a9133372d9bab\n  Stored in directory: C:\\Users\\USER\\AppData\\Local\\Temp\\pip-ephem-wheel-cache-03cww3j1\\wheels\\05\\ab\\ad\\9d6f2dd81d7e1e519136cd694271952786f1ba9d8f455aec63\nSuccessfully built msos-autobuilder\nInstalling collected packages: ruff, PyYAML, pygments, pluggy, packaging, iniconfig, colorama, pytest, msos-autobuilder\n\nSuccessfully installed PyYAML-6.0.3 colorama-0.4.6 iniconfig-2.3.0 msos-autobuilder-0.1.0 packaging-26.2 pluggy-1.6.0 pygments-2.20.0 pytest-9.1.1 ruff-0.16.0\n"
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\f3a891ebddd9783b67021a43ca9fb4434f7dbc8c\\.venv\\Scripts\\python.exe",
+        "-m",
+        "ruff",
+        "check",
+        "."
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\f3a891ebddd9783b67021a43ca9fb4434f7dbc8c",
+      "duration_seconds": 0.29156369995325804,
+      "name": "ruff",
+      "passed": true,
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "All checks passed!\n"
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\f3a891ebddd9783b67021a43ca9fb4434f7dbc8c\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\f3a891ebddd9783b67021a43ca9fb4434f7dbc8c",
+      "duration_seconds": 1785.6100982998032,
+      "name": "pytest",
+      "passed": false,
+      "returncode": 1,
+      "stderr": "",
+      "stdout": "........................................................................ [ 17%]\n........................................................................ [ 34%]\n....................................................F................... [ 51%]\n........................................................................ [ 68%]\n........................................................................ [ 85%]\n...............................................................          [100%]\n================================== FAILURES ===================================\n___________ test_refill_service_graceful_stop_writes_stopped_status ___________\n\ntmp_path = WindowsPath('C:/Users/USER/AppData/Local/Temp/pytest-of-USER/pytest-2341/test_refill_service_graceful_s0')\n\n    def test_refill_service_graceful_stop_writes_stopped_status(tmp_path: Path) -> None:\n        base = _refill_config(tmp_path)\n        config = RefillConfig(build_next=replace(base.build_next, submit=False))\n        _write_host_status(config)\n        keep_one_running(config)\n        service = RefillService(config, interval_seconds=0.01)\n        thread = Thread(target=service.run_forever)\n        thread.start()\n        sleep(0.05)\n    \n        service.request_stop()\n        thread.join(timeout=2)\n    \n>       assert not thread.is_alive()\nE       assert not True\nE        +  where True = is_alive()\nE        +    where is_alive = <Thread(Thread-15094 (run_forever), started 28168)>.is_alive\n\ntests\\test_refill_controller.py:1647: AssertionError\n=========================== short test summary info ===========================\nFAILED tests/test_refill_controller.py::test_refill_service_graceful_stop_writes_stopped_status\n1 failed, 422 passed in 1783.81s (0:29:43)\n"
+    }
+  ],
+  "cutover": {
+    "performed": false
+  },
+  "errors": [
+    "staging check pytest failed with exit 1: ........................................................................ [ 17%]\n........................................................................ [ 34%]\n....................................................F................... [ 51%]\n........................................................................ [ 68%]\n........................................................................ [ 85%]\n...............................................................          [100%]\n================================== FAILURES ===================================\n___________ test_refill_service_graceful_stop_writes_stopped_status ___________\n\ntmp_path = WindowsPath('C:/Users/USER/AppData/Local/Temp/pytest-of-USER/pytest-2341/test_refill_service_graceful_s0')\n\n    def test_refill_service_graceful_stop_writes_stopped_status(tmp_path: Path) -> None:\n        base = _refill_config(tmp_path)\n        config = RefillConfig(build_next=replace(base.build_next, submit=False))\n        _write_host_status(config)\n        keep_one_running(config)\n        service = RefillService(config, interval_seconds=0.01)\n        thread = Thread(target=service.run_forever)\n        thread.start()\n        sleep(0.05)\n    \n        service.request_stop()\n        thread.join(timeout=2)\n    \n>       assert not thread.is_alive()\nE       assert not True\nE        +  where True = is_alive()\nE        +    where is_alive = <Thread(Thread-15094 (run_forever), started 28168)>.is_alive\n\ntests\\test_refill_controller.py:1647: AssertionError\n=========================== short test summary info ===========================\nFAILED tests/test_refill_controller.py::test_refill_service_graceful_stop_writes_stopped_status\n1 failed, 422 passed in 1783.81s (0:29:43)\n"
+  ],
+  "health": {},
+  "manifest_sha256": "eb8c8c3fd542b9c1f929e3652c6b72c7f6f4c901db6dea7269ded9144cbf42de",
+  "outcome": "failed_before_cutover",
+  "previous_commit": "3d32616760a1f1e9f34cc8a42f269aa788ceaa25",
+  "previous_release_path": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\3d32616760a1f1e9f34cc8a42f269aa788ceaa25",
+  "release_id": "managed-source-freshness-v1",
+  "requested_commit": "f3a891ebddd9783b67021a43ca9fb4434f7dbc8c",
+  "rollback": {},
+  "staged_release_path": null,
+  "version": 1
+}

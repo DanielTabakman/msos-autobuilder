@@ -1,0 +1,9 @@
+{
+  "attempt_id": "20260728T122915.353118Z-a1e643d52985",
+  "notification_sha256": "9238de37e6c9f18705a224e1fd08a63b09a3fb8a5788c2be74375bfe59023438",
+  "outcome": "failed_before_cutover",
+  "publication_enabled": false,
+  "relayed_at": "2026-07-28T12:29:16.575983+00:00",
+  "report_sha256": "3dbb19dcf6cdc47ace2207ad3b1c0a4103fd7e1379689bab0c1516786bbcf5b1",
+  "version": 1
+}

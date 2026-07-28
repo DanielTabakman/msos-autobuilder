@@ -1,0 +1,21 @@
+{
+  "attempt_id": "20260728T135916.596570Z-5b58a0654d66",
+  "attempted_at": "2026-07-28T13:59:16.606976+00:00",
+  "checks": [],
+  "cutover": {
+    "performed": false
+  },
+  "errors": [
+    "[WinError 5] Access is denied: 'C:\\\\Users\\\\USER\\\\.msos-autobuilder-supervisor\\\\versions\\\\f3a891ebddd9783b67021a43ca9fb4434f7dbc8c\\\\.git\\\\objects\\\\pack\\\\pack-acd33d4b0743f40af9e002ef23ea15f73e4971b2.idx'"
+  ],
+  "health": {},
+  "manifest_sha256": "eb8c8c3fd542b9c1f929e3652c6b72c7f6f4c901db6dea7269ded9144cbf42de",
+  "outcome": "failed_before_cutover",
+  "previous_commit": "3d32616760a1f1e9f34cc8a42f269aa788ceaa25",
+  "previous_release_path": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\3d32616760a1f1e9f34cc8a42f269aa788ceaa25",
+  "release_id": "managed-source-freshness-v1",
+  "requested_commit": "f3a891ebddd9783b67021a43ca9fb4434f7dbc8c",
+  "rollback": {},
+  "staged_release_path": null,
+  "version": 1
+}

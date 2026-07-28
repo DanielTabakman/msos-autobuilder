@@ -6,7 +6,6 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event, Thread
-from time import sleep
 
 import pytest
 import yaml
@@ -1632,20 +1631,300 @@ def test_refill_service_reconciles_on_restart_without_founder_call(tmp_path: Pat
 
 
 def test_refill_service_graceful_stop_writes_stopped_status(tmp_path: Path) -> None:
-    base = _refill_config(tmp_path)
-    config = RefillConfig(build_next=replace(base.build_next, submit=False))
-    _write_host_status(config)
-    keep_one_running(config)
-    service = RefillService(config, interval_seconds=0.01)
-    thread = Thread(target=service.run_forever)
+    config = _refill_config(tmp_path)
+    service = RefillService(config, interval_seconds=60)
+    ready, release = _pause_initial_readiness(service)
+    service.run_once = lambda: object()  # type: ignore[method-assign]
+    thread, errors = _start_service(service)
+
+    assert ready.wait(timeout=2)
+    service.request_stop()
+    release.set()
+    _join_service(thread, errors)
+
+    assert service.read_status().state == "stopped"
+
+
+def _refill_stop_request_path(config: RefillConfig) -> Path:
+    assert config.build_next.host_root is not None
+    return config.build_next.host_root / "state" / "refill-stop.requested"
+
+
+def _start_service(service: RefillService) -> tuple[Thread, list[BaseException]]:
+    errors: list[BaseException] = []
+
+    def target() -> None:
+        try:
+            service.run_forever()
+        except BaseException as exc:  # pragma: no cover - surfaced by assertions
+            errors.append(exc)
+
+    thread = Thread(target=target)
     thread.start()
-    sleep(0.05)
+    return thread, errors
+
+
+def _join_service(thread: Thread, errors: list[BaseException]) -> None:
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert errors == []
+
+
+def _pause_initial_readiness(service: RefillService) -> tuple[Event, Event]:
+    ready = Event()
+    release = Event()
+    original = service._write_status
+
+    def write_status(state: str, errors: tuple[str, ...] = ()) -> object:
+        status = original(state, errors)
+        if state == "running" and not ready.is_set():
+            ready.set()
+            assert release.wait(timeout=2)
+        return status
+
+    service._write_status = write_status  # type: ignore[method-assign]
+    return ready, release
+
+
+def test_refill_service_stop_requested_before_startup_readiness_is_not_erased(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    assert config.build_next.host_root is not None
+    status_path = config.build_next.host_root / "state" / "refill-status.json"
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    status_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "state": "running",
+                "pid": 987654,
+                "started_at": "2026-07-27T00:00:00Z",
+                "heartbeat_at": "2026-07-27T00:00:01Z",
+                "last_reconcile": None,
+                "errors": [],
+                "service_generation_id": "prior-generation",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    service = RefillService(config, interval_seconds=60)
+    cycles = 0
+
+    def run_once() -> object:
+        nonlocal cycles
+        cycles += 1
+        raise AssertionError("stop requested before startup must prevent reconciliation")
+
+    service.run_once = run_once  # type: ignore[method-assign]
+    stop_path = service.request_stop()
+
+    assert "service_generation_id" not in json.loads(stop_path.read_text(encoding="utf-8"))
+
+    thread, errors = _start_service(service)
+    _join_service(thread, errors)
+
+    assert cycles == 0
+    assert service.read_status().state == "stopped"
+
+
+def test_refill_service_stop_immediately_after_readiness_prevents_first_reconcile(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    service = RefillService(config, interval_seconds=60)
+    ready, release = _pause_initial_readiness(service)
+    cycles = 0
+
+    def run_once() -> object:
+        nonlocal cycles
+        cycles += 1
+        raise AssertionError("stop after readiness must prevent reconciliation")
+
+    service.run_once = run_once  # type: ignore[method-assign]
+    thread, errors = _start_service(service)
+
+    assert ready.wait(timeout=2)
+    service.request_stop()
+    release.set()
+    _join_service(thread, errors)
+
+    assert cycles == 0
+    assert service.read_status().state == "stopped"
+
+
+def test_refill_service_stop_during_controlled_reconciliation_exits_at_boundary(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    service = RefillService(config, interval_seconds=60)
+    entered = Event()
+    release = Event()
+    cycles = 0
+
+    def run_once() -> object:
+        nonlocal cycles
+        cycles += 1
+        entered.set()
+        assert release.wait(timeout=2)
+        return object()
+
+    service.run_once = run_once  # type: ignore[method-assign]
+    thread, errors = _start_service(service)
+
+    assert entered.wait(timeout=2)
+    service.request_stop()
+    assert thread.is_alive()
+    release.set()
+    _join_service(thread, errors)
+
+    assert cycles == 1
+    assert service.read_status().state == "stopped"
+
+
+def test_refill_service_stop_during_between_cycle_wait_is_interruptible(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    service = RefillService(config, interval_seconds=60)
+    first_done = Event()
+    cycles = 0
+
+    def run_once() -> object:
+        nonlocal cycles
+        cycles += 1
+        first_done.set()
+        return object()
+
+    service.run_once = run_once  # type: ignore[method-assign]
+    thread, errors = _start_service(service)
+
+    assert first_done.wait(timeout=2)
+    service.request_stop()
+    _join_service(thread, errors)
+
+    assert cycles == 1
+    assert service.read_status().state == "stopped"
+
+
+def test_refill_service_ignores_stale_prior_generation_request_on_restart(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    _refill_stop_request_path(config).parent.mkdir(parents=True, exist_ok=True)
+    _refill_stop_request_path(config).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "requested_at": "2026-07-28T00:00:00Z",
+                "service_generation_id": "prior-generation",
+                "token": "stale",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    service = RefillService(config, interval_seconds=60)
+    cycles = 0
+
+    def run_once() -> object:
+        nonlocal cycles
+        cycles += 1
+        service.request_stop()
+        return object()
+
+    service.run_once = run_once  # type: ignore[method-assign]
+    thread, errors = _start_service(service)
+    _join_service(thread, errors)
+
+    assert cycles == 1
+    assert service.read_status().state == "stopped"
+
+
+def test_refill_service_current_generation_request_is_never_displaced(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    service = RefillService(config, interval_seconds=60)
+    ready, release = _pause_initial_readiness(service)
+    service.run_once = lambda: object()  # type: ignore[method-assign]
+    thread, errors = _start_service(service)
+
+    assert ready.wait(timeout=2)
+    status = service.read_status()
+    stop_path = _refill_stop_request_path(config)
+    current_request = {
+        "version": 1,
+        "requested_at": "2026-07-28T00:00:00Z",
+        "service_generation_id": status.service_generation_id,
+        "service_pid": status.pid,
+        "service_started_at": status.started_at,
+        "token": "current-token",
+    }
+    stop_path.write_text(json.dumps(current_request, sort_keys=True) + "\n", encoding="utf-8")
 
     service.request_stop()
-    thread.join(timeout=2)
+    assert json.loads(stop_path.read_text(encoding="utf-8")) == current_request
+    release.set()
+    _join_service(thread, errors)
 
-    assert not thread.is_alive()
+
+def test_refill_service_repeated_stop_request_is_idempotent(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    service = RefillService(config, interval_seconds=60)
+    ready, release = _pause_initial_readiness(service)
+    service.run_once = lambda: object()  # type: ignore[method-assign]
+    thread, errors = _start_service(service)
+
+    assert ready.wait(timeout=2)
+    first = service.request_stop().read_bytes()
+    second = service.request_stop().read_bytes()
+    release.set()
+    _join_service(thread, errors)
+
+    assert first == second
     assert service.read_status().state == "stopped"
+
+
+def test_refill_service_starts_no_additional_reconcile_after_stop_is_observed(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    service = RefillService(config, interval_seconds=60)
+    entered = Event()
+    release = Event()
+    cycles = 0
+
+    def run_once() -> object:
+        nonlocal cycles
+        cycles += 1
+        entered.set()
+        assert release.wait(timeout=2)
+        return object()
+
+    service.run_once = run_once  # type: ignore[method-assign]
+    thread, errors = _start_service(service)
+
+    assert entered.wait(timeout=2)
+    service.request_stop()
+    release.set()
+    _join_service(thread, errors)
+
+    assert cycles == 1
+    assert service.read_status().state == "stopped"
+
+
+def test_refill_service_durably_writes_stopped_status(tmp_path: Path) -> None:
+    config = _refill_config(tmp_path)
+    service = RefillService(config, interval_seconds=60)
+    service.request_stop()
+
+    thread, errors = _start_service(service)
+    _join_service(thread, errors)
+
+    status_path = config.build_next.host_root / "state" / "refill-status.json"
+    assert json.loads(status_path.read_text(encoding="utf-8"))["state"] == "stopped"
 
 
 def _ready_snapshot_with_two_items() -> dict[str, object]:

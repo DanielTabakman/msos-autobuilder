@@ -26,9 +26,13 @@ import yaml
 
 from .codex_shadow import load_codex_host_config
 from .lifecycle_evidence import (
+    LifecycleEvidenceError,
+    SourceRef,
     attempt_identity,
     emit_lifecycle_evidence,
-    work_item_digest_from_mapping,
+    record_producer_evidence_error,
+    work_item_source_bytes_from_snapshot_json,
+    work_item_source_sha256_v1,
 )
 from .managed_source import (
     ManagedSourceSyncError,
@@ -378,6 +382,7 @@ def _collect_snapshot(ppe_repo: Path, exclude_work_item_ids: Sequence[str] = ())
         raise BuildNextError("PPE founder portfolio output was not JSON") from exc
     if not isinstance(payload, dict):
         raise BuildNextError("PPE founder portfolio output must be an object")
+    payload["__portfolio_output_json"] = proc.stdout
     return payload
 
 
@@ -1115,6 +1120,8 @@ class FeedSubmission:
     feed_path: str
     created: bool
     source_path: Path | None = None
+    source_sha256: str | None = None
+    recorded_at: str | None = None
 
 
 def _submit_feed_job(config: BuildNextConfig, job: Mapping[str, Any]) -> FeedSubmission:
@@ -1147,7 +1154,14 @@ def _submit_feed_job(config: BuildNextConfig, job: Mapping[str, Any]) -> FeedSub
                 "--",
                 relative.as_posix(),
             )
-            return FeedSubmission(existing_commit, relative.as_posix(), False, destination)
+            return FeedSubmission(
+                existing_commit,
+                relative.as_posix(),
+                False,
+                destination,
+                _sha256_file(destination),
+                _git(checkout, "log", "-n", "1", "--format=%cI", "--", relative.as_posix()),
+            )
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(text, encoding="utf-8", newline="\n")
         _git(checkout, "add", "--", relative.as_posix())
@@ -1165,11 +1179,26 @@ def _submit_feed_job(config: BuildNextConfig, job: Mapping[str, Any]) -> FeedSub
                 "--",
                 relative.as_posix(),
             )
-            return FeedSubmission(existing_commit, relative.as_posix(), False, destination)
+            return FeedSubmission(
+                existing_commit,
+                relative.as_posix(),
+                False,
+                destination,
+                _sha256_file(destination),
+                _git(checkout, "log", "-n", "1", "--format=%cI", "--", relative.as_posix()),
+            )
         _git(checkout, "commit", "-m", f"Queue founder build next job {job_id}")
         commit = _git(checkout, "rev-parse", "HEAD")
+        recorded_at = _git(checkout, "show", "-s", "--format=%cI", commit)
         _git(checkout, "push", "origin", f"HEAD:{config.jobs_branch}")
-        return FeedSubmission(commit, relative.as_posix(), True, destination)
+        return FeedSubmission(
+            commit,
+            relative.as_posix(),
+            True,
+            destination,
+            _sha256_file(destination),
+            recorded_at,
+        )
 
 
 def _blocked_receipt(message: str, evidence: Mapping[str, Any] | None = None) -> BuildNextReceipt:
@@ -1257,7 +1286,17 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
         work = _ready_work(pipe, work_item_id)
         if work.get("evidence") not in {"manual", "canonical", "native_runtime"}:
             raise BuildNextError("selected work item lacks accepted evidence")
-        work_item_source_sha256 = work_item_digest_from_mapping(work)
+        portfolio_output = snapshot.get("__portfolio_output_json")
+        if not isinstance(portfolio_output, str):
+            raise BuildNextError("PPE portfolio source output is unavailable")
+        try:
+            work_item_source_bytes = work_item_source_bytes_from_snapshot_json(
+                portfolio_output,
+                work_item_id,
+            )
+            work_item_source_sha256 = work_item_source_sha256_v1(work_item_source_bytes)
+        except LifecycleEvidenceError as exc:
+            raise BuildNextError(str(exc)) from exc
         trace = str(work.get("trace") or rec.get("trace") or "")
         plan, plan_rel, plan_raw = _plan_text(ppe_repo, trace)
         native_slice = _select_native_slice(plan)
@@ -1345,7 +1384,8 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
         if (
             config.host_root is not None
             and refill_attempt is not None
-            and submission.source_path is not None
+            and submission.source_sha256 is not None
+            and submission.recorded_at is not None
         ):
             identity = attempt_identity(
                 pipeline_id=pipeline_id,
@@ -1356,25 +1396,40 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                 attempt_ordinal=int(refill_attempt["attempt_ordinal"]),
                 retry_ordinal=int(refill_attempt.get("retry_ordinal") or 0),
             )
-            emit_lifecycle_evidence(
-                config.host_root,
-                evidence_kind="dispatch.submitted",
-                identity=identity,
-                source_path=submission.source_path,
-                payload={
-                    "feed_commit": submission.feed_commit,
-                    "feed_path": submission.feed_path,
-                    "submitted_job_sha256": hashlib.sha256(
-                        yaml.safe_dump(dict(job), sort_keys=False, allow_unicode=True)
-                        .encode("utf-8")
-                        .replace(b"\r\n", b"\n")
-                        .replace(b"\r", b"\n")
-                    ).hexdigest(),
-                    "created": submission.created,
-                },
-                final=True,
-                closed_status="final",
-            )
+            try:
+                emit_lifecycle_evidence(
+                    config.host_root,
+                    evidence_kind="dispatch.submitted",
+                    identity=identity,
+                    source_ref=SourceRef(
+                        repository=config.feed_repo_url,
+                        ref=config.jobs_branch,
+                        commit=str(submission.feed_commit or ""),
+                        path=submission.feed_path,
+                        sha256=submission.source_sha256,
+                    ),
+                    payload={
+                        "feed_commit": submission.feed_commit,
+                        "feed_path": submission.feed_path,
+                        "submitted_job_sha256": submission.source_sha256,
+                    },
+                    final=True,
+                    closed_status="final",
+                    observed_at=submission.recorded_at,
+                )
+            except LifecycleEvidenceError as exc:
+                record_producer_evidence_error(
+                    config.host_root,
+                    producer="build_next",
+                    evidence_kind="dispatch.submitted",
+                    error=exc,
+                    identity=identity,
+                    primary_outcome={
+                        "status": "QUEUED",
+                        "feed_commit": submission.feed_commit,
+                        "feed_path": submission.feed_path,
+                    },
+                )
         return BuildNextReceipt(
             status="QUEUED",
             pipeline_id=pipeline_id,

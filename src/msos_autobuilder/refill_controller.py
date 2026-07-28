@@ -27,7 +27,12 @@ from .build_next import (
     _source_identity,
     build_next,
 )
-from .lifecycle_evidence import attempt_identity, emit_lifecycle_evidence
+from .lifecycle_evidence import (
+    LifecycleEvidenceError,
+    attempt_identity,
+    emit_lifecycle_evidence,
+    record_producer_evidence_error,
+)
 from .managed_source import ManagedSourceSyncError, ensure_managed_source_fresh
 from .persistent_host import HostPaths, HostProcessLock, _pid_alive, parse_host_job
 from .service_error_lifecycle import (
@@ -1864,24 +1869,32 @@ def _prepare_dispatch(
             attempt_ordinal=attempt_ordinal,
             retry_ordinal=retry_ordinal,
         )
-        emit_lifecycle_evidence(
-            config.build_next.host_root,
-            evidence_kind="dispatch.prepared",
-            identity=identity,
-            source_path=_generation_path(config),
-            payload={
-                "selected_work_item_id": receipt.work_item_id,
-                "generation_id": generation.get("generation_id"),
-                "dispatch_intent_sha256": hashlib.sha256(
-                    json.dumps(prepared, sort_keys=True, separators=(",", ":")).encode("utf-8")
-                ).hexdigest(),
-                "capacity_slot": "capacity-one",
-                "reason": reason,
-            },
-            final=True,
-            closed_status="final",
-            observed_at=str(prepared["prepared_at"]),
-        )
+        try:
+            emit_lifecycle_evidence(
+                config.build_next.host_root,
+                evidence_kind="dispatch.prepared",
+                identity=identity,
+                source_path=_generation_path(config),
+                payload={
+                    "dispatch_intent_sha256": hashlib.sha256(
+                        json.dumps(prepared, sort_keys=True, separators=(",", ":")).encode(
+                            "utf-8"
+                        )
+                    ).hexdigest(),
+                },
+                final=True,
+                closed_status="final",
+                observed_at=str(prepared["prepared_at"]),
+            )
+        except LifecycleEvidenceError as exc:
+            record_producer_evidence_error(
+                config.build_next.host_root,
+                producer="refill_controller",
+                evidence_kind="dispatch.prepared",
+                error=exc,
+                identity=identity,
+                primary_outcome={"state": "DISPATCHING", "job_id": receipt.job_id},
+            )
     return prepared, receipt
 
 

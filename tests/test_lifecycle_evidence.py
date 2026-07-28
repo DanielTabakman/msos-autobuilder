@@ -10,6 +10,7 @@ from msos_autobuilder.lifecycle_evidence import (
     ENVELOPE_PATH_PARTS,
     HEAD_PATH_PARTS,
     LifecycleEvidenceError,
+    SourceRef,
     attempt_identity,
     attempt_identity_from_job_yaml,
     canonical_json_bytes,
@@ -18,6 +19,8 @@ from msos_autobuilder.lifecycle_evidence import (
     latest_evidence_set_sha256_v1,
     producer_envelope_path,
     producer_head_path,
+    validate_producer_head,
+    work_item_source_bytes_from_snapshot_json,
     work_item_source_sha256_v1,
 )
 
@@ -45,6 +48,26 @@ def test_canonical_json_and_work_item_digest_are_platform_stable() -> None:
     assert work_item_source_sha256_v1(b"a\r\nb\rc\n") == work_item_source_sha256_v1(
         b"a\nb\nc\n"
     )
+
+
+def test_work_item_digest_uses_exact_source_bytes_boundary() -> None:
+    pretty = (
+        '{\n  "pipelines": [\n    {"ready_work": [\n'
+        '      {"work_item_id": "A", "title": "Alpha", "state": "READY_TO_BUILD",'
+        ' "trace": "plan.json", "evidence": "manual", "spaces": "  kept  "}\n'
+        "    ]}\n  ]\n}\n"
+    )
+    source = work_item_source_bytes_from_snapshot_json(pretty, "A")
+
+    assert source == (
+        b'{"work_item_id": "A", "title": "Alpha", "state": "READY_TO_BUILD",'
+        b' "trace": "plan.json", "evidence": "manual", "spaces": "  kept  "}'
+    )
+    assert work_item_source_sha256_v1(source) == work_item_source_sha256_v1(
+        b'{"work_item_id": "A", "title": "Alpha", "state": "READY_TO_BUILD",'
+        b' "trace": "plan.json", "evidence": "manual", "spaces": "  kept  "}'
+    )
+    assert pretty.encode("utf-8").find(source) > 0
 
 
 def test_exact_producer_paths_never_enter_attempt_lifecycle(tmp_path: Path) -> None:
@@ -115,7 +138,85 @@ def test_emit_lifecycle_evidence_replay_and_head_digest(tmp_path: Path) -> None:
     assert replay == first
     head = json.loads(first.head_path.read_text(encoding="utf-8"))
     assert latest_evidence_set_sha256_v1([head]) == latest_evidence_set_sha256_v1([dict(head)])
+    assert not Path(head["envelope_path"]).is_absolute()
     assert first.envelope_path.read_bytes()
+
+
+def test_replay_rejects_default_wall_clock_and_validates_source_ref(tmp_path: Path) -> None:
+    identity = _identity()
+    source_ref = SourceRef(
+        repository="git@example.invalid/repo.git",
+        ref="jobs",
+        commit="a" * 40,
+        path="jobs/approved/job.yaml",
+        sha256="b" * 64,
+    )
+    first = emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind="dispatch.submitted",
+        identity=identity,
+        source_ref=source_ref,
+        payload={
+            "feed_commit": "a" * 40,
+            "feed_path": "jobs/approved/job.yaml",
+            "submitted_job_sha256": "b" * 64,
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-28T00:00:00+00:00",
+    )
+    replay = emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind="dispatch.submitted",
+        identity=identity,
+        source_ref=source_ref,
+        payload={
+            "feed_commit": "a" * 40,
+            "feed_path": "jobs/approved/job.yaml",
+            "submitted_job_sha256": "b" * 64,
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-28T00:00:00+00:00",
+    )
+    with pytest.raises(TypeError):
+        emit_lifecycle_evidence(
+            tmp_path,
+            evidence_kind="dispatch.submitted",
+            identity=identity,
+            source_ref=source_ref,
+            payload={
+                "feed_commit": "a" * 40,
+                "feed_path": "jobs/approved/job.yaml",
+                "submitted_job_sha256": "b" * 64,
+            },
+            final=True,
+            closed_status="final",
+        )
+
+    assert replay == first
+
+
+def test_latest_evidence_set_rejects_malformed_heads(tmp_path: Path) -> None:
+    identity = _identity()
+    source = _source(tmp_path)
+    result = emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind="host.execution",
+        identity=identity,
+        source_path=source,
+        payload={"execution_outcome": "completed"},
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-28T00:00:00Z",
+    )
+    head = json.loads(result.head_path.read_text(encoding="utf-8"))
+    validate_producer_head(head, host_root=tmp_path)
+    malformed = dict(head)
+    malformed["envelope_path"] = str(result.envelope_path.resolve())
+
+    with pytest.raises(LifecycleEvidenceError, match="host-root-relative"):
+        latest_evidence_set_sha256_v1([malformed])
 
 
 def test_regression_gap_conflict_and_post_final_mutation_fail_closed(tmp_path: Path) -> None:
@@ -126,7 +227,11 @@ def test_regression_gap_conflict_and_post_final_mutation_fail_closed(tmp_path: P
         evidence_kind="gate.validation",
         identity=identity,
         source_path=source,
-        payload={"validation_outcome": "failed"},
+        payload={
+            "validation_outcome": "failed",
+            "gate_report_sha256": "0" * 64,
+            "results_commit": "a" * 40,
+        },
         producer_sequence=1,
         final=False,
         closed_status="open",
@@ -138,7 +243,11 @@ def test_regression_gap_conflict_and_post_final_mutation_fail_closed(tmp_path: P
             evidence_kind="gate.validation",
             identity=identity,
             source_path=source,
-            payload={"validation_outcome": "passed"},
+            payload={
+                "validation_outcome": "passed",
+                "gate_report_sha256": "1" * 64,
+                "results_commit": "b" * 40,
+            },
             producer_sequence=3,
             final=True,
             closed_status="final",
@@ -150,7 +259,11 @@ def test_regression_gap_conflict_and_post_final_mutation_fail_closed(tmp_path: P
             evidence_kind="gate.validation",
             identity=identity,
             source_path=source,
-            payload={"validation_outcome": "passed"},
+            payload={
+                "validation_outcome": "passed",
+                "gate_report_sha256": "1" * 64,
+                "results_commit": "b" * 40,
+            },
             producer_sequence=1,
             final=False,
             closed_status="open",
@@ -161,7 +274,11 @@ def test_regression_gap_conflict_and_post_final_mutation_fail_closed(tmp_path: P
         evidence_kind="gate.validation",
         identity=identity,
         source_path=source,
-        payload={"validation_outcome": "failed", "final": True},
+        payload={
+            "validation_outcome": "failed",
+            "gate_report_sha256": "2" * 64,
+            "results_commit": "c" * 40,
+        },
         producer_sequence=2,
         final=True,
         closed_status="final",
@@ -173,7 +290,11 @@ def test_regression_gap_conflict_and_post_final_mutation_fail_closed(tmp_path: P
             evidence_kind="gate.validation",
             identity=identity,
             source_path=source,
-            payload={"validation_outcome": "failed", "final": True, "extra": True},
+            payload={
+                "validation_outcome": "failed",
+                "gate_report_sha256": "2" * 64,
+                "results_commit": "d" * 40,
+            },
             producer_sequence=2,
             final=True,
             closed_status="final",
@@ -185,7 +306,11 @@ def test_regression_gap_conflict_and_post_final_mutation_fail_closed(tmp_path: P
             evidence_kind="gate.validation",
             identity=identity,
             source_path=source,
-            payload={"validation_outcome": "failed", "final": True},
+            payload={
+                "validation_outcome": "failed",
+                "gate_report_sha256": "2" * 64,
+                "results_commit": "c" * 40,
+            },
             producer_sequence=1,
             final=True,
             closed_status="final",

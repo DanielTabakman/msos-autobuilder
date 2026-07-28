@@ -9,7 +9,6 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -120,6 +119,87 @@ _HEAD_COMPARE_FIELDS = (
     "closed_status",
 )
 
+_SHA256_HEX = set("0123456789abcdef")
+_CLOSED_STATUSES = {"open", "final", "not_applicable"}
+_PAYLOAD_CODES: dict[str, dict[str, set[str]]] = {
+    "dispatch.prepared": {"required": {"dispatch_intent_sha256"}, "optional": set()},
+    "dispatch.submitted": {
+        "required": {"feed_commit", "feed_path", "submitted_job_sha256"},
+        "optional": set(),
+    },
+    "host.execution": {
+        "required": {"execution_outcome"},
+        "optional": {"host_archive_path", "error_class"},
+    },
+    "relay.result": {
+        "required": {
+            "relay_disposition",
+            "relayed_commit",
+            "canonical_report_sha256",
+            "source_report_sha256",
+            "complete_patch_reconstruction",
+        },
+        "optional": set(),
+    },
+    "gate.validation": {
+        "required": {"validation_outcome", "gate_report_sha256", "results_commit"},
+        "optional": {"validation_state", "validation_contract_sha256"},
+    },
+    "revision.disposition": {
+        "required": {"revision_disposition"},
+        "optional": {"descendant_job_id", "gate_report_sha256", "jobs_commit", "reason_code"},
+    },
+    "publication_review.disposition": {
+        "required": {"publication_review_disposition"},
+        "optional": {
+            "reason_code",
+            "draft_pr",
+            "product_branch",
+            "product_commit",
+            "results_commit",
+        },
+    },
+}
+
+_PAYLOAD_ALLOWED_VALUES: dict[str, dict[str, set[str]]] = {
+    "host.execution": {
+        "execution_outcome": {
+            "imported",
+            "pending",
+            "running",
+            "completed",
+            "failed",
+            "interrupted",
+        }
+    },
+    "relay.result": {"relay_disposition": {"relayed", "not_applicable"}},
+    "gate.validation": {
+        "validation_outcome": {"passed", "failed", "blocked", "missing", "conflict"}
+    },
+    "revision.disposition": {
+        "revision_disposition": {
+            "queued",
+            "exhausted",
+            "blocked",
+            "not_applicable",
+            "missing",
+            "conflict",
+        }
+    },
+    "publication_review.disposition": {
+        "publication_review_disposition": {
+            "awaiting_review",
+            "drafted",
+            "rejected",
+            "terminal_no_publication",
+            "blocked",
+            "not_applicable",
+            "missing",
+            "conflict",
+        }
+    },
+}
+
 
 @dataclass(frozen=True)
 class EvidenceWriteResult:
@@ -128,6 +208,57 @@ class EvidenceWriteResult:
     evidence_id: str
     identity_digest: str
     envelope_sha256: str
+
+
+@dataclass(frozen=True)
+class SourceRef:
+    repository: str
+    ref: str
+    commit: str
+    path: str
+    sha256: str
+
+    def as_payload(self) -> dict[str, str]:
+        return {
+            "repository": self.repository,
+            "ref": self.ref,
+            "commit": self.commit,
+            "path": self.path,
+            "sha256": self.sha256,
+        }
+
+
+def record_producer_evidence_error(
+    host_root: Path,
+    *,
+    producer: str,
+    evidence_kind: str,
+    error: BaseException,
+    identity: Mapping[str, Any] | None = None,
+    primary_outcome: Mapping[str, Any] | None = None,
+) -> Path:
+    state = host_root / "state" / "producer-evidence-errors" / producer
+    state.mkdir(parents=True, exist_ok=True)
+    digest = "unknown"
+    if identity is not None:
+        try:
+            digest = identity_digest(identity)
+        except LifecycleEvidenceError:
+            digest = sha256_bytes(canonical_json_bytes(dict(identity)))[:32]
+    payload = {
+        "schema_version": "producer_evidence_error.v1",
+        "producer": producer,
+        "evidence_kind": evidence_kind,
+        "identity_digest": digest,
+        "error_type": type(error).__name__,
+        "message": str(error),
+        "primary_outcome_preserved": True,
+        "primary_outcome": dict(primary_outcome or {}),
+    }
+    suffix = sha256_bytes(canonical_json_bytes(payload))[:16]
+    path = state / f"{evidence_kind.replace('.', '-')}.{digest}.{suffix}.json"
+    _atomic_json(path, payload)
+    return path
 
 
 def canonical_json_bytes(value: Mapping[str, Any] | Sequence[Any]) -> bytes:
@@ -149,7 +280,57 @@ def work_item_source_sha256_v1(source: bytes) -> str:
 
 
 def work_item_digest_from_mapping(work: Mapping[str, Any]) -> str:
-    return work_item_source_sha256_v1(canonical_json_bytes(dict(work)))
+    raise LifecycleEvidenceError(
+        "work_item_source_sha256_v1 requires exact UTF-8 source bytes, not a parsed mapping"
+    )
+
+
+def work_item_source_bytes_from_snapshot_json(snapshot_text: str, work_item_id: str) -> bytes:
+    matches: list[str] = []
+    for start, end in _json_object_spans(snapshot_text):
+        candidate = snapshot_text[start:end]
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if (
+            isinstance(value, Mapping)
+            and value.get("work_item_id") == work_item_id
+            and value.get("state") == "READY_TO_BUILD"
+            and "trace" in value
+            and "evidence" in value
+        ):
+            matches.append(candidate)
+    if len(matches) != 1:
+        raise LifecycleEvidenceError("exact work-item source byte boundary is ambiguous")
+    return matches[0].encode("utf-8")
+
+
+def _json_object_spans(text: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    stack: list[int] = []
+    in_string = False
+    escape = False
+    for index, char in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            stack.append(index)
+        elif char == "}":
+            if not stack:
+                raise LifecycleEvidenceError("PPE portfolio output has unbalanced JSON objects")
+            spans.append((stack.pop(), index + 1))
+    if stack or in_string:
+        raise LifecycleEvidenceError("PPE portfolio output has unbalanced JSON objects")
+    return spans
 
 
 def attempt_identity(
@@ -187,6 +368,8 @@ def identity_digest(identity: Mapping[str, Any]) -> str:
 
 
 def latest_evidence_set_sha256_v1(heads: Sequence[Mapping[str, Any]]) -> str:
+    for head in heads:
+        validate_producer_head(head)
     stable = sorted(
         (dict(head) for head in heads),
         key=lambda head: (str(head.get("evidence_kind")), str(head.get("identity_digest"))),
@@ -224,6 +407,10 @@ def validate_attempt_identity(identity: Mapping[str, Any]) -> None:
         identity.get("retry_ordinal"), bool
     ):
         raise LifecycleEvidenceError("retry ordinal must be an integer")
+    if identity["attempt_ordinal"] < 1 or identity["retry_ordinal"] < 0:
+        raise LifecycleEvidenceError("attempt and retry ordinals are invalid")
+    if not _is_sha256(identity["work_item_digest"]):
+        raise LifecycleEvidenceError("work item digest must be a SHA-256 hex string")
 
 
 def attempt_identity_from_job(job: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -327,26 +514,30 @@ def emit_lifecycle_evidence(
     *,
     evidence_kind: str,
     identity: Mapping[str, Any],
-    source_path: Path,
     payload: Mapping[str, Any],
+    source_path: Path | None = None,
+    source_ref: SourceRef | Mapping[str, Any] | None = None,
     producer_sequence: int = 1,
     final: bool,
     closed_status: str,
-    observed_at: str | None = None,
+    observed_at: str,
 ) -> EvidenceWriteResult:
     if evidence_kind not in PRODUCER_OWNERS:
         raise LifecycleEvidenceError(f"unknown evidence kind: {evidence_kind}")
     validate_attempt_identity(identity)
+    if not isinstance(observed_at, str) or not observed_at:
+        raise LifecycleEvidenceError("observed_at must be a stable source-recorded value")
     if producer_sequence < 1:
         raise LifecycleEvidenceError("producer_sequence must be positive")
     if closed_status not in {"open", "final", "not_applicable"}:
         raise LifecycleEvidenceError("closed_status must be open, final, or not_applicable")
     if closed_status in {"final", "not_applicable"} and final is not True:
         raise LifecycleEvidenceError("closed producer streams must set final=true")
-    source_path = source_path.resolve()
-    if not source_path.is_file():
-        raise LifecycleEvidenceError(f"source evidence does not exist: {source_path}")
-    source_sha = sha256_file(source_path)
+    source_payload, source_sha = _source_payload(
+        host_root,
+        source_path=source_path,
+        source_ref=source_ref,
+    )
     digest = identity_digest(identity)
     evidence_seed = {
         "evidence_kind": evidence_kind,
@@ -365,13 +556,13 @@ def emit_lifecycle_evidence(
         "producer_sequence": producer_sequence,
         "attempt_identity": dict(identity),
         "identity_digest": digest,
-        "source_path": str(source_path),
+        "source": source_payload,
         "source_sha256": source_sha,
         "producer": {
             "name": PRODUCER_OWNERS[evidence_kind],
             "release": "observational-v1",
         },
-        "observed_at": observed_at or datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "observed_at": observed_at,
         "final": final,
         "closed_status": closed_status,
         "payload": dict(payload),
@@ -393,11 +584,13 @@ def emit_lifecycle_evidence(
         "producer": PRODUCER_OWNERS[evidence_kind],
         "producer_sequence": producer_sequence,
         "evidence_id": evidence_id,
-        "envelope_path": str(envelope_path.resolve()),
+        "envelope_path": _host_relative_path(host_root, envelope_path),
         "envelope_sha256": envelope_sha,
         "final": final,
         "closed_status": closed_status,
     }
+    validate_lifecycle_evidence_envelope(envelope)
+    validate_producer_head(head, envelope=envelope, host_root=host_root)
     with EvidenceHeadsLock(host_root):
         _write_immutable(envelope_path, envelope_bytes)
         _replace_head(head_path, head)
@@ -422,12 +615,28 @@ def _write_immutable(path: Path, data: bytes) -> None:
             temp_path.unlink()
 
 
+def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
+    data = canonical_json_bytes(dict(payload)) + b"\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as handle:
+        temp_path = Path(handle.name)
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    try:
+        os.replace(temp_path, path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
 def _replace_head(path: Path, head: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         current = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(current, Mapping):
             raise LifecycleEvidenceError("producer head is malformed")
+        validate_producer_head(current)
         _validate_head_update(current, head)
     data = canonical_json_bytes(dict(head)) + b"\n"
     with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as handle:
@@ -468,3 +677,226 @@ def _validate_head_update(current: Mapping[str, Any], new: Mapping[str, Any]) ->
         raise LifecycleEvidenceError("evidence_conflict: conflicting same-sequence evidence")
     if new_sequence > current_sequence + 1:
         raise LifecycleEvidenceError("evidence_conflict: producer sequence gap")
+
+
+def _is_sha256(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 64 and set(value) <= _SHA256_HEX
+
+
+def _host_relative_path(host_root: Path, path: Path) -> str:
+    try:
+        relative = path.resolve().relative_to(host_root.resolve())
+    except ValueError as exc:
+        raise LifecycleEvidenceError("path is not host-root-relative") from exc
+    return relative.as_posix()
+
+
+def _validate_canonical_relative_path(value: Any, *, label: str) -> None:
+    if not isinstance(value, str) or not value:
+        raise LifecycleEvidenceError(f"{label} must be a non-empty canonical relative path")
+    path = Path(value)
+    if path.is_absolute() or "\\" in value or ".." in path.parts:
+        raise LifecycleEvidenceError(f"{label} must be host-root-relative")
+
+
+def _source_payload(
+    host_root: Path,
+    *,
+    source_path: Path | None,
+    source_ref: SourceRef | Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], str]:
+    if (source_path is None) == (source_ref is None):
+        raise LifecycleEvidenceError("exactly one source_path or source_ref is required")
+    if source_ref is not None:
+        payload = source_ref.as_payload() if isinstance(source_ref, SourceRef) else dict(source_ref)
+        validate_source_ref(payload)
+        return {"type": "git_ref", **payload}, str(payload["sha256"])
+    assert source_path is not None
+    resolved = source_path.resolve()
+    if not resolved.is_file():
+        raise LifecycleEvidenceError(f"source evidence does not exist: {resolved}")
+    return {
+        "type": "host_path",
+        "path": _host_relative_path(host_root, resolved),
+    }, sha256_file(resolved)
+
+
+def validate_source_ref(source_ref: Mapping[str, Any]) -> None:
+    required = {"repository", "ref", "commit", "path", "sha256"}
+    if set(source_ref) != required:
+        raise LifecycleEvidenceError("source_ref has unexpected fields")
+    for field in ("repository", "ref", "commit", "path"):
+        if not isinstance(source_ref.get(field), str) or not source_ref.get(field):
+            raise LifecycleEvidenceError("source_ref fields must be non-empty strings")
+    _validate_canonical_relative_path(source_ref["path"], label="source_ref.path")
+    if not _is_sha256(source_ref.get("sha256")):
+        raise LifecycleEvidenceError("source_ref sha256 must be SHA-256 hex")
+
+
+def validate_lifecycle_evidence_envelope(envelope: Mapping[str, Any]) -> None:
+    required = {
+        "schema_version",
+        "evidence_kind",
+        "evidence_id",
+        "producer_sequence",
+        "attempt_identity",
+        "identity_digest",
+        "source",
+        "source_sha256",
+        "producer",
+        "observed_at",
+        "final",
+        "closed_status",
+        "payload",
+    }
+    if set(envelope) != required:
+        raise LifecycleEvidenceError("lifecycle evidence envelope has unexpected fields")
+    if envelope["schema_version"] != ENVELOPE_SCHEMA_VERSION:
+        raise LifecycleEvidenceError("unsupported lifecycle evidence envelope schema")
+    kind = envelope.get("evidence_kind")
+    if kind not in PRODUCER_OWNERS:
+        raise LifecycleEvidenceError("unknown evidence kind")
+    validate_attempt_identity(_mapping(envelope.get("attempt_identity"), "attempt_identity"))
+    if envelope.get("identity_digest") != identity_digest(envelope["attempt_identity"]):
+        raise LifecycleEvidenceError("identity digest mismatch")
+    if not isinstance(envelope.get("producer_sequence"), int) or envelope["producer_sequence"] < 1:
+        raise LifecycleEvidenceError("producer sequence must be positive")
+    if not isinstance(envelope.get("evidence_id"), str) or len(envelope["evidence_id"]) != 32:
+        raise LifecycleEvidenceError("evidence_id is malformed")
+    if not _is_sha256(envelope.get("source_sha256")):
+        raise LifecycleEvidenceError("source_sha256 is malformed")
+    source = _mapping(envelope.get("source"), "source")
+    if source.get("type") == "host_path":
+        _validate_canonical_relative_path(source.get("path"), label="source.path")
+    elif source.get("type") == "git_ref":
+        validate_source_ref(
+            {k: source[k] for k in ("repository", "ref", "commit", "path", "sha256")}
+        )
+        if source["sha256"] != envelope["source_sha256"]:
+            raise LifecycleEvidenceError("source_ref SHA binding mismatch")
+    else:
+        raise LifecycleEvidenceError("source type is unsupported")
+    producer = _mapping(envelope.get("producer"), "producer")
+    if producer.get("name") != PRODUCER_OWNERS[str(kind)] or not isinstance(
+        producer.get("release"),
+        str,
+    ):
+        raise LifecycleEvidenceError("producer ownership is invalid")
+    if not isinstance(envelope.get("observed_at"), str) or not envelope["observed_at"]:
+        raise LifecycleEvidenceError("observed_at is malformed")
+    _validate_final_closed(envelope.get("final"), envelope.get("closed_status"))
+    _validate_payload(
+        str(kind),
+        _mapping(envelope.get("payload"), "payload"),
+        bool(envelope["final"]),
+        str(envelope["closed_status"]),
+    )
+
+
+def validate_producer_head(
+    head: Mapping[str, Any],
+    *,
+    envelope: Mapping[str, Any] | None = None,
+    host_root: Path | None = None,
+) -> None:
+    required = {
+        "head_schema_version",
+        "attempt_identity",
+        "identity_digest",
+        "evidence_kind",
+        "producer",
+        "producer_sequence",
+        "evidence_id",
+        "envelope_path",
+        "envelope_sha256",
+        "final",
+        "closed_status",
+    }
+    if set(head) != required:
+        raise LifecycleEvidenceError("producer head has unexpected fields")
+    if head["head_schema_version"] != HEAD_SCHEMA_VERSION:
+        raise LifecycleEvidenceError("unsupported producer head schema")
+    kind = head.get("evidence_kind")
+    if kind not in PRODUCER_OWNERS:
+        raise LifecycleEvidenceError("unknown producer head kind")
+    validate_attempt_identity(_mapping(head.get("attempt_identity"), "attempt_identity"))
+    if head.get("identity_digest") != identity_digest(head["attempt_identity"]):
+        raise LifecycleEvidenceError("producer head identity digest mismatch")
+    if head.get("producer") != PRODUCER_OWNERS[str(kind)]:
+        raise LifecycleEvidenceError("producer head ownership conflict")
+    if not isinstance(head.get("producer_sequence"), int) or head["producer_sequence"] < 1:
+        raise LifecycleEvidenceError("producer head sequence is malformed")
+    if not isinstance(head.get("evidence_id"), str) or len(head["evidence_id"]) != 32:
+        raise LifecycleEvidenceError("producer head evidence_id is malformed")
+    _validate_canonical_relative_path(head.get("envelope_path"), label="envelope_path")
+    expected_prefix = "/".join(ENVELOPE_PATH_PARTS[str(kind)])
+    if not str(head["envelope_path"]).startswith(expected_prefix + "/"):
+        raise LifecycleEvidenceError("producer head envelope path does not match kind")
+    if not _is_sha256(head.get("envelope_sha256")):
+        raise LifecycleEvidenceError("producer head envelope_sha256 is malformed")
+    _validate_final_closed(head.get("final"), head.get("closed_status"))
+    if envelope is not None:
+        envelope_bytes = canonical_json_bytes(envelope) + b"\n"
+        if head["envelope_sha256"] != sha256_bytes(envelope_bytes):
+            raise LifecycleEvidenceError("producer head envelope SHA binding mismatch")
+        for field in (
+            "evidence_kind",
+            "evidence_id",
+            "producer_sequence",
+            "identity_digest",
+            "final",
+            "closed_status",
+        ):
+            if head[field] != envelope[field]:
+                raise LifecycleEvidenceError("producer head envelope binding mismatch")
+    if host_root is not None:
+        bound = host_root.joinpath(*Path(str(head["envelope_path"])).parts)
+        if bound.exists() and sha256_file(bound) != head["envelope_sha256"]:
+            raise LifecycleEvidenceError("producer head envelope-path/SHA binding mismatch")
+
+
+def _validate_final_closed(final: Any, closed_status: Any) -> None:
+    if not isinstance(final, bool):
+        raise LifecycleEvidenceError("final must be a boolean")
+    if closed_status not in _CLOSED_STATUSES:
+        raise LifecycleEvidenceError("closed_status must be open, final, or not_applicable")
+    if closed_status in {"final", "not_applicable"} and final is not True:
+        raise LifecycleEvidenceError("closed producer streams must set final=true")
+    if closed_status == "open" and final is True:
+        raise LifecycleEvidenceError("open producer streams must set final=false")
+
+
+def _validate_payload(
+    kind: str,
+    payload: Mapping[str, Any],
+    final: bool,
+    closed_status: str,
+) -> None:
+    spec = _PAYLOAD_CODES[kind]
+    allowed = spec["required"] | spec["optional"]
+    if not spec["required"] <= set(payload):
+        raise LifecycleEvidenceError("producer payload is missing required codes")
+    if not set(payload) <= allowed:
+        raise LifecycleEvidenceError("producer payload has unsupported codes")
+    for field, values in _PAYLOAD_ALLOWED_VALUES.get(kind, {}).items():
+        if field in payload and payload[field] not in values:
+            raise LifecycleEvidenceError("producer payload code is invalid")
+    reason = payload.get("reason_code")
+    if reason is not None:
+        if not isinstance(reason, str) or reason not in TERMINAL_REASON_CODES_V1:
+            raise LifecycleEvidenceError("terminal reason code is unsupported")
+        canonical = TERMINAL_REASON_CODES_V1[reason]["canonical_outcome"]
+        if reason.startswith("publication_review.") and "publication_review_disposition" in payload:
+            expected = canonical.split("=")[-1]
+            if payload["publication_review_disposition"] != expected:
+                raise LifecycleEvidenceError("terminal reason code is incompatible")
+        if reason.startswith("revision.") and payload.get("revision_disposition") != "exhausted":
+            raise LifecycleEvidenceError("terminal reason code is incompatible")
+    if closed_status == "not_applicable" and not final:
+        raise LifecycleEvidenceError("not_applicable streams must be final")
+
+
+def _mapping(value: Any, label: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise LifecycleEvidenceError(f"{label} must be an object")
+    return value

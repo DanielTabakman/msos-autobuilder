@@ -26,7 +26,12 @@ from typing import Any
 
 import yaml
 
-from .lifecycle_evidence import attempt_identity_from_job_yaml, emit_lifecycle_evidence
+from .lifecycle_evidence import (
+    LifecycleEvidenceError,
+    attempt_identity_from_job_yaml,
+    emit_lifecycle_evidence,
+    record_producer_evidence_error,
+)
 from .service_error_lifecycle import record_service_cycle_success, write_service_error_marker
 from .validation_contract import (
     ValidationContractError,
@@ -1037,23 +1042,38 @@ class CandidateGate:
                 self._save_ledger(ledger)
                 identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
                 if identity is not None:
-                    emit_lifecycle_evidence(
-                        self.host_root,
-                        evidence_kind="gate.validation",
-                        identity=identity,
-                        source_path=job_dir / "gate-report.json",
-                        payload={
-                            "validation_outcome": gate_report.get("status"),
-                            "validation_state": gate_report.get("state"),
-                            "validation_contract_sha256": gate_report.get(
-                                "validation_contract_sha256"
-                            ),
-                            "gate_report_sha256": _sha256_file(job_dir / "gate-report.json"),
-                            "results_commit": commit,
-                        },
-                        final=True,
-                        closed_status="final",
-                    )
+                    try:
+                        emit_lifecycle_evidence(
+                            self.host_root,
+                            evidence_kind="gate.validation",
+                            identity=identity,
+                            source_path=job_dir / "gate-report.json",
+                            payload={
+                                "validation_outcome": gate_report.get("status"),
+                                "validation_state": gate_report.get("state"),
+                                "validation_contract_sha256": gate_report.get(
+                                    "validation_contract_sha256"
+                                ),
+                                "gate_report_sha256": _sha256_file(job_dir / "gate-report.json"),
+                                "results_commit": commit,
+                            },
+                            final=True,
+                            closed_status="final",
+                            observed_at=str(gate_report["finished_at"]),
+                        )
+                    except LifecycleEvidenceError as exc:
+                        record_producer_evidence_error(
+                            self.host_root,
+                            producer="candidate_gate",
+                            evidence_kind="gate.validation",
+                            error=exc,
+                            identity=identity,
+                            primary_outcome={
+                                "job_id": job_id,
+                                "results_commit": commit,
+                                "status": gate_report.get("status"),
+                            },
+                        )
                 processed.append(job_id)
             except (CandidateGateError, OSError, KeyError, TypeError, ValueError) as exc:
                 self._write_error_marker(exc, associated=associated)

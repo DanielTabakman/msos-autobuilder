@@ -473,6 +473,53 @@ def test_duplicate_invocation_is_idempotent(tmp_path: Path) -> None:
     assert len(list((review / "jobs" / "approved").glob("build-next-*.yaml"))) == 1
 
 
+def test_refill_dispatch_submitted_replay_is_deterministic(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    feed = _feed_repo(tmp_path / "feed-work")
+    host_root = tmp_path / "host"
+    config = _config(
+        tmp_path,
+        ppe,
+        feed,
+        host_root=host_root,
+    ).__class__(
+        **{
+            **_config(tmp_path, ppe, feed, host_root=host_root).__dict__,
+            "refill_attempt": RefillAttemptContext(
+                generation_id="refill-generation-1",
+                attempt_ordinal=1,
+                selected_work_item_id="fixture_work",
+            ),
+        }
+    )
+
+    first = build_next(config)
+    envelopes = list(
+        (host_root / "state" / "refill-evidence" / "dispatch" / "submitted").rglob("*.json")
+    )
+    assert len(envelopes) == 1
+    first_bytes = envelopes[0].read_bytes()
+    first_head = next(
+        (host_root / "state" / "refill-evidence" / "heads" / "dispatch" / "submitted").glob(
+            "*.json"
+        )
+    ).read_text(encoding="utf-8")
+
+    second = build_next(config)
+    replay_bytes = envelopes[0].read_bytes()
+    replay_head = next(
+        (host_root / "state" / "refill-evidence" / "heads" / "dispatch" / "submitted").glob(
+            "*.json"
+        )
+    ).read_text(encoding="utf-8")
+
+    assert first.status == second.status == "QUEUED"
+    assert first.submitted is True
+    assert second.submitted is False
+    assert first_bytes == replay_bytes
+    assert first_head == replay_head
+
+
 def test_running_and_queued_host_items_are_not_duplicated(tmp_path: Path) -> None:
     ppe = _write_ppe(tmp_path / "ppe")
     feed = _feed_repo(tmp_path / "feed-work")

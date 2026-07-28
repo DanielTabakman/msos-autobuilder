@@ -31,7 +31,13 @@ from .codex_shadow import (
     load_codex_shadow_manifest,
     run_codex_shadow,
 )
-from .lifecycle_evidence import attempt_identity_from_job_yaml, emit_lifecycle_evidence
+from .lifecycle_evidence import (
+    LifecycleEvidenceError,
+    SourceRef,
+    attempt_identity_from_job_yaml,
+    emit_lifecycle_evidence,
+    record_producer_evidence_error,
+)
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
@@ -220,6 +226,50 @@ def _atomic_write_text(path: Path, text: str) -> None:
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
     _atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def _host_relative(host_root: Path, path: Path) -> str:
+    try:
+        return path.resolve().relative_to(host_root.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _emit_host_evidence(
+    host_root: Path,
+    *,
+    identity: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    producer_sequence: int,
+    final: bool,
+    closed_status: str,
+    observed_at: str,
+    primary_outcome: Mapping[str, Any],
+    source_path: Path | None = None,
+    source_ref: SourceRef | None = None,
+) -> None:
+    try:
+        emit_lifecycle_evidence(
+            host_root,
+            evidence_kind="host.execution",
+            identity=identity,
+            source_path=source_path,
+            source_ref=source_ref,
+            payload=payload,
+            producer_sequence=producer_sequence,
+            final=final,
+            closed_status=closed_status,
+            observed_at=observed_at,
+        )
+    except LifecycleEvidenceError as exc:
+        record_producer_evidence_error(
+            host_root,
+            producer="persistent_host",
+            evidence_kind="host.execution",
+            error=exc,
+            identity=identity,
+            primary_outcome=primary_outcome,
+        )
 
 
 def load_persistent_host_config(path: str | Path) -> PersistentHostConfig:
@@ -479,6 +529,8 @@ def sync_git_job_feed(config: PersistentHostConfig, paths: HostPaths) -> tuple[s
     _run_git(repo, "checkout", "-B", "autobuilder-job-feed", "FETCH_HEAD")
     _run_git(repo, "reset", "--hard", "FETCH_HEAD")
     _run_git(repo, "clean", "-fd")
+    feed_commit = _run_git(repo, "rev-parse", "HEAD")
+    feed_recorded_at = _run_git(repo, "show", "-s", "--format=%cI", feed_commit)
 
     feed_root = (repo / feed.relative_path).resolve()
     if not feed_root.is_relative_to(repo.resolve()):
@@ -516,6 +568,37 @@ def sync_git_job_feed(config: PersistentHostConfig, paths: HostPaths) -> tuple[s
         destination = paths.pending / f"{job.job_id}.yaml"
         _atomic_write_text(destination, text)
         ledger[job.job_id] = job.content_sha256
+        identity = attempt_identity_from_job_yaml(destination)
+        if identity is not None:
+            source_ref = SourceRef(
+                repository=feed.repo_url,
+                ref=feed.branch,
+                commit=feed_commit,
+                path=(Path(feed.relative_path) / f"{job.job_id}.yaml").as_posix(),
+                sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            )
+            _emit_host_evidence(
+                config.host_root,
+                identity=identity,
+                source_ref=source_ref,
+                payload={"execution_outcome": "imported"},
+                producer_sequence=1,
+                final=False,
+                closed_status="open",
+                observed_at=feed_recorded_at,
+                primary_outcome={"outcome": "imported", "job_id": job.job_id},
+            )
+            _emit_host_evidence(
+                config.host_root,
+                identity=identity,
+                source_path=destination,
+                payload={"execution_outcome": "pending"},
+                producer_sequence=2,
+                final=False,
+                closed_status="open",
+                observed_at=feed_recorded_at,
+                primary_outcome={"outcome": "pending", "job_id": job.job_id},
+            )
         imported.append(job.job_id)
     _atomic_write_json(paths.feed_ledger, ledger)
     return tuple(imported)
@@ -753,18 +836,22 @@ class PersistentHost:
         os.replace(staging, destination)
         identity = attempt_identity_from_job_yaml(destination / "job.yaml")
         if identity is not None:
-            emit_lifecycle_evidence(
+            _emit_host_evidence(
                 self.config.host_root,
-                evidence_kind="host.execution",
                 identity=identity,
                 source_path=destination / "error.json",
                 payload={
                     "execution_outcome": outcome,
-                    "host_archive_path": str(destination),
+                    "host_archive_path": _host_relative(self.config.host_root, destination),
                     "error_class": type(error).__name__,
                 },
+                producer_sequence=4,
                 final=True,
                 closed_status="final",
+                observed_at=json.loads((destination / "error.json").read_text(encoding="utf-8"))[
+                    "recorded_at"
+                ],
+                primary_outcome={"outcome": outcome, "job_id": job_id},
             )
         return destination
 
@@ -793,6 +880,19 @@ class PersistentHost:
                 os.replace(pending_path, running_path)
             except FileNotFoundError:
                 continue
+            identity = attempt_identity_from_job_yaml(running_path)
+            if identity is not None:
+                _emit_host_evidence(
+                    self.config.host_root,
+                    identity=identity,
+                    source_path=running_path,
+                    payload={"execution_outcome": "running"},
+                    producer_sequence=3,
+                    final=False,
+                    closed_status="open",
+                    observed_at=job.content_sha256,
+                    primary_outcome={"outcome": "running", "job_id": job.job_id},
+                )
             return running_path, job
         return None
 
@@ -907,18 +1007,20 @@ class PersistentHost:
         os.replace(staging, destination)
         identity = attempt_identity_from_job_yaml(destination / "job.yaml")
         if identity is not None:
-            emit_lifecycle_evidence(
+            _emit_host_evidence(
                 self.config.host_root,
-                evidence_kind="host.execution",
                 identity=identity,
                 source_path=destination / "report.json",
                 payload={
                     "execution_outcome": "completed",
-                    "host_archive_path": str(destination),
+                    "host_archive_path": _host_relative(self.config.host_root, destination),
                     "error_class": None,
                 },
+                producer_sequence=4,
                 final=True,
                 closed_status="final",
+                observed_at=str(report_payload["completed_at"]),
+                primary_outcome={"outcome": "completed", "job_id": job.job_id},
             )
         return destination
 

@@ -25,7 +25,12 @@ from typing import Any
 
 import yaml
 
-from .lifecycle_evidence import attempt_identity_from_job_yaml, emit_lifecycle_evidence
+from .lifecycle_evidence import (
+    LifecycleEvidenceError,
+    attempt_identity_from_job_yaml,
+    emit_lifecycle_evidence,
+    record_producer_evidence_error,
+)
 from .service_error_lifecycle import record_service_cycle_success, write_service_error_marker
 
 
@@ -528,20 +533,35 @@ class RevisionLoop:
                 self._save_ledger(ledger)
                 identity = attempt_identity_from_job_yaml(job_path)
                 if identity is not None:
-                    emit_lifecycle_evidence(
-                        self.host_root,
-                        evidence_kind="revision.disposition",
-                        identity=identity,
-                        source_path=self.ledger_path,
-                        payload={
-                            "revision_disposition": "queued",
-                            "descendant_job_id": str(manifest["job_id"]),
-                            "gate_report_sha256": gate_sha,
-                            "jobs_commit": commit,
-                        },
-                        final=True,
-                        closed_status="final",
-                    )
+                    try:
+                        emit_lifecycle_evidence(
+                            self.host_root,
+                            evidence_kind="revision.disposition",
+                            identity=identity,
+                            source_path=gate_path,
+                            payload={
+                                "revision_disposition": "queued",
+                                "descendant_job_id": str(manifest["job_id"]),
+                                "gate_report_sha256": gate_sha,
+                                "jobs_commit": commit,
+                            },
+                            final=True,
+                            closed_status="final",
+                            observed_at=str(ledger[ledger_key]["queued_at"]),
+                        )
+                    except LifecycleEvidenceError as exc:
+                        record_producer_evidence_error(
+                            self.host_root,
+                            producer="revision_loop",
+                            evidence_kind="revision.disposition",
+                            error=exc,
+                            identity=identity,
+                            primary_outcome={
+                                "source_job_id": job_id,
+                                "revision_job_id": str(manifest["job_id"]),
+                                "jobs_commit": commit,
+                            },
+                        )
                 processed.append(str(manifest["job_id"]))
             except (RevisionLoopError, OSError, ValueError, yaml.YAMLError) as exc:
                 self._write_error_marker(exc, associated=associated)

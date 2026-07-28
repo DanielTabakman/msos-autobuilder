@@ -29,7 +29,12 @@ from typing import Any
 import yaml
 
 from .candidate_gate import GateCheck, _atomic_write_json, _bounded, _safe_segment, run_check
-from .lifecycle_evidence import attempt_identity_from_job_yaml, emit_lifecycle_evidence
+from .lifecycle_evidence import (
+    LifecycleEvidenceError,
+    attempt_identity_from_job_yaml,
+    emit_lifecycle_evidence,
+    record_producer_evidence_error,
+)
 from .service_error_lifecycle import record_service_cycle_success, write_service_error_marker
 
 
@@ -1004,22 +1009,37 @@ class ControlledPublisher:
                     self._save_ledger(ledger)
                     identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
                     if identity is not None:
-                        emit_lifecycle_evidence(
-                            self.host_root,
-                            evidence_kind="publication_review.disposition",
-                            identity=identity,
-                            source_path=job_dir / "publication-report.json",
-                            payload={
-                                "publication_review_disposition": "drafted",
-                                "reason_code": "publication_review.drafted.v1",
-                                "draft_pr": report["pr_url"],
-                                "product_branch": report["product_branch"],
-                                "product_commit": report["product_commit"],
-                                "results_commit": results_commit,
-                            },
-                            final=True,
-                            closed_status="final",
-                        )
+                        try:
+                            emit_lifecycle_evidence(
+                                self.host_root,
+                                evidence_kind="publication_review.disposition",
+                                identity=identity,
+                                source_path=job_dir / "publication-report.json",
+                                payload={
+                                    "publication_review_disposition": "drafted",
+                                    "reason_code": "publication_review.drafted.v1",
+                                    "draft_pr": report["pr_url"],
+                                    "product_branch": report["product_branch"],
+                                    "product_commit": report["product_commit"],
+                                    "results_commit": results_commit,
+                                },
+                                final=True,
+                                closed_status="final",
+                                observed_at=str(report["published_at"]),
+                            )
+                        except LifecycleEvidenceError as exc:
+                            record_producer_evidence_error(
+                                self.host_root,
+                                producer="controlled_publisher",
+                                evidence_kind="publication_review.disposition",
+                                error=exc,
+                                identity=identity,
+                                primary_outcome={
+                                    "job_id": job_id,
+                                    "pr_url": report["pr_url"],
+                                    "results_commit": results_commit,
+                                },
+                            )
                     processed.append(job_id)
                     verified.add(job_id)
                 except (PublisherError, OSError, KeyError, TypeError, ValueError) as exc:

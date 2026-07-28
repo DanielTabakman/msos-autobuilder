@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
@@ -27,7 +28,7 @@ from .build_next import (
     build_next,
 )
 from .managed_source import ManagedSourceSyncError, ensure_managed_source_fresh
-from .persistent_host import HostPaths, HostProcessLock, parse_host_job
+from .persistent_host import HostPaths, HostProcessLock, _pid_alive, parse_host_job
 from .service_error_lifecycle import (
     GATE_ERROR_SPEC,
     PUBLISHER_ERROR_SPEC,
@@ -296,6 +297,7 @@ class RefillServiceStatus:
     heartbeat_at: str
     last_reconcile: dict[str, Any] | None
     errors: tuple[str, ...] = ()
+    service_generation_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -773,6 +775,36 @@ def _reconcile_lock_path(config: RefillConfig) -> Path:
 
 def _refill_stop_path(config: RefillConfig) -> Path:
     return _host_paths(config).state / "refill-stop.requested"
+
+
+def _read_refill_stop_request(path: Path) -> dict[str, Any] | None:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _refill_stop_applies_to_generation(
+    request: Mapping[str, Any] | None,
+    service_generation_id: str,
+) -> bool:
+    if request is None:
+        return False
+    requested_generation = request.get("service_generation_id")
+    if requested_generation is None:
+        return True
+    return str(requested_generation) == service_generation_id
+
+
+def _read_refill_service_lock_owner(config: RefillConfig) -> dict[str, Any]:
+    try:
+        raw = json.loads(_service_lock_path(config).read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return {}
+    return dict(raw) if isinstance(raw, dict) else {}
 
 
 def load_refill_policy(config: RefillConfig) -> RefillPolicy:
@@ -2939,6 +2971,8 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
 
 
 class RefillService:
+    _STOP_REQUEST_POLL_SECONDS = 0.25
+
     def __init__(
         self,
         config: RefillConfig,
@@ -2952,7 +2986,9 @@ class RefillService:
         self.interval_seconds = interval_seconds
         self.sleeper = sleeper
         self.started_at: str | None = None
+        self.service_generation_id = secrets.token_hex(16)
         self.last_reconcile: dict[str, Any] | None = None
+        self._stop_requested = threading.Event()
 
     def _write_status(self, state: str, errors: tuple[str, ...] = ()) -> RefillServiceStatus:
         status = RefillServiceStatus(
@@ -2963,6 +2999,7 @@ class RefillService:
             heartbeat_at=_utc_now(),
             last_reconcile=self.last_reconcile,
             errors=errors,
+            service_generation_id=self.service_generation_id,
         )
         _atomic_write_json(_status_path(self.config), asdict(status))
         return status
@@ -2986,11 +3023,58 @@ class RefillService:
                 else None
             ),
             errors=tuple(str(item) for item in raw.get("errors", ())),
+            service_generation_id=(
+                str(raw["service_generation_id"])
+                if raw.get("service_generation_id") is not None
+                else None
+            ),
         )
 
     def request_stop(self) -> Path:
         path = _refill_stop_path(self.config)
-        _atomic_write_json(path, {"requested_at": _utc_now(), "token": secrets.token_hex(8)})
+        status = self.read_status()
+        lock_owner = _read_refill_service_lock_owner(self.config)
+        lock_pid = lock_owner.get("pid")
+        service_pid = status.pid
+        owner_matches_status = (
+            isinstance(lock_pid, int)
+            and service_pid is not None
+            and lock_pid == service_pid
+            and _pid_alive(service_pid)
+        )
+        target_generation = (
+            status.service_generation_id
+            if (
+                status.state == "running"
+                and status.service_generation_id is not None
+                and owner_matches_status
+            )
+            else None
+        )
+        existing = _read_refill_stop_request(path)
+        if existing is not None:
+            existing_generation = existing.get("service_generation_id")
+            if existing_generation is None or (
+                target_generation is not None
+                and _refill_stop_applies_to_generation(existing, target_generation)
+            ):
+                self._stop_requested.set()
+                return path
+        payload: dict[str, Any] = {
+            "version": 1,
+            "requested_at": _utc_now(),
+            "token": secrets.token_hex(8),
+        }
+        if target_generation is not None:
+            payload.update(
+                {
+                    "service_generation_id": target_generation,
+                    "service_pid": status.pid,
+                    "service_started_at": status.started_at,
+                }
+            )
+        _atomic_write_json(path, payload)
+        self._stop_requested.set()
         return path
 
     def run_once(self) -> RefillReport:
@@ -2999,22 +3083,49 @@ class RefillService:
         self._write_status("running")
         return report
 
+    def _wait_for_stop_request(self, stop_path: Path) -> bool:
+        deadline = time.monotonic() + self.interval_seconds
+        while True:
+            if _refill_stop_applies_to_generation(
+                _read_refill_stop_request(stop_path), self.service_generation_id
+            ):
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            wait_seconds = min(remaining, self._STOP_REQUEST_POLL_SECONDS)
+            if self._stop_requested.wait(wait_seconds):
+                self._stop_requested.clear()
+
     def run_forever(self) -> None:
         self.started_at = _utc_now()
         stop_path = _refill_stop_path(self.config)
-        stop_path.unlink(missing_ok=True)
         with HostProcessLock(_service_lock_path(self.config)):
-            self._write_status("running")
-            while not stop_path.exists():
-                errors: list[str] = []
-                try:
-                    self.run_once()
-                except BaseException as exc:
-                    errors.append(str(exc))
-                    self._write_status("running", tuple(errors))
-                self.sleeper(self.interval_seconds)
-            stop_path.unlink(missing_ok=True)
-            self._write_status("stopped")
+            try:
+                self._write_status("running")
+                while True:
+                    if _refill_stop_applies_to_generation(
+                        _read_refill_stop_request(stop_path), self.service_generation_id
+                    ):
+                        break
+                    errors: list[str] = []
+                    try:
+                        self.run_once()
+                    except BaseException as exc:
+                        errors.append(str(exc))
+                        self._write_status("running", tuple(errors))
+                    if _refill_stop_applies_to_generation(
+                        _read_refill_stop_request(stop_path), self.service_generation_id
+                    ):
+                        break
+                    if self._wait_for_stop_request(stop_path):
+                        break
+            finally:
+                if _refill_stop_applies_to_generation(
+                    _read_refill_stop_request(stop_path), self.service_generation_id
+                ):
+                    stop_path.unlink(missing_ok=True)
+                self._write_status("stopped")
 
 
 def render_refill_report_json(report: RefillReport) -> str:

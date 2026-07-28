@@ -11,6 +11,9 @@ B/C dispatch.
 - Issue #98, "Architecture review: canonical terminal disposition for refill attempts".
 - Issue #98 decision comment `#5108427193`.
 - Independent architecture review `#4800845999` on draft PR #99.
+- Independent architecture re-review `#4800936580` on draft PR #99 exact head
+  `8a33a5d80c138a551234f36868741e4f59f33c16`.
+- Issue #98 comment `#5108533626`.
 - Draft PR #92 repair-admission document state.
 - Issue #50, especially runtime evidence comment `#5108108854` and the circuit-breaker
   comment that opened #98.
@@ -90,6 +93,7 @@ The boundaries are:
 | Lifecycle lock | Recorder alone writes through `state/attempt-lifecycle.lock`; refill, host, gate, revision, and publisher do not hold it. |
 | Durable canonical paths | Recorder writes only under `state/attempt-lifecycle/`; refill continues to own `state/refill-generation*.json`. |
 | Evidence ownership | Refill, host, relay, gate, revision, publisher, and service-error lifecycle own their source evidence envelopes. |
+| Freshness protocol | Durable watermark only. Refill never invokes recorder lifecycle-writing or reducer code directly. |
 
 Current-versus-target data flow:
 
@@ -155,22 +159,50 @@ Required post-recorder envelope kinds:
 | `revision.disposition` | Revision loop | queued/exhausted/blocked/not required/missing/conflict, descendant job identity when queued |
 | `publication_review.disposition` | Controlled publisher or review owner | awaiting review/drafted/rejected/terminal no-publication/blocked/missing/conflict |
 
+Producer-owned envelope storage is exact and outside the recorder-only canonical namespace:
+
+| Envelope kind | Only writer | Immutable envelope path |
+|---|---|---|
+| `dispatch.prepared` | Refill/build-next | `state/refill-evidence/dispatch/prepared/<generation-id>/<job-id>/<identity-digest>.<evidence-id>.json` |
+| `dispatch.submitted` | Build-next/refill | `state/refill-evidence/dispatch/submitted/<generation-id>/<job-id>/<identity-digest>.<evidence-id>.json` |
+| `host.execution` | Persistent host | `state/host-evidence/execution/<generation-id>/<job-id>/<identity-digest>.<evidence-id>.json` |
+| `relay.result` | Results relay | `state/relay-evidence/result/<generation-id>/<job-id>/<identity-digest>.<evidence-id>.json` |
+| `gate.validation` | Candidate gate | `state/gate-evidence/validation/<generation-id>/<job-id>/<identity-digest>.<evidence-id>.json` |
+| `revision.disposition` | Revision loop | `state/revision-evidence/disposition/<generation-id>/<job-id>/<identity-digest>.<evidence-id>.json` |
+| `publication_review.disposition` | Controlled publisher or review owner | `state/publisher-evidence/publication-review/<generation-id>/<job-id>/<identity-digest>.<evidence-id>.json` |
+
+Envelope files are immutable. A producer may write a later envelope with a new `evidence_id`,
+but it must not replace or edit an existing envelope. `state/attempt-lifecycle/` remains
+recorder-only and contains no producer-owned input files.
+
 ## Canonical Record Model
 
 The canonical model is one orthogonal current record per attempt plus one current record per
 canonical work item. It is not one overloaded lifecycle-state enum.
 
-Canonical attempt identity contains:
+Canonical attempt identity is one exact versioned JSON tuple. No other representation is a
+valid path key or equality key for v1.
 
 | Field | Meaning |
 |---|---|
-| `repository_identity` | Canonical owner/repository and product repository digest or configured repository ID. |
+| `schema_version` | Literal `attempt_identity.v1`. |
+| `repository_identity` | Literal canonical repository identity string `<owner>/<repo>` for the GitHub repository under control, lower-cased with no trailing `.git`. |
 | `pipeline_id` | Autobuilder pipeline or managed release pipeline identity. |
 | `work_item_id` | Stable work item identifier. |
-| `work_item_digest` | Digest of the work item source bytes or canonical request body. |
+| `work_item_digest_contract` | Literal `work_item_source_sha256_v1`. |
+| `work_item_digest` | SHA-256 of the exact UTF-8 work-item source bytes after normalizing CRLF and CR line endings to LF and preserving all other bytes. |
 | `generation_id` | Refill generation that created this attempt. |
 | `job_id` | Host job ID for this attempt. |
-| `attempt_number` | Monotonic attempt number within the generation/work-item lineage. |
+| `attempt_ordinal` | Existing monotonic attempt ordinal already carried by refill for this work item in this generation. |
+| `retry_ordinal` | Existing retry ordinal already carried by refill for this work item in this generation. |
+
+Canonical serialization is UTF-8 JSON with sorted object keys, no insignificant whitespace,
+lowercase booleans/null, decimal integer ordinals without leading zeroes, and string values
+emitted exactly as stored after the normalization rules above. The `identity_digest` used in
+paths is `sha256(canonical_json_bytes)`. The tuple itself is embedded in every envelope,
+transition, and snapshot. Alternatives such as repository digest, configured repository ID,
+canonical request body digest, bare `work-item-id`, or any parallel attempt counter are not
+v1 identity contracts.
 
 Canonical repository/pipeline/work-item identity is required for both attempt and
 work-item records. Bare `work-item-id` is insufficient.
@@ -226,15 +258,39 @@ produce the same current snapshots and `reduced_through` watermarks.
 ## Refill Freshness Handshake
 
 Refill may not retry, exclude an item, or select the next item from stale canonical evidence.
-Before any such decision, refill must do one of the following:
+The only v1 freshness and sole-writer protocol is durable watermark verification:
 
-1. synchronously invoke the canonical reducer in the relay-hosted recorder and wait for the
-   resulting transition/snapshot or an explicit fail-closed result; or
-2. verify an exact durable `reduced_through` watermark that covers every latest known source
-   evidence identity and SHA-256 relevant to the active generation and attempt.
+1. Producers write immutable evidence envelopes under their producer-owned paths.
+2. The relay-hosted recorder is the only process that appends canonical lifecycle transitions
+   and replaces canonical snapshots.
+3. Refill never invokes recorder lifecycle-writing or reducer code directly.
+4. Stale canonical evidence blocks the current reconcile cycle until the recorder catches up.
 
 `reduced_through` is exact, not time-based. It binds each producer's latest known evidence
 identity and SHA-256 for the attempt or generation. A heartbeat alone is insufficient.
+
+The recorder writes this head contract into each attempt, work-item, and generation snapshot:
+
+| Field | Meaning |
+|---|---|
+| `snapshot_sha256` | SHA-256 of the canonical snapshot bytes, excluding this field. |
+| `latest_evidence_set_contract` | Literal `latest_evidence_set_sha256.v1`. |
+| `latest_evidence_set` | Sorted list of `{producer, evidence_kind, evidence_id, envelope_path, envelope_sha256}` for the latest immutable envelope from every producer/kind relevant to the identity. |
+| `latest_evidence_set_sha256` | SHA-256 of the canonical JSON serialization of `latest_evidence_set`. |
+| `reduced_through` | Per producer/kind latest evidence identity and envelope SHA-256 reduced into this snapshot. It must equal the `latest_evidence_set` for the covered scope. |
+
+Before retry, exclusion, or next-item submission, refill must:
+
+1. scan producer-owned envelope heads for the active identity and derive the expected
+   `latest_evidence_set_sha256`;
+2. read the canonical snapshot and verify that `reduced_through` covers that exact evidence
+   set;
+3. bind both `snapshot_sha256` and `latest_evidence_set_sha256` into the
+   `dispatch.prepared` envelope and `prepared_dispatch` state;
+4. immediately before the irreversible feed submission, exclusion write, or retry submission,
+   reread the canonical snapshot and producer envelope heads;
+5. abort the action and wait for another reconcile if either the snapshot SHA-256 or
+   `latest_evidence_set_sha256` changed.
 
 Stale, absent, missing, or conflicting canonical evidence blocks fail-closed. For
 post-recorder attempts, refill may never fall back to direct host, gate, revision, publisher,
@@ -262,13 +318,31 @@ The work-item snapshot contains a deterministic `item_disposition` and total map
 | `evidence_conflict` | Contradictory or mutated evidence hashes | `block_fail_closed` |
 | `evidence_stale` | Durable `reduced_through` does not cover latest known evidence | `block_fail_closed` |
 | `item_terminal_success_drafted` | Publication/review disposition drafted and verified | `exclude_item_and_select_next` |
-| `item_terminal_no_publication` | Publication/review disposition terminal no-publication with accepted reason | `exclude_item_and_select_next` |
-| `item_terminal_rejected` | Publication/review disposition rejected with accepted item-terminal reason | `exclude_item_and_select_next` |
-| `item_terminal_revision_exhausted` | Validation failed and revision exhausted with accepted item-terminal reason | `exclude_item_and_select_next` |
+| `item_terminal_no_publication` | Publication/review disposition terminal no-publication with known v1 terminal reason code | `exclude_item_and_select_next` |
+| `item_terminal_rejected` | Publication/review disposition rejected with known v1 terminal reason code | `exclude_item_and_select_next` |
+| `item_terminal_revision_exhausted` | Validation failed and revision exhausted with known v1 terminal reason code | `exclude_item_and_select_next` |
 | `migration_historical_preserved` | Pre-recorder generation preserved byte-for-byte; migration metadata only | `block_fail_closed` |
 
 Any new `item_disposition` value must extend this table in the same PR that introduces it.
-There is no free-form "per reason" terminal prose.
+There is no free-form terminal prose.
+
+## Terminal Reason Codes V1
+
+Terminal reason codes are versioned structured producer payload values. Every known reason
+code maps to exactly one canonical outcome, item disposition, item terminality, and refill
+action. Unknown reason codes, missing reason-code table versions, or codes outside the
+producer's declared table block fail-closed. Free-form messages remain explanatory evidence
+only and cannot determine terminality.
+
+| `reason_code` | Canonical outcome | `item_disposition` | `item_terminal` | `refill_action` |
+|---|---|---|---|---|
+| `publication_review.drafted.v1` | `publication_review_disposition=drafted` | `item_terminal_success_drafted` | `true` | `exclude_item_and_select_next` |
+| `publication_review.no_publication.not_required.v1` | `publication_review_disposition=terminal_no_publication` | `item_terminal_no_publication` | `true` | `exclude_item_and_select_next` |
+| `publication_review.no_publication.out_of_scope.v1` | `publication_review_disposition=terminal_no_publication` | `item_terminal_no_publication` | `true` | `exclude_item_and_select_next` |
+| `publication_review.rejected.duplicate_or_obsolete.v1` | `publication_review_disposition=rejected` | `item_terminal_rejected` | `true` | `exclude_item_and_select_next` |
+| `publication_review.rejected.founder_declined.v1` | `publication_review_disposition=rejected` | `item_terminal_rejected` | `true` | `exclude_item_and_select_next` |
+| `revision.exhausted.contract_limit.v1` | `validation_outcome=failed`, `revision_disposition=exhausted` | `item_terminal_revision_exhausted` | `true` | `exclude_item_and_select_next` |
+| `revision.exhausted.no_valid_repair.v1` | `validation_outcome=failed`, `revision_disposition=exhausted` | `item_terminal_revision_exhausted` | `true` | `exclude_item_and_select_next` |
 
 Semantics:
 
@@ -319,13 +393,18 @@ Migration is one explicit boundary, not a growing list of incident branches:
 
 1. Existing Issue #89 evidence and the current Issue #50 A evidence remain byte-for-byte
    unchanged. No migration rewrites, moves, retries, excludes, or regenerates them.
-2. Migration creates canonical records under a one-time transaction ID:
+2. Migration creates canonical preservation records and one clean-generation authorization
+   under a one-time transaction ID:
    `migration.issue89-issue50A.<utc-timestamp>.<migration-input-sha256>`.
-3. The migration transaction input lists every source path/ref, source byte length, source
-   SHA-256, generation ID, job ID, canonical repository/pipeline/work-item identity, and the
-   current refill classification bytes it preserves.
-4. The migration transaction output lists every journal transition and snapshot digest it
-   creates. The transaction is valid only if every input SHA-256 still matches at commit time.
+3. The migration transaction input binds the active release identity, active release
+   SHA-256, old active generation ID, old active generation SHA-256, every Issue #89 and
+   current A source path/ref, every source byte length, every source SHA-256, job ID,
+   canonical repository/pipeline/work-item identity, and the current refill classification
+   bytes it preserves.
+4. The migration transaction output lists every journal transition, snapshot digest,
+   migration receipt digest, and clean-generation authorization digest it creates. The
+   transaction is valid only if the active release, old generation ID, old generation
+   SHA-256, and every input SHA-256 still match at commit time.
 5. Current A is migrated with known structured facts, not merely historical supersession:
    `execution_outcome=failed`, `attempt_terminal=true`, `item_terminal=false`,
    `retry_eligibility=operator_required`, `evidence_integrity=migration_only`, and
@@ -341,13 +420,26 @@ Migration is one explicit boundary, not a growing list of incident branches:
    `block_fail_closed`, their `evidence_integrity` is `migration_only`, their generation
    metadata marks them `pre_recorder=true`, and the freshness handshake rejects them as a
    basis for post-recorder next-item selection.
-9. Clean post-recorder generation creation starts with fresh `dispatch.prepared` and
-   `dispatch.submitted` envelopes from the reducer-enabled release. It does not inherit
-   historical `reduced_through` watermarks, retry counts, terminality, or exclusions except
-   through explicit byte-bound generation metadata.
-10. New attempts created after the lifecycle-recorder release must have canonical lifecycle
+9. The migration transaction does not itself create the clean generation and performs no
+   dispatch. It atomically writes a durable authorization consumed by the next passive
+   reconcile: `state/refill-generation-authorizations/clean-post-recorder/<transaction-id>.json`.
+10. The clean-generation authorization preserves existing founder policy intent exactly:
+    `enabled=true`, desired capacity one. It is not a second founder command, does not create
+    new product authority, and does not require another `keep 1 running` command.
+11. The authorization permits exactly one clean post-recorder generation for the same bound
+    active release and old generation identity/hash. It is consumed idempotently by passive
+    reconcile; replay after crash either observes the already-created clean generation receipt
+    or creates the same generation once.
+12. The authorized clean generation inherits no historical attempts, exclusions, retries,
+    terminality, or watermarks. It does not exclude A because current A's historical attempt
+    failed. It starts with empty post-recorder lifecycle state and can create only fresh
+    `dispatch.prepared` and `dispatch.submitted` envelopes during the next passive reconcile.
+13. Current code will need a bounded clean-generation creation transition because it currently
+    blocks when no founder-created generation exists. That implementation work is not
+    authorized by this document revision.
+14. New attempts created after the lifecycle-recorder release must have canonical lifecycle
     records from dispatch onward. Absence is `evidence_missing`, not compatibility fallback.
-11. Migration closes after the first accepted managed release and installed proof that a fresh
+15. Migration closes after the first accepted managed release and installed proof that a fresh
     A attempt is lifecycle-recorded from dispatch through terminal or blocked disposition.
 
 ## Duplicate Interpretation And Deletion Plan
@@ -399,9 +491,10 @@ managed service.
    `reduced_through` watermark production.
 4. Add an explicit ID/hash-bound migration command/tests for the preserved Issue #89 generation
    and current Issue #50 A generation without editing either evidence source.
-5. Wire refill to perform the synchronous reducer or exact-watermark freshness handshake and
-   consume canonical work-item disposition for post-recorder attempts. Old interpretation
-   remains fenced behind the migration boundary only.
+5. Wire refill to perform the durable-watermark freshness handshake, bind snapshot and
+   evidence-set digests into `prepared_dispatch`, revalidate before irreversible feed or
+   exclusion writes, and consume canonical work-item disposition for post-recorder attempts.
+   Old interpretation remains fenced behind the migration boundary only.
 6. Add focused fixtures from the map above, including the exact `.pytest_cache`
    `PermissionError` archive shape.
 7. Remove refill direct interpretation for post-recorder attempts.
@@ -437,16 +530,21 @@ Issue #50 may resume only when all of the following are true:
 
 Agreement: partial
 
-Compared: Issue #98; Issue #98 decision comment `#5108427193`; independent architecture
-review `#4800845999`; PR #99 head `60f9f76`; PR #92 repair-admission draft; Issue #50
-comment `#5108108854`; Issue #89; Issue #82; Issue #95; current refill, relay, host, gate,
-revision, publisher, and service-error lifecycle code; active control-plane SOP.
+Compared: Issue #98; Issue #98 decision comment `#5108427193`; Issue #98 comment
+`#5108533626`; independent architecture review `#4800845999`; independent architecture
+re-review `#4800936580`; PR #99 exact head
+`8a33a5d80c138a551234f36868741e4f59f33c16`; PR #92 repair-admission draft; Issue #50
+comment `#5108108854`; Issue #89; Issue #82; Issue #95; current refill prepared-dispatch
+model; existing relay service; current refill, relay, host, gate, revision, publisher, and
+service-error lifecycle code; active control-plane SOP.
 
-Disagreement: resolved within this draft revision. The accepted direction is a single
-logical Attempt Lifecycle Recorder, hosted in the existing persistent relay process for v1,
-with structured post-recorder evidence envelopes, orthogonal canonical fields, append-only
-transitions, exact freshness proof, and hash-bound migration. No runtime implementation is
-authorized until independent re-review accepts the architecture.
+Disagreement: resolved within this draft revision. The accepted direction remains a single
+logical Attempt Lifecycle Recorder, hosted in the existing persistent relay process for v1.
+This revision selects durable watermark as the only v1 freshness and sole-writer protocol,
+defines exact producer envelope paths, defines one canonical identity tuple and digest,
+adds a versioned terminal reason-code table, and specifies the hash-bound migration
+transaction as durable authorization for one passive clean generation. No runtime
+implementation is authorized until final independent re-review accepts the architecture.
 
 Evidence gap: independent re-review of this corrected architecture; accepted canonical
 schemas; recorder implementation; envelope producer implementation; migration evidence; no
@@ -457,9 +555,9 @@ service-error evidence interpretation. Target design makes those services eviden
 the relay-hosted recorder the only logical disposition writer, and refill a freshness-checked
 consumer of canonical work-item disposition.
 
-Risk if unresolved: every new worker, gate, revision, relay, or publisher outcome can require
-another refill-specific classifier, marker, supersession, or compatibility branch, or the
-ambiguity can move into a stale seventh interpreter instead of being compressed.
+Risk if unresolved: refill can become a second lifecycle writer, dispatch from stale
+evidence, disagree with producers on identity, infer terminality from free-form text, or
+require unauthorized second founder intent during migration.
 
 Recommended default: keep PR #99 draft and return this docs-only revision for independent
 re-review before any Issue #50 runtime repair, retry, exclusion, B/C submission, or

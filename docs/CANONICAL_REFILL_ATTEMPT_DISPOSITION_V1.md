@@ -1,6 +1,6 @@
 # Canonical Refill Attempt Disposition V1
 
-Status: Draft architecture for Issue #98
+Status: Accepted architecture for Issue #98
 
 Scope: This document defines the target lifecycle contract for capacity-one refill attempts.
 It does not authorize implementation, runtime state changes, Issue #50 retry/exclusion, or
@@ -20,6 +20,8 @@ B/C dispatch.
 - Blocking architecture review `#4801096703` on draft PR #99 exact head
   `6ec1f7d807fad82973970b7c6c18358aa2b8e083`.
 - Issue #98 comment `#5108740651`.
+- Acceptance review `#4801201475` on PR #99 exact head
+  `6d4be4c67b906b263a6645e6b849aa211816a0d6`.
 - Draft PR #92 repair-admission document state.
 - Issue #50, especially runtime evidence comment `#5108108854` and the circuit-breaker
   comment that opened #98.
@@ -705,31 +707,24 @@ Issue #50 may resume only when all of the following are true:
 
 ## Coordination Status
 
-Agreement: partial
+Agreement: aligned
 
 Compared: Issue #98; Issue #98 decision comment `#5108427193`; Issue #98 comment
 `#5108533626`; Issue #98 final re-review update comment `#5108644779`; Issue #98 comment
 `#5108740651`; independent
 architecture review `#4800845999`; independent architecture re-review `#4800936580`;
 independent final architecture re-review `#4801024367`; blocking architecture review
-`#4801096703`; PR #99 reviewed exact head
+`#4801096703`; acceptance review `#4801201475`; PR #99 reviewed exact head
 `6ec1f7d807fad82973970b7c6c18358aa2b8e083`; PR #92 repair-admission draft; Issue #50
 comment `#5108108854`; Issue #89; Issue #82; Issue #95; current producer-head,
 recorder-journal, prepared-dispatch, and freshness sections; current refill prepared-dispatch
 model and prepared-dispatch crash recovery; existing relay service; current refill, relay,
 host, gate, revision, publisher, and service-error lifecycle code; active control-plane SOP.
 
-Disagreement: major architecture direction is resolved. This revision applies review
-`#4801096703` and Issue #98 comment `#5108740651`: recorder snapshot publication is atomic
-with producer heads through the fixed lock order `state/evidence-heads.lock` to
-`state/attempt-lifecycle.lock`, refill cannot trust a moving snapshot while holding the
-evidence-head lock, and retry/exclusion/next-dispatch actions bind an explicit
-non-self-referential `decision_basis`. No runtime implementation is authorized until
-independent acceptance review accepts this corrected architecture.
+Disagreement: none
 
-Evidence gap: independent architecture acceptance review of this corrected docs-only head;
-accepted canonical schemas; recorder implementation; envelope producer/head implementation;
-migration evidence; no fresh post-recorder A-to-B witness yet.
+Evidence gap: PR merge; Issues #100-#103 implementation and CI; managed release;
+migration proof; fresh A->automatic-B/no-C witness
 
 Ownership overlap: current refill overlaps host, gate, relay, revision, publisher, and
 service-error evidence interpretation. Target design makes those services evidence owners,
@@ -739,8 +734,6 @@ consumer of canonical work-item disposition.
 Risk if unresolved: producer heads, recorder snapshots, and refill action commitment can
 move independently, or B/retry/exclusion can become self-authorizing.
 
-Recommended default: keep PR #99 draft and stop for independent architecture acceptance
-review before any Issue #50 runtime repair, retry, exclusion, B/C submission, release,
-implementation issue creation, or `.pytest_cache` workaround.
+Recommended default: merge PR #99 and begin Issue #100
 
 Founder decision required: no

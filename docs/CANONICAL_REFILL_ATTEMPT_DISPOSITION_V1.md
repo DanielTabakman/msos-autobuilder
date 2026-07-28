@@ -14,6 +14,9 @@ B/C dispatch.
 - Independent architecture re-review `#4800936580` on draft PR #99 exact head
   `8a33a5d80c138a551234f36868741e4f59f33c16`.
 - Issue #98 comment `#5108533626`.
+- Independent final architecture re-review `#4801024367` on draft PR #99 exact head
+  `d45d50e00ed1f0c9a0138394975d4d3b6af18775`.
+- Issue #98 comment `#5108644779`.
 - Draft PR #92 repair-admission document state.
 - Issue #50, especially runtime evidence comment `#5108108854` and the circuit-breaker
   comment that opened #98.
@@ -109,12 +112,13 @@ flowchart LR
   end
 
   subgraph Target
-    BD["Build-next/refill dispatch envelope"] --> L["Attempt Lifecycle Recorder in relay process"]
+    DP["Refill prepared-dispatch envelope"] --> L["Attempt Lifecycle Recorder in relay process"]
+    DS["Build-next submitted-dispatch envelope"] --> L
     H2["Host execution envelope"] --> L
     RR["Relay envelope"] --> L
     G2["Gate validation envelope"] --> L
     V2["Revision disposition envelope"] --> L
-    P2["Publisher/review envelope"] --> L
+    P2["Publisher envelope"] --> L
     L --> J["append-only transition journal"]
     J --> S["materialized current snapshot"]
     S --> R2["Refill consumer"]
@@ -140,40 +144,124 @@ Each envelope includes at least:
 | `schema_version` | Evidence schema version, with reducer compatibility declared explicitly. |
 | `evidence_kind` | One of the producer kinds below. |
 | `evidence_id` | Stable immutable identity for this evidence event. |
+| `producer_sequence` | Monotonic integer scoped to canonical attempt identity plus `evidence_kind`. |
 | `attempt_identity` | Canonical repository, pipeline, work item, generation, and job identity. |
 | `source_path` or `source_ref` | Durable local path, Git ref/path, or feed identity that produced the envelope. |
 | `source_sha256` | SHA-256 of the immutable source bytes. |
 | `producer` | Service/component name and release identity. |
 | `recorded_at` or `observed_at` | Producer timestamp. |
+| `final` | Boolean declaring whether this producer stream is closed for this identity/kind. |
 | `payload` | Structured stable codes for the relevant outcome or disposition. |
 
 Required post-recorder envelope kinds:
 
 | Envelope kind | Producer | Required stable payload codes |
 |---|---|---|
-| `dispatch.prepared` | Refill/build-next | selected work item, generation ID, dispatch intent hash, capacity slot identity |
-| `dispatch.submitted` | Build-next/refill | jobs feed commit, feed path, submitted job hash |
+| `dispatch.prepared` | Refill controller | selected work item, generation ID, dispatch intent hash, capacity slot identity |
+| `dispatch.submitted` | Build-next submission component | jobs feed commit, feed path, submitted job hash |
 | `host.execution` | Persistent host | pending/running/completed/failed execution outcome, host archive path, error class code when failed |
 | `relay.result` | Results relay | relayed commit, canonical report hash, complete patch reconstruction integrity |
 | `gate.validation` | Candidate gate | passed/failed/blocked/missing/conflict, validation contract identity, gate report hash |
 | `revision.disposition` | Revision loop | queued/exhausted/blocked/not required/missing/conflict, descendant job identity when queued |
-| `publication_review.disposition` | Controlled publisher or review owner | awaiting review/drafted/rejected/terminal no-publication/blocked/missing/conflict |
+| `publication_review.disposition` | Controlled publisher | awaiting review/drafted/rejected/terminal no-publication/blocked/missing/conflict |
+
+Human or founder review input is not a lifecycle disposition writer in v1. The controlled
+publisher consumes preserved review input and emits the single
+`publication_review.disposition` envelope. If human review must be separately durable
+producer evidence, it uses a separate input-only envelope kind:
+
+| Envelope kind | Only writer | Immutable envelope path |
+|---|---|---|
+| `human_review.input` | Human-review intake component | `state/review-evidence/human-input/<generation-id>/<job-id>/<identity-digest>.<evidence-id>.json` |
 
 Producer-owned envelope storage is exact and outside the recorder-only canonical namespace:
 
 | Envelope kind | Only writer | Immutable envelope path |
 |---|---|---|
-| `dispatch.prepared` | Refill/build-next | `state/refill-evidence/dispatch/prepared/<generation-id>/<job-id>/<identity-digest>.<evidence-id>.json` |
-| `dispatch.submitted` | Build-next/refill | `state/refill-evidence/dispatch/submitted/<generation-id>/<job-id>/<identity-digest>.<evidence-id>.json` |
+| `dispatch.prepared` | Refill controller | `state/refill-evidence/dispatch/prepared/<generation-id>/<job-id>/<identity-digest>.<evidence-id>.json` |
+| `dispatch.submitted` | Build-next submission component | `state/refill-evidence/dispatch/submitted/<generation-id>/<job-id>/<identity-digest>.<evidence-id>.json` |
 | `host.execution` | Persistent host | `state/host-evidence/execution/<generation-id>/<job-id>/<identity-digest>.<evidence-id>.json` |
 | `relay.result` | Results relay | `state/relay-evidence/result/<generation-id>/<job-id>/<identity-digest>.<evidence-id>.json` |
 | `gate.validation` | Candidate gate | `state/gate-evidence/validation/<generation-id>/<job-id>/<identity-digest>.<evidence-id>.json` |
 | `revision.disposition` | Revision loop | `state/revision-evidence/disposition/<generation-id>/<job-id>/<identity-digest>.<evidence-id>.json` |
-| `publication_review.disposition` | Controlled publisher or review owner | `state/publisher-evidence/publication-review/<generation-id>/<job-id>/<identity-digest>.<evidence-id>.json` |
+| `publication_review.disposition` | Controlled publisher | `state/publisher-evidence/publication-review/<generation-id>/<job-id>/<identity-digest>.<evidence-id>.json` |
 
 Envelope files are immutable. A producer may write a later envelope with a new `evidence_id`,
 but it must not replace or edit an existing envelope. `state/attempt-lifecycle/` remains
 recorder-only and contains no producer-owned input files.
+
+## Canonical Producer Heads
+
+Every canonical attempt identity plus evidence kind has one producer-owned monotonic stream.
+The stream is ordered only by `producer_sequence`; timestamps, evidence IDs, directory order,
+or Git commit order are never freshness authority.
+
+Each producer writes immutable envelopes and one atomic producer-owned head record:
+
+| Head field | Meaning |
+|---|---|
+| `head_schema_version` | Literal `producer_head.v1`. |
+| `attempt_identity` | The exact canonical attempt identity embedded in the envelope. |
+| `identity_digest` | SHA-256 identity digest used in paths. |
+| `evidence_kind` | One envelope kind from the producer-owned table. |
+| `producer` | The sole logical writer for this kind. |
+| `producer_sequence` | Latest contiguous sequence committed for this identity/kind. |
+| `evidence_id` | Evidence ID at that sequence. |
+| `envelope_path` | Immutable envelope path for that sequence. |
+| `envelope_sha256` | SHA-256 of the immutable envelope bytes. |
+| `final` | `true` when the producer stream is legitimately closed; otherwise `false`. |
+| `closed_status` | `open`, `final`, or `not_applicable`. |
+
+Head paths are producer-owned and atomic:
+
+| Envelope kind | Head path |
+|---|---|
+| `dispatch.prepared` | `state/refill-evidence/heads/dispatch/prepared/<identity-digest>.json` |
+| `dispatch.submitted` | `state/refill-evidence/heads/dispatch/submitted/<identity-digest>.json` |
+| `host.execution` | `state/host-evidence/heads/execution/<identity-digest>.json` |
+| `relay.result` | `state/relay-evidence/heads/result/<identity-digest>.json` |
+| `gate.validation` | `state/gate-evidence/heads/validation/<identity-digest>.json` |
+| `revision.disposition` | `state/revision-evidence/heads/disposition/<identity-digest>.json` |
+| `publication_review.disposition` | `state/publisher-evidence/heads/publication-review/<identity-digest>.json` |
+
+Producer head update semantics are deterministic:
+
+1. The producer writes the immutable envelope for `producer_sequence=N`, computes its
+   `envelope_sha256`, then atomically replaces its head record with the same `N`.
+2. Replaying the identical head for the identical sequence, evidence ID, envelope path,
+   envelope SHA-256, `final`, and `closed_status` is idempotent.
+3. A head with `producer_sequence` lower than the current head is sequence regression and is
+   rejected as `evidence_conflict`.
+4. A head with the same `producer_sequence` but any different evidence ID, envelope path,
+   envelope SHA-256, `final`, or `closed_status` is conflicting same-sequence evidence and is
+   rejected as `evidence_conflict`.
+5. A head with `producer_sequence` greater than current sequence plus one is a sequence gap.
+   The recorder must not skip to it. The producer must supply the missing contiguous
+   sequence or an explicit `not_applicable`/`final` disposition where allowed; until then,
+   the canonical snapshot records `evidence_integrity=missing` and refill blocks fail-closed.
+6. A head with `closed_status=final` or `closed_status=not_applicable` closes that
+   identity/kind stream and must also set `final=true`.
+7. Later identical replay of a closed head is idempotent. Later non-idempotent evidence for a
+   closed stream is `evidence_conflict`.
+
+`latest_evidence_set` is derived only from producer head records. It is the sorted list of
+applicable producer heads for the canonical attempt identity and lifecycle phase, including
+closed `not_applicable` heads when a kind is required to declare non-applicability. It is
+never derived by scanning envelope directories or comparing timestamps.
+
+Required/applicable envelope kinds by lifecycle phase:
+
+| Lifecycle phase | Required or applicable producer heads |
+|---|---|
+| `dispatch_prepared` | `dispatch.prepared` required and open or final; later kinds not yet applicable. |
+| `dispatch_submitted` through host pending/running | `dispatch.prepared` and `dispatch.submitted` required; `host.execution` required once host imports the job. |
+| `execution_archived` | `host.execution` required and `final=true`; `relay.result` applicable for completed execution, or `relay.result` must close `not_applicable` for terminal host failure with no result. |
+| `result_relayed` | `relay.result` required and `final=true`; `gate.validation` required until validation is recorded. |
+| `validation_recorded` with passed validation | `gate.validation` required and `final=true`; `revision.disposition` must close `not_applicable`; `publication_review.disposition` required until publisher disposition is final or blocked. |
+| `validation_recorded` with failed validation | `gate.validation` required and `final=true`; `revision.disposition` required until queued, exhausted, blocked, missing, or conflict; `publication_review.disposition` must close `not_applicable` unless a descendant passed validation. |
+| `revision_recorded` | `revision.disposition` required and `final=true` for exhausted, blocked, missing, conflict, or queued descendant handoff; publisher remains `not_applicable` for the failed parent attempt. |
+| `publication_review_recorded` | `publication_review.disposition` required; final item-terminal dispositions, rejected terminal reasons, terminal no-publication, and durable blocks close with `final=true`. Awaiting review remains `final=false`. |
+| `blocked` | Every producer kind that is applicable to the reached phase must have either a current head, an explicit `not_applicable` final head, or a canonical `evidence_missing`/`evidence_conflict` disposition. |
 
 ## Canonical Record Model
 
@@ -258,13 +346,16 @@ produce the same current snapshots and `reduced_through` watermarks.
 ## Refill Freshness Handshake
 
 Refill may not retry, exclude an item, or select the next item from stale canonical evidence.
-The only v1 freshness and sole-writer protocol is durable watermark verification:
+The only v1 freshness and sole-writer protocol is durable watermark verification plus one
+short cross-process evidence-head critical section:
 
 1. Producers write immutable evidence envelopes under their producer-owned paths.
-2. The relay-hosted recorder is the only process that appends canonical lifecycle transitions
+2. Producers atomically update their producer head while holding
+   `state/evidence-heads.lock`.
+3. The relay-hosted recorder is the only process that appends canonical lifecycle transitions
    and replaces canonical snapshots.
-3. Refill never invokes recorder lifecycle-writing or reducer code directly.
-4. Stale canonical evidence blocks the current reconcile cycle until the recorder catches up.
+4. Refill never invokes recorder lifecycle-writing or reducer code directly.
+5. Stale canonical evidence blocks the current reconcile cycle until the recorder catches up.
 
 `reduced_through` is exact, not time-based. It binds each producer's latest known evidence
 identity and SHA-256 for the attempt or generation. A heartbeat alone is insufficient.
@@ -275,22 +366,38 @@ The recorder writes this head contract into each attempt, work-item, and generat
 |---|---|
 | `snapshot_sha256` | SHA-256 of the canonical snapshot bytes, excluding this field. |
 | `latest_evidence_set_contract` | Literal `latest_evidence_set_sha256.v1`. |
-| `latest_evidence_set` | Sorted list of `{producer, evidence_kind, evidence_id, envelope_path, envelope_sha256}` for the latest immutable envelope from every producer/kind relevant to the identity. |
+| `latest_evidence_set` | Sorted list of `{producer, evidence_kind, producer_sequence, evidence_id, envelope_path, envelope_sha256, final, closed_status}` from producer head records for every applicable producer/kind relevant to the identity. |
 | `latest_evidence_set_sha256` | SHA-256 of the canonical JSON serialization of `latest_evidence_set`. |
 | `reduced_through` | Per producer/kind latest evidence identity and envelope SHA-256 reduced into this snapshot. It must equal the `latest_evidence_set` for the covered scope. |
 
 Before retry, exclusion, or next-item submission, refill must:
 
-1. scan producer-owned envelope heads for the active identity and derive the expected
+1. prepare a candidate retry, exclusion, or next-dispatch action identity without remote side
+   effects;
+2. acquire `state/evidence-heads.lock`;
+3. read producer-owned head records for the active identity and derive the expected
    `latest_evidence_set_sha256`;
-2. read the canonical snapshot and verify that `reduced_through` covers that exact evidence
-   set;
-3. bind both `snapshot_sha256` and `latest_evidence_set_sha256` into the
-   `dispatch.prepared` envelope and `prepared_dispatch` state;
-4. immediately before the irreversible feed submission, exclusion write, or retry submission,
-   reread the canonical snapshot and producer envelope heads;
-5. abort the action and wait for another reconcile if either the snapshot SHA-256 or
-   `latest_evidence_set_sha256` changed.
+4. read the canonical snapshot and verify that `reduced_through` covers that exact evidence
+   set and that every stream needed for an item-terminal action has `final=true`;
+5. verify that any existing bound `prepared_dispatch` carries the same `snapshot_sha256`,
+   `latest_evidence_set_sha256`, action identity, and dispatch/exclusion/retry intent; if no
+   prepared dispatch exists for this action, write one with those bindings;
+6. durably commit the local action identity for exactly one retry, exclusion, or next
+   dispatch while still holding the lock;
+7. release `state/evidence-heads.lock` before any remote Git, feed, or network operation;
+8. perform remote submission only through the already-bound durable action identity and the
+   existing prepared-dispatch crash-recovery path.
+
+If the canonical snapshot, producer heads, final/closed stream status, evidence-set digest,
+or bound `prepared_dispatch` do not match inside the lock, refill aborts the action and waits
+for another reconcile. The lock is not held while pushing feed commits, fetching Git refs,
+calling GitHub, running jobs, or performing any remote operation.
+
+This is the atomic freshness-to-action commitment boundary. Producers use the same lock only
+for atomic head replacement. Refill uses it only for the final head read, canonical snapshot
+and digest verification, bound `prepared_dispatch` verification, and durable action-identity
+commit. It is not a lifecycle writer lock and does not allow refill to append recorder
+transitions or replace canonical snapshots.
 
 Stale, absent, missing, or conflicting canonical evidence blocks fail-closed. For
 post-recorder attempts, refill may never fall back to direct host, gate, revision, publisher,
@@ -368,7 +475,8 @@ Semantics:
 
 The lifecycle recorder must be idempotent and restart-safe:
 
-1. It reads current durable evidence envelopes and writes through `state/attempt-lifecycle.lock`.
+1. It reads current durable producer head records and immutable evidence envelopes, then
+   writes canonical transitions through `state/attempt-lifecycle.lock`.
 2. It appends journal transitions atomically before replacing materialized snapshots.
 3. A crash before the journal append is retried by rereading source evidence.
 4. A crash after the journal append but before snapshot replacement is repaired by replaying
@@ -382,10 +490,13 @@ The lifecycle recorder must be idempotent and restart-safe:
    provisional, the recovery window is still open, and the previous transition hashes replay.
    `evidence_conflict` is never automatically superseded.
 8. Service restarts do not clear canonical lifecycle records. They may only add new source
-   evidence envelopes that the recorder consumes.
+   evidence envelopes and producer heads that the recorder consumes.
 9. Refill restart consumes the latest canonical work-item snapshot after the freshness
    handshake. It must not reclassify host, gate, revision, relay, or publisher evidence
    independently for post-recorder attempts.
+10. Existing prepared-dispatch crash recovery performs any pending remote submission using
+    the already-bound durable action identity. It must not create a new action identity from a
+    fresh read after the crash.
 
 ## Historical Migration Boundary
 
@@ -483,18 +594,21 @@ managed service.
 1. Add canonical schemas, path constants, journal validators, and read-only snapshot
    validators for attempt, generation, lineage, and work-item records. No refill behavior
    change yet.
-2. Add lifecycle evidence envelope producers for build-next/refill dispatch, host execution,
-   relay, gate validation, revision disposition, and publication/review disposition. Keep raw
-   adapters migration-only.
+2. Add lifecycle evidence envelope producers and atomic producer heads for refill-controller
+   prepared dispatch, build-next submitted dispatch, host execution, relay result, gate
+   validation, revision disposition, and controlled-publisher publication disposition. Keep
+   raw adapters migration-only.
 3. Host the Attempt Lifecycle Recorder inside the existing persistent relay service with one
    lifecycle lock, append-only journal writes, materialized snapshot replacement, replay, and
    `reduced_through` watermark production.
 4. Add an explicit ID/hash-bound migration command/tests for the preserved Issue #89 generation
    and current Issue #50 A generation without editing either evidence source.
-5. Wire refill to perform the durable-watermark freshness handshake, bind snapshot and
-   evidence-set digests into `prepared_dispatch`, revalidate before irreversible feed or
-   exclusion writes, and consume canonical work-item disposition for post-recorder attempts.
-   Old interpretation remains fenced behind the migration boundary only.
+5. Wire refill and producers to use `state/evidence-heads.lock`: producers hold it only for
+   atomic head replacement; refill holds it only for final head/snapshot verification, bound
+   `prepared_dispatch` verification, and durable retry/exclusion/next-dispatch action
+   identity commit. Remote Git/feed operations continue through existing prepared-dispatch
+   recovery after the lock is released. Old interpretation remains fenced behind the
+   migration boundary only.
 6. Add focused fixtures from the map above, including the exact `.pytest_cache`
    `PermissionError` archive shape.
 7. Remove refill direct interpretation for post-recorder attempts.
@@ -531,33 +645,35 @@ Issue #50 may resume only when all of the following are true:
 Agreement: partial
 
 Compared: Issue #98; Issue #98 decision comment `#5108427193`; Issue #98 comment
-`#5108533626`; independent architecture review `#4800845999`; independent architecture
-re-review `#4800936580`; PR #99 exact head
-`8a33a5d80c138a551234f36868741e4f59f33c16`; PR #92 repair-admission draft; Issue #50
+`#5108533626`; Issue #98 final re-review update comment `#5108644779`; independent
+architecture review `#4800845999`; independent architecture re-review `#4800936580`;
+independent final architecture re-review `#4801024367`; PR #99 reviewed exact head
+`d45d50e00ed1f0c9a0138394975d4d3b6af18775`; PR #92 repair-admission draft; Issue #50
 comment `#5108108854`; Issue #89; Issue #82; Issue #95; current refill prepared-dispatch
-model; existing relay service; current refill, relay, host, gate, revision, publisher, and
-service-error lifecycle code; active control-plane SOP.
+model and prepared-dispatch crash recovery; existing relay service; current refill, relay,
+host, gate, revision, publisher, and service-error lifecycle code; active control-plane SOP.
 
-Disagreement: resolved within this draft revision. The accepted direction remains a single
-logical Attempt Lifecycle Recorder, hosted in the existing persistent relay process for v1.
-This revision selects durable watermark as the only v1 freshness and sole-writer protocol,
-defines exact producer envelope paths, defines one canonical identity tuple and digest,
-adds a versioned terminal reason-code table, and specifies the hash-bound migration
-transaction as durable authorization for one passive clean generation. No runtime
-implementation is authorized until final independent re-review accepts the architecture.
+Disagreement: major architecture direction is resolved. This revision applies the remaining
+deterministic corrections from review `#4801024367` and comment `#5108644779`: canonical
+producer heads with monotonic producer sequences, immutable envelopes, atomic producer-owned
+head records, idempotent replay, rejection of sequence regression and conflicting
+same-sequence evidence, gap handling, derivation of `latest_evidence_set` only from producer
+heads, exact sole writer per envelope kind/path, final/not-applicable producer dispositions,
+and one named atomic freshness-to-action commitment boundary through `state/evidence-heads.lock`.
+No runtime implementation is authorized until independent acceptance review accepts this
+corrected architecture.
 
-Evidence gap: independent re-review of this corrected architecture; accepted canonical
-schemas; recorder implementation; envelope producer implementation; migration evidence; no
-fresh post-recorder A-to-B witness yet.
+Evidence gap: independent architecture acceptance review of this corrected docs-only head;
+accepted canonical schemas; recorder implementation; envelope producer/head implementation;
+migration evidence; no fresh post-recorder A-to-B witness yet.
 
 Ownership overlap: current refill overlaps host, gate, relay, revision, publisher, and
 service-error evidence interpretation. Target design makes those services evidence owners,
 the relay-hosted recorder the only logical disposition writer, and refill a freshness-checked
 consumer of canonical work-item disposition.
 
-Risk if unresolved: refill can become a second lifecycle writer, dispatch from stale
-evidence, disagree with producers on identity, infer terminality from free-form text, or
-require unauthorized second founder intent during migration.
+Risk if unresolved: recorder and refill can disagree on the latest evidence, or refill can
+durably commit retry, exclusion, or B/C dispatch after producer evidence changed.
 
 Recommended default: keep PR #99 draft and return this docs-only revision for independent
 re-review before any Issue #50 runtime repair, retry, exclusion, B/C submission, or

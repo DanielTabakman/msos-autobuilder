@@ -25,6 +25,7 @@ from typing import Any
 
 import yaml
 
+from .lifecycle_evidence import attempt_identity_from_job_yaml, emit_lifecycle_evidence
 from .service_error_lifecycle import record_service_cycle_success, write_service_error_marker
 
 
@@ -525,6 +526,22 @@ class RevisionLoop:
                     "source_job_id": job_id,
                 }
                 self._save_ledger(ledger)
+                identity = attempt_identity_from_job_yaml(job_path)
+                if identity is not None:
+                    emit_lifecycle_evidence(
+                        self.host_root,
+                        evidence_kind="revision.disposition",
+                        identity=identity,
+                        source_path=self.ledger_path,
+                        payload={
+                            "revision_disposition": "queued",
+                            "descendant_job_id": str(manifest["job_id"]),
+                            "gate_report_sha256": gate_sha,
+                            "jobs_commit": commit,
+                        },
+                        final=True,
+                        closed_status="final",
+                    )
                 processed.append(str(manifest["job_id"]))
             except (RevisionLoopError, OSError, ValueError, yaml.YAMLError) as exc:
                 self._write_error_marker(exc, associated=associated)

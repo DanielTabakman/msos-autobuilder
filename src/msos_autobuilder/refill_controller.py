@@ -27,6 +27,7 @@ from .build_next import (
     _source_identity,
     build_next,
 )
+from .lifecycle_evidence import attempt_identity, emit_lifecycle_evidence
 from .managed_source import ManagedSourceSyncError, ensure_managed_source_fresh
 from .persistent_host import HostPaths, HostProcessLock, _pid_alive, parse_host_job
 from .service_error_lifecycle import (
@@ -1852,6 +1853,35 @@ def _prepare_dispatch(
     if receipt.evidence.get("source"):
         generation["source_ppe_identity"] = receipt.evidence["source"]
     save_refill_generation(config, generation)
+    work_item_digest = receipt.evidence.get("work_item_source_sha256_v1")
+    if isinstance(work_item_digest, str) and config.build_next.host_root is not None:
+        identity = attempt_identity(
+            pipeline_id=str(receipt.pipeline_id or ""),
+            work_item_id=str(receipt.work_item_id or ""),
+            work_item_digest=work_item_digest,
+            generation_id=str(generation.get("generation_id") or ""),
+            job_id=str(receipt.job_id or ""),
+            attempt_ordinal=attempt_ordinal,
+            retry_ordinal=retry_ordinal,
+        )
+        emit_lifecycle_evidence(
+            config.build_next.host_root,
+            evidence_kind="dispatch.prepared",
+            identity=identity,
+            source_path=_generation_path(config),
+            payload={
+                "selected_work_item_id": receipt.work_item_id,
+                "generation_id": generation.get("generation_id"),
+                "dispatch_intent_sha256": hashlib.sha256(
+                    json.dumps(prepared, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                ).hexdigest(),
+                "capacity_slot": "capacity-one",
+                "reason": reason,
+            },
+            final=True,
+            closed_status="final",
+            observed_at=str(prepared["prepared_at"]),
+        )
     return prepared, receipt
 
 

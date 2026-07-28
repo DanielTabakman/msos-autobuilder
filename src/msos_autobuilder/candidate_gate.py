@@ -26,6 +26,7 @@ from typing import Any
 
 import yaml
 
+from .lifecycle_evidence import attempt_identity_from_job_yaml, emit_lifecycle_evidence
 from .service_error_lifecycle import record_service_cycle_success, write_service_error_marker
 from .validation_contract import (
     ValidationContractError,
@@ -1034,6 +1035,25 @@ class CandidateGate:
                     "state": gate_report.get("state"),
                 }
                 self._save_ledger(ledger)
+                identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
+                if identity is not None:
+                    emit_lifecycle_evidence(
+                        self.host_root,
+                        evidence_kind="gate.validation",
+                        identity=identity,
+                        source_path=job_dir / "gate-report.json",
+                        payload={
+                            "validation_outcome": gate_report.get("status"),
+                            "validation_state": gate_report.get("state"),
+                            "validation_contract_sha256": gate_report.get(
+                                "validation_contract_sha256"
+                            ),
+                            "gate_report_sha256": _sha256_file(job_dir / "gate-report.json"),
+                            "results_commit": commit,
+                        },
+                        final=True,
+                        closed_status="final",
+                    )
                 processed.append(job_id)
             except (CandidateGateError, OSError, KeyError, TypeError, ValueError) as exc:
                 self._write_error_marker(exc, associated=associated)

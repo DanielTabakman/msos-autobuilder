@@ -31,6 +31,7 @@ from .codex_shadow import (
     load_codex_shadow_manifest,
     run_codex_shadow,
 )
+from .lifecycle_evidence import attempt_identity_from_job_yaml, emit_lifecycle_evidence
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
@@ -750,6 +751,21 @@ class PersistentHost:
             },
         )
         os.replace(staging, destination)
+        identity = attempt_identity_from_job_yaml(destination / "job.yaml")
+        if identity is not None:
+            emit_lifecycle_evidence(
+                self.config.host_root,
+                evidence_kind="host.execution",
+                identity=identity,
+                source_path=destination / "error.json",
+                payload={
+                    "execution_outcome": outcome,
+                    "host_archive_path": str(destination),
+                    "error_class": type(error).__name__,
+                },
+                final=True,
+                closed_status="final",
+            )
         return destination
 
     def _claim_next_job(self) -> tuple[Path, HostJob] | None:
@@ -889,6 +905,21 @@ class PersistentHost:
         _atomic_write_json(staging / "report.json", report_payload)
         running_path.unlink()
         os.replace(staging, destination)
+        identity = attempt_identity_from_job_yaml(destination / "job.yaml")
+        if identity is not None:
+            emit_lifecycle_evidence(
+                self.config.host_root,
+                evidence_kind="host.execution",
+                identity=identity,
+                source_path=destination / "report.json",
+                payload={
+                    "execution_outcome": "completed",
+                    "host_archive_path": str(destination),
+                    "error_class": None,
+                },
+                final=True,
+                closed_status="final",
+            )
         return destination
 
     def process_one(self) -> HostRunResult:

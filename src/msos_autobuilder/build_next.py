@@ -25,6 +25,11 @@ from typing import Any
 import yaml
 
 from .codex_shadow import load_codex_host_config
+from .lifecycle_evidence import (
+    attempt_identity,
+    emit_lifecycle_evidence,
+    work_item_digest_from_mapping,
+)
 from .managed_source import (
     ManagedSourceSyncError,
     SourceIdentity,
@@ -957,6 +962,7 @@ def _build_job(
     prerequisite_evidence: Mapping[str, Any],
     requested_by: str,
     dependency_source_sha256: str,
+    work_item_source_sha256: str,
     refill_attempt: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     lane_id = _safe_id(native_slice.slice_id, fallback="lane")
@@ -984,6 +990,7 @@ def _build_job(
             "repository": "DanielTabakman/Probability-prediction-engine",
             "registered_adapter": "ppe_operator",
             "source": asdict(source_identity),
+            "work_item_source_sha256_v1": work_item_source_sha256,
             "phase_plan": plan_rel,
             "native_slice": {
                 "slice_id": native_slice.slice_id,
@@ -1107,6 +1114,7 @@ class FeedSubmission:
     feed_commit: str | None
     feed_path: str
     created: bool
+    source_path: Path | None = None
 
 
 def _submit_feed_job(config: BuildNextConfig, job: Mapping[str, Any]) -> FeedSubmission:
@@ -1139,7 +1147,7 @@ def _submit_feed_job(config: BuildNextConfig, job: Mapping[str, Any]) -> FeedSub
                 "--",
                 relative.as_posix(),
             )
-            return FeedSubmission(existing_commit, relative.as_posix(), False)
+            return FeedSubmission(existing_commit, relative.as_posix(), False, destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(text, encoding="utf-8", newline="\n")
         _git(checkout, "add", "--", relative.as_posix())
@@ -1157,11 +1165,11 @@ def _submit_feed_job(config: BuildNextConfig, job: Mapping[str, Any]) -> FeedSub
                 "--",
                 relative.as_posix(),
             )
-            return FeedSubmission(existing_commit, relative.as_posix(), False)
+            return FeedSubmission(existing_commit, relative.as_posix(), False, destination)
         _git(checkout, "commit", "-m", f"Queue founder build next job {job_id}")
         commit = _git(checkout, "rev-parse", "HEAD")
         _git(checkout, "push", "origin", f"HEAD:{config.jobs_branch}")
-        return FeedSubmission(commit, relative.as_posix(), True)
+        return FeedSubmission(commit, relative.as_posix(), True, destination)
 
 
 def _blocked_receipt(message: str, evidence: Mapping[str, Any] | None = None) -> BuildNextReceipt:
@@ -1249,6 +1257,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
         work = _ready_work(pipe, work_item_id)
         if work.get("evidence") not in {"manual", "canonical", "native_runtime"}:
             raise BuildNextError("selected work item lacks accepted evidence")
+        work_item_source_sha256 = work_item_digest_from_mapping(work)
         trace = str(work.get("trace") or rec.get("trace") or "")
         plan, plan_rel, plan_raw = _plan_text(ppe_repo, trace)
         native_slice = _select_native_slice(plan)
@@ -1268,6 +1277,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
         receipt_evidence_identity = {
             **evidence_identity,
             "source_freshness": source_freshness,
+            "work_item_source_sha256_v1": work_item_source_sha256,
         }
         job_id = _job_id(
             pipeline_id,
@@ -1310,6 +1320,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             dependency_source_sha256=canonical_dependency_source_sha256(
                 requirements_path.read_bytes()
             ),
+            work_item_source_sha256=work_item_source_sha256,
             refill_attempt=refill_attempt,
         )
         submission = _submit_feed_job(config, job)
@@ -1330,6 +1341,39 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                 evidence=receipt_evidence_identity,
                 submitted=False,
                 projected_status="QUEUED",
+            )
+        if (
+            config.host_root is not None
+            and refill_attempt is not None
+            and submission.source_path is not None
+        ):
+            identity = attempt_identity(
+                pipeline_id=pipeline_id,
+                work_item_id=work_item_id,
+                work_item_digest=work_item_source_sha256,
+                generation_id=str(refill_attempt["generation_id"]),
+                job_id=job_id,
+                attempt_ordinal=int(refill_attempt["attempt_ordinal"]),
+                retry_ordinal=int(refill_attempt.get("retry_ordinal") or 0),
+            )
+            emit_lifecycle_evidence(
+                config.host_root,
+                evidence_kind="dispatch.submitted",
+                identity=identity,
+                source_path=submission.source_path,
+                payload={
+                    "feed_commit": submission.feed_commit,
+                    "feed_path": submission.feed_path,
+                    "submitted_job_sha256": hashlib.sha256(
+                        yaml.safe_dump(dict(job), sort_keys=False, allow_unicode=True)
+                        .encode("utf-8")
+                        .replace(b"\r\n", b"\n")
+                        .replace(b"\r", b"\n")
+                    ).hexdigest(),
+                    "created": submission.created,
+                },
+                final=True,
+                closed_status="final",
             )
         return BuildNextReceipt(
             status="QUEUED",

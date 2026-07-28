@@ -25,6 +25,8 @@ from typing import Any
 
 import yaml
 
+from .lifecycle_evidence import attempt_identity_from_job_yaml, emit_lifecycle_evidence
+
 
 class ResultsRelayError(RuntimeError):
     """Raised when a result cannot be reconstructed or relayed safely."""
@@ -415,6 +417,25 @@ class ResultsRelay:
             commit = self.sink.publish(staging_job, job_id, self.machine_id)
             ledger[job_id] = commit
             self._save_ledger(ledger)
+            identity = attempt_identity_from_job_yaml(staging_job / "job.yaml")
+            if identity is not None:
+                integrity = json.loads(
+                    (staging_job / "result-integrity.json").read_text(encoding="utf-8")
+                )
+                emit_lifecycle_evidence(
+                    self.host_root,
+                    evidence_kind="relay.result",
+                    identity=identity,
+                    source_path=staging_job / "report.json",
+                    payload={
+                        "relayed_commit": commit,
+                        "canonical_report_sha256": integrity.get("corrected_report_sha256"),
+                        "source_report_sha256": integrity.get("source_report_sha256"),
+                        "complete_patch_reconstruction": True,
+                    },
+                    final=True,
+                    closed_status="final",
+                )
             relayed.append(job_id)
         return tuple(relayed)
 

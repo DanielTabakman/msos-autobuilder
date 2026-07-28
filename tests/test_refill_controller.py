@@ -1788,6 +1788,7 @@ def test_refill_service_stop_during_between_cycle_wait_is_interruptible(
 ) -> None:
     config = _refill_config(tmp_path)
     service = RefillService(config, interval_seconds=60)
+    stopper = RefillService(config, interval_seconds=60)
     first_done = Event()
     cycles = 0
 
@@ -1801,7 +1802,7 @@ def test_refill_service_stop_during_between_cycle_wait_is_interruptible(
     thread, errors = _start_service(service)
 
     assert first_done.wait(timeout=2)
-    service.request_stop()
+    stopper.request_stop()
     _join_service(thread, errors)
 
     assert cycles == 1
@@ -1839,6 +1840,48 @@ def test_refill_service_ignores_stale_prior_generation_request_on_restart(
     _join_service(thread, errors)
 
     assert cycles == 1
+    assert service.read_status().state == "stopped"
+
+
+def test_refill_service_pre_start_stop_replaces_stale_targeted_request(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    stop_path = _refill_stop_request_path(config)
+    stop_path.parent.mkdir(parents=True, exist_ok=True)
+    stop_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "requested_at": "2026-07-28T00:00:00Z",
+                "service_generation_id": "prior-generation",
+                "token": "stale",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert refill_controller._read_refill_service_lock_owner(config) == {}
+    stop_requester = RefillService(config, interval_seconds=60)
+    rewritten_stop_path = stop_requester.request_stop()
+    rewritten = json.loads(rewritten_stop_path.read_text(encoding="utf-8"))
+    assert rewritten["token"] != "stale"
+    assert "service_generation_id" not in rewritten
+
+    service = RefillService(config, interval_seconds=60)
+    cycles = 0
+
+    def run_once() -> object:
+        nonlocal cycles
+        cycles += 1
+        raise AssertionError("pre-start stop must prevent reconciliation")
+
+    service.run_once = run_once  # type: ignore[method-assign]
+    thread, errors = _start_service(service)
+    _join_service(thread, errors)
+
+    assert cycles == 0
     assert service.read_status().state == "stopped"
 
 

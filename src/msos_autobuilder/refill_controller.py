@@ -2971,6 +2971,8 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
 
 
 class RefillService:
+    _STOP_REQUEST_POLL_SECONDS = 0.25
+
     def __init__(
         self,
         config: RefillConfig,
@@ -3051,8 +3053,10 @@ class RefillService:
         )
         existing = _read_refill_stop_request(path)
         if existing is not None:
-            if target_generation is None or _refill_stop_applies_to_generation(
-                existing, target_generation
+            existing_generation = existing.get("service_generation_id")
+            if existing_generation is None or (
+                target_generation is not None
+                and _refill_stop_applies_to_generation(existing, target_generation)
             ):
                 self._stop_requested.set()
                 return path
@@ -3079,6 +3083,20 @@ class RefillService:
         self._write_status("running")
         return report
 
+    def _wait_for_stop_request(self, stop_path: Path) -> bool:
+        deadline = time.monotonic() + self.interval_seconds
+        while True:
+            if _refill_stop_applies_to_generation(
+                _read_refill_stop_request(stop_path), self.service_generation_id
+            ):
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            wait_seconds = min(remaining, self._STOP_REQUEST_POLL_SECONDS)
+            if self._stop_requested.wait(wait_seconds):
+                self._stop_requested.clear()
+
     def run_forever(self) -> None:
         self.started_at = _utc_now()
         stop_path = _refill_stop_path(self.config)
@@ -3100,8 +3118,8 @@ class RefillService:
                         _read_refill_stop_request(stop_path), self.service_generation_id
                     ):
                         break
-                    if self._stop_requested.wait(self.interval_seconds):
-                        self._stop_requested.clear()
+                    if self._wait_for_stop_request(stop_path):
+                        break
             finally:
                 if _refill_stop_applies_to_generation(
                     _read_refill_stop_request(stop_path), self.service_generation_id

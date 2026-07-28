@@ -17,6 +17,9 @@ B/C dispatch.
 - Independent final architecture re-review `#4801024367` on draft PR #99 exact head
   `d45d50e00ed1f0c9a0138394975d4d3b6af18775`.
 - Issue #98 comment `#5108644779`.
+- Blocking architecture review `#4801096703` on draft PR #99 exact head
+  `6ec1f7d807fad82973970b7c6c18358aa2b8e083`.
+- Issue #98 comment `#5108740651`.
 - Draft PR #92 repair-admission document state.
 - Issue #50, especially runtime evidence comment `#5108108854` and the circuit-breaker
   comment that opened #98.
@@ -93,7 +96,8 @@ The boundaries are:
 |---|---|
 | Logical component ownership | Attempt Lifecycle Recorder is the only canonical disposition writer and reducer. |
 | Process/service deployment | Recorder runs inside the existing persistent relay process for v1. |
-| Lifecycle lock | Recorder alone writes through `state/attempt-lifecycle.lock`; refill, host, gate, revision, and publisher do not hold it. |
+| Lock order | The fixed cross-process order is `state/evidence-heads.lock` then `state/attempt-lifecycle.lock`; no path may acquire these locks in reverse order. |
+| Lifecycle lock | Recorder alone writes canonical lifecycle transitions through `state/attempt-lifecycle.lock`; refill, host, gate, revision, and publisher do not hold it. |
 | Durable canonical paths | Recorder writes only under `state/attempt-lifecycle/`; refill continues to own `state/refill-generation*.json`. |
 | Evidence ownership | Refill, host, relay, gate, revision, publisher, and service-error lifecycle own their source evidence envelopes. |
 | Freshness protocol | Durable watermark only. Refill never invokes recorder lifecycle-writing or reducer code directly. |
@@ -343,6 +347,28 @@ The materialized snapshots are replaceable derived state. The transition journal
 audit source of truth. Replay from journal plus immutable source evidence must deterministically
 produce the same current snapshots and `reduced_through` watermarks.
 
+Recorder publication is atomic with producer heads. The fixed v1 recorder protocol is:
+
+1. acquire `state/evidence-heads.lock`;
+2. read one coherent applicable producer-head set for the identity and lifecycle phase;
+3. verify every referenced immutable envelope path and SHA-256;
+4. acquire `state/attempt-lifecycle.lock`;
+5. append the lifecycle transition to the immutable journal;
+6. replace the materialized attempt, work-item, generation snapshots, and watermarks;
+7. release `state/attempt-lifecycle.lock`;
+8. release `state/evidence-heads.lock`.
+
+Producer head updates cannot occur during recorder publication because producers use
+`state/evidence-heads.lock` for atomic head replacement. Refill cannot observe a snapshot
+replacement while holding the evidence-head lock because the recorder also holds that lock
+for the full journal-append and snapshot/watermark replacement. No producer, recorder,
+refill, recovery, migration, or operator path may acquire `state/attempt-lifecycle.lock`
+before `state/evidence-heads.lock`; reverse lock acquisition is an architecture violation.
+Replay after a crash remains journal-driven: the recovery path rebuilds materialized state
+from the append-only journal and immutable evidence without inventing new producer heads or
+durable action identities. Remote Git, feed, GitHub, host, or network work occurs outside
+both locks.
+
 ## Refill Freshness Handshake
 
 Refill may not retry, exclude an item, or select the next item from stale canonical evidence.
@@ -353,7 +379,8 @@ short cross-process evidence-head critical section:
 2. Producers atomically update their producer head while holding
    `state/evidence-heads.lock`.
 3. The relay-hosted recorder is the only process that appends canonical lifecycle transitions
-   and replaces canonical snapshots.
+   and replaces canonical snapshots; recorder publication holds `state/evidence-heads.lock`
+   and then `state/attempt-lifecycle.lock` in the fixed order defined above.
 4. Refill never invokes recorder lifecycle-writing or reducer code directly.
 5. Stale canonical evidence blocks the current reconcile cycle until the recorder catches up.
 
@@ -370,6 +397,31 @@ The recorder writes this head contract into each attempt, work-item, and generat
 | `latest_evidence_set_sha256` | SHA-256 of the canonical JSON serialization of `latest_evidence_set`. |
 | `reduced_through` | Per producer/kind latest evidence identity and envelope SHA-256 reduced into this snapshot. It must equal the `latest_evidence_set` for the covered scope. |
 
+Every retry, exclusion, or automatic next-item dispatch binds an explicit
+non-self-referential `decision_basis`. The basis is durable action-authority data, not new
+attempt evidence. It contains:
+
+| Field | Meaning |
+|---|---|
+| `decision_basis_schema_version` | Literal `decision_basis.v1`. |
+| `basis_kind` | `prior_work_item`, `prior_generation`, or both when a generation-level action is authorized by one terminal item snapshot. |
+| `prior_canonical_identity` | Canonical work-item or generation identity that already exists before the action. |
+| `prior_snapshot_sha256` | SHA-256 of the prior canonical work-item or generation snapshot that authorizes the action. |
+| `prior_latest_evidence_set_sha256` | The prior snapshot's `latest_evidence_set_sha256`. |
+| `prior_item_disposition` | Canonical item disposition or refill action recorded in the prior snapshot. |
+| `prior_refill_action` | Canonical refill action recorded in the prior snapshot. |
+| `action_type` | `retry_same_item`, `exclude_only`, or `exclude_and_dispatch_next`. |
+| `new_action_identity` | Stable durable identity for the retry, exclusion, or next-dispatch action. |
+
+The new `dispatch.prepared` envelope belongs to the new or retry attempt identity and must
+not be included in the evidence-set digest that authorized its own creation. Successful A's
+terminal work-item snapshot authorizes exactly one B prepared dispatch. A failed prior
+attempt/work-item snapshot authorizes a retry only when canonical retry eligibility allows
+the retry action. Exclusion-only actions bind the terminal prior work-item basis and do not
+borrow evidence from the next item. Crash recovery reuses the same bound `decision_basis` and
+`new_action_identity`; it must not reread fresh evidence to mint a replacement identity for
+the same already-prepared action.
+
 Before retry, exclusion, or next-item submission, refill must:
 
 1. prepare a candidate retry, exclusion, or next-dispatch action identity without remote side
@@ -379,9 +431,10 @@ Before retry, exclusion, or next-item submission, refill must:
    `latest_evidence_set_sha256`;
 4. read the canonical snapshot and verify that `reduced_through` covers that exact evidence
    set and that every stream needed for an item-terminal action has `final=true`;
-5. verify that any existing bound `prepared_dispatch` carries the same `snapshot_sha256`,
-   `latest_evidence_set_sha256`, action identity, and dispatch/exclusion/retry intent; if no
-   prepared dispatch exists for this action, write one with those bindings;
+5. verify that any existing bound `prepared_dispatch` or exclusion/retry action carries the
+   same `decision_basis`, snapshot SHA-256, latest evidence-set SHA-256, action identity, and
+   dispatch/exclusion/retry intent; if no prepared action exists, write one with those
+   bindings;
 6. durably commit the local action identity for exactly one retry, exclusion, or next
    dispatch while still holding the lock;
 7. release `state/evidence-heads.lock` before any remote Git, feed, or network operation;
@@ -389,15 +442,17 @@ Before retry, exclusion, or next-item submission, refill must:
    existing prepared-dispatch crash-recovery path.
 
 If the canonical snapshot, producer heads, final/closed stream status, evidence-set digest,
-or bound `prepared_dispatch` do not match inside the lock, refill aborts the action and waits
-for another reconcile. The lock is not held while pushing feed commits, fetching Git refs,
-calling GitHub, running jobs, or performing any remote operation.
+`decision_basis`, or bound prepared action do not match inside the lock, refill aborts the
+action and waits for another reconcile. The lock is not held while pushing feed commits,
+fetching Git refs, calling GitHub, running jobs, or performing any remote operation.
 
 This is the atomic freshness-to-action commitment boundary. Producers use the same lock only
-for atomic head replacement. Refill uses it only for the final head read, canonical snapshot
-and digest verification, bound `prepared_dispatch` verification, and durable action-identity
-commit. It is not a lifecycle writer lock and does not allow refill to append recorder
-transitions or replace canonical snapshots.
+for atomic head replacement. The recorder uses it for coherent producer-head reads and
+canonical snapshot/watermark publication, acquiring `state/attempt-lifecycle.lock` only after
+`state/evidence-heads.lock`. Refill uses it only for the final head read, canonical snapshot
+and digest verification, `decision_basis` and bound prepared-action verification, and durable
+action-identity commit. It is not a lifecycle writer lock and does not allow refill to append
+recorder transitions or replace canonical snapshots.
 
 Stale, absent, missing, or conflicting canonical evidence blocks fail-closed. For
 post-recorder attempts, refill may never fall back to direct host, gate, revision, publisher,
@@ -583,6 +638,11 @@ the canonical writer has proven coverage.
 | Interrupted generation recovery | Existing prepared dispatch/recovery and Issue #95 restart-stop boundary | Restart replays canonical transition or blocks on conflict without duplicate dispatch |
 | Ordinary host execution failure | Issue #50 comment `#5108108854`, `.pytest_cache` `PermissionError` | `execution_outcome=failed`, `attempt_terminal=true`, `retry_eligibility=operator_required`, `item_terminal=false`, refill blocks on canonical disposition |
 | Successful A terminality followed by automatic B | Issue #50 acceptance goal | A reaches `item_terminal=true` through drafted, terminal no-publication, terminal rejected, or revision-exhausted item disposition; freshness handshake passes before refill excludes A and dispatches B |
+| Producer updates blocked during recorder publication | Review `#4801096703` atomic publication boundary | While recorder holds `state/evidence-heads.lock` and then `state/attempt-lifecycle.lock`, producer head replacement waits; recorder reduces one coherent producer-head set |
+| Refill snapshot is stable under evidence-head lock | Review `#4801096703` moving-snapshot race | Refill holding `state/evidence-heads.lock` cannot observe a snapshot replacement; recorder publication waits or has completed before refill verifies the snapshot |
+| Fixed lock ordering/no deadlock | Review `#4801096703` lock-order requirement | All producer, recorder, refill, recovery, and migration paths either acquire only one lock or acquire `state/evidence-heads.lock` before `state/attempt-lifecycle.lock`; reverse acquisition is rejected |
+| A terminal basis authorizes exactly one B | Review `#4801096703` non-self-referential dispatch basis | A terminal work-item snapshot SHA-256 plus prior `latest_evidence_set_sha256` authorizes exactly one B `dispatch.prepared`; B's own envelope is excluded from the authorizing digest |
+| Retry basis binds failed prior attempt | Review `#4801096703` retry causality | Retry action identity binds the failed prior attempt/work-item snapshot, prior evidence-set digest, canonical retry eligibility, and prior refill action; the new retry attempt head is not part of its own authorization |
 | Feed checkout cache corruption | Issue #50 comment `#5107850091` and recovery update | Not an attempt disposition until a job is submitted; remains runtime health/recovery fixture |
 | Graceful stop during lifecycle reconciliation | Issue #95 | Stop request does not lose lifecycle writes; no new reconcile starts after accepted stop |
 
@@ -598,17 +658,20 @@ managed service.
    prepared dispatch, build-next submitted dispatch, host execution, relay result, gate
    validation, revision disposition, and controlled-publisher publication disposition. Keep
    raw adapters migration-only.
-3. Host the Attempt Lifecycle Recorder inside the existing persistent relay service with one
-   lifecycle lock, append-only journal writes, materialized snapshot replacement, replay, and
+3. Host the Attempt Lifecycle Recorder inside the existing persistent relay service with the
+   fixed `state/evidence-heads.lock` to `state/attempt-lifecycle.lock` publication protocol,
+   append-only journal writes, materialized snapshot replacement, replay, and
    `reduced_through` watermark production.
 4. Add an explicit ID/hash-bound migration command/tests for the preserved Issue #89 generation
    and current Issue #50 A generation without editing either evidence source.
-5. Wire refill and producers to use `state/evidence-heads.lock`: producers hold it only for
-   atomic head replacement; refill holds it only for final head/snapshot verification, bound
-   `prepared_dispatch` verification, and durable retry/exclusion/next-dispatch action
-   identity commit. Remote Git/feed operations continue through existing prepared-dispatch
-   recovery after the lock is released. Old interpretation remains fenced behind the
-   migration boundary only.
+5. Wire recorder, refill, and producers to use `state/evidence-heads.lock`: producers hold it
+   only for atomic head replacement; recorder holds it across coherent producer-head read,
+   immutable envelope verification, lifecycle journal append, snapshot replacement, and
+   watermark publication; refill holds it only for final head/snapshot verification,
+   `decision_basis` and bound prepared-action verification, and durable
+   retry/exclusion/next-dispatch action identity commit. Remote Git/feed operations continue
+   through existing prepared-dispatch recovery after the lock is released. Old interpretation
+   remains fenced behind the migration boundary only.
 6. Add focused fixtures from the map above, including the exact `.pytest_cache`
    `PermissionError` archive shape.
 7. Remove refill direct interpretation for post-recorder attempts.
@@ -645,23 +708,24 @@ Issue #50 may resume only when all of the following are true:
 Agreement: partial
 
 Compared: Issue #98; Issue #98 decision comment `#5108427193`; Issue #98 comment
-`#5108533626`; Issue #98 final re-review update comment `#5108644779`; independent
+`#5108533626`; Issue #98 final re-review update comment `#5108644779`; Issue #98 comment
+`#5108740651`; independent
 architecture review `#4800845999`; independent architecture re-review `#4800936580`;
-independent final architecture re-review `#4801024367`; PR #99 reviewed exact head
-`d45d50e00ed1f0c9a0138394975d4d3b6af18775`; PR #92 repair-admission draft; Issue #50
-comment `#5108108854`; Issue #89; Issue #82; Issue #95; current refill prepared-dispatch
+independent final architecture re-review `#4801024367`; blocking architecture review
+`#4801096703`; PR #99 reviewed exact head
+`6ec1f7d807fad82973970b7c6c18358aa2b8e083`; PR #92 repair-admission draft; Issue #50
+comment `#5108108854`; Issue #89; Issue #82; Issue #95; current producer-head,
+recorder-journal, prepared-dispatch, and freshness sections; current refill prepared-dispatch
 model and prepared-dispatch crash recovery; existing relay service; current refill, relay,
 host, gate, revision, publisher, and service-error lifecycle code; active control-plane SOP.
 
-Disagreement: major architecture direction is resolved. This revision applies the remaining
-deterministic corrections from review `#4801024367` and comment `#5108644779`: canonical
-producer heads with monotonic producer sequences, immutable envelopes, atomic producer-owned
-head records, idempotent replay, rejection of sequence regression and conflicting
-same-sequence evidence, gap handling, derivation of `latest_evidence_set` only from producer
-heads, exact sole writer per envelope kind/path, final/not-applicable producer dispositions,
-and one named atomic freshness-to-action commitment boundary through `state/evidence-heads.lock`.
-No runtime implementation is authorized until independent acceptance review accepts this
-corrected architecture.
+Disagreement: major architecture direction is resolved. This revision applies review
+`#4801096703` and Issue #98 comment `#5108740651`: recorder snapshot publication is atomic
+with producer heads through the fixed lock order `state/evidence-heads.lock` to
+`state/attempt-lifecycle.lock`, refill cannot trust a moving snapshot while holding the
+evidence-head lock, and retry/exclusion/next-dispatch actions bind an explicit
+non-self-referential `decision_basis`. No runtime implementation is authorized until
+independent acceptance review accepts this corrected architecture.
 
 Evidence gap: independent architecture acceptance review of this corrected docs-only head;
 accepted canonical schemas; recorder implementation; envelope producer/head implementation;
@@ -672,11 +736,11 @@ service-error evidence interpretation. Target design makes those services eviden
 the relay-hosted recorder the only logical disposition writer, and refill a freshness-checked
 consumer of canonical work-item disposition.
 
-Risk if unresolved: recorder and refill can disagree on the latest evidence, or refill can
-durably commit retry, exclusion, or B/C dispatch after producer evidence changed.
+Risk if unresolved: producer heads, recorder snapshots, and refill action commitment can
+move independently, or B/retry/exclusion can become self-authorizing.
 
-Recommended default: keep PR #99 draft and return this docs-only revision for independent
-re-review before any Issue #50 runtime repair, retry, exclusion, B/C submission, or
-`.pytest_cache` workaround.
+Recommended default: keep PR #99 draft and stop for independent architecture acceptance
+review before any Issue #50 runtime repair, retry, exclusion, B/C submission, release,
+implementation issue creation, or `.pytest_cache` workaround.
 
 Founder decision required: no

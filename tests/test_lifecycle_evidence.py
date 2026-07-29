@@ -1140,6 +1140,27 @@ def test_lifecycle_transition_journal_is_ordered_hash_linked_and_replayable(
     assert watermark_path.exists()
 
 
+def test_lifecycle_recovery_then_unchanged_reduction_does_not_append_transition(
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    digest = identity_digest(identity)
+    _emit_prepared_and_submitted(tmp_path, identity)
+    lifecycle.reduce_attempt_lifecycle(tmp_path)
+    transition_root = tmp_path / "state" / "attempt-lifecycle" / "transitions" / digest
+    snapshot_path = tmp_path / "state" / "attempt-lifecycle" / "attempts" / f"{digest}.json"
+    watermark_path = tmp_path / "state" / "attempt-lifecycle" / "reduced-through" / f"{digest}.json"
+    snapshot_path.unlink()
+    watermark_path.unlink()
+
+    lifecycle.reduce_attempt_lifecycle(tmp_path)
+
+    transitions = sorted(transition_root.glob("*.json"))
+    assert [path.name for path in transitions] == ["00000000000000000001.json"]
+    assert snapshot_path.exists()
+    assert watermark_path.exists()
+
+
 def test_lifecycle_replay_rejects_transition_digest_mismatch(tmp_path: Path) -> None:
     identity = _identity()
     digest = identity_digest(identity)

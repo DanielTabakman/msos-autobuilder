@@ -28,9 +28,11 @@ from .build_next import (
     build_next,
 )
 from .lifecycle_evidence import (
+    EvidenceHeadsLock,
     LifecycleEvidenceError,
     attempt_identity,
     canonical_refill_classification,
+    canonical_refill_classification_locked,
     emit_lifecycle_evidence,
     record_producer_evidence_error,
 )
@@ -491,6 +493,7 @@ def _new_superseded_generation(
         old_generation_id=old_generation_id,
         old_generation_sha256=old_generation_sha256,
     )
+    generation["canonical_lifecycle_boundary"] = "post_recorder"
     return generation
 
 
@@ -549,6 +552,7 @@ def _assert_supersession_receipt_matches(
         or new_generation.get("provider_failure") is not None
         or new_generation.get("trustworthy_retry_at") is not None
         or new_generation.get("provider_retry_consumed") is not False
+        or new_generation.get("canonical_lifecycle_boundary") != "post_recorder"
         or new_generation.get("state") != "READY"
     ):
         raise RefillControllerError("refill supersession receipt conflicts with request")
@@ -658,7 +662,8 @@ def _archived_supersession_attempt(
         raise RefillControllerError("refill supersession archive must be a version 1 object")
     if raw.get("generation_id") != old_generation_id:
         raise RefillControllerError("refill supersession archive generation ID mismatch")
-    current = _supersession_current_attempt(raw)
+    current = dict(_supersession_current_attempt(raw))
+    current["generation_id"] = old_generation_id
     old_job_id = str(current.get("job_id") or "") or None
     old_work_item_id = str(current.get("work_item_id") or "") or None
     return raw, current, old_job_id, old_work_item_id
@@ -1834,6 +1839,8 @@ def _bind_decision_basis_v1(
 def _prepared_decision_basis_error(
     config: RefillConfig,
     prepared: Mapping[str, Any],
+    *,
+    evidence_heads_locked: bool = False,
 ) -> dict[str, Any] | None:
     basis = prepared.get("decision_basis")
     if not isinstance(basis, Mapping):
@@ -1854,7 +1861,12 @@ def _prepared_decision_basis_error(
     if host_root is None:
         return None
     try:
-        canonical = canonical_refill_classification(
+        classifier = (
+            canonical_refill_classification_locked
+            if evidence_heads_locked
+            else canonical_refill_classification
+        )
+        canonical = classifier(
             host_root,
             job_id=str(prior.get("job_id") or ""),
             generation_id=str(prior.get("generation_id") or "") or None,
@@ -1880,6 +1892,54 @@ def _prepared_decision_basis_error(
             "basis": dict(basis),
             "canonical": dict(canonical),
         }
+    return None
+
+
+def _commit_prepared_dispatch_under_evidence_lock(
+    config: RefillConfig,
+    generation: dict[str, Any],
+    prepared: dict[str, Any],
+    *,
+    decision_basis: Mapping[str, Any] | None,
+    consume_provider_retry: bool,
+    source_evidence: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    host_root = config.build_next.host_root
+    if host_root is None:
+        bound_basis = _bind_decision_basis_v1(decision_basis, prepared)
+        if bound_basis is not None:
+            prepared["decision_basis"] = bound_basis
+            generation["last_refill_action_basis"] = bound_basis
+        generation["prepared_dispatch"] = prepared
+        generation["state"] = "DISPATCHING"
+        if consume_provider_retry:
+            generation["provider_retry_consumed"] = True
+        if source_evidence.get("source"):
+            generation["source_ppe_identity"] = source_evidence["source"]
+        save_refill_generation(config, generation)
+        return None
+    with EvidenceHeadsLock(host_root):
+        bound_basis = _bind_decision_basis_v1(decision_basis, prepared)
+        if bound_basis is not None:
+            prepared["decision_basis"] = bound_basis
+            basis_error = _prepared_decision_basis_error(
+                config,
+                prepared,
+                evidence_heads_locked=True,
+            )
+            if basis_error is not None:
+                generation["state"] = "BLOCKED"
+                generation["dispatch_error"] = basis_error
+                save_refill_generation(config, generation)
+                return basis_error
+            generation["last_refill_action_basis"] = bound_basis
+        generation["prepared_dispatch"] = prepared
+        generation["state"] = "DISPATCHING"
+        if consume_provider_retry:
+            generation["provider_retry_consumed"] = True
+        if source_evidence.get("source"):
+            generation["source_ppe_identity"] = source_evidence["source"]
+        save_refill_generation(config, generation)
     return None
 
 
@@ -2000,17 +2060,32 @@ def _prepare_dispatch(
         "feed_path": receipt.feed_path,
         "feed_commit": receipt.feed_commit,
     }
-    bound_basis = _bind_decision_basis_v1(decision_basis, prepared)
-    if bound_basis is not None:
-        prepared["decision_basis"] = bound_basis
-        generation["last_refill_action_basis"] = bound_basis
-    generation["prepared_dispatch"] = prepared
-    generation["state"] = "DISPATCHING"
-    if consume_provider_retry:
-        generation["provider_retry_consumed"] = True
-    if receipt.evidence.get("source"):
-        generation["source_ppe_identity"] = receipt.evidence["source"]
-    save_refill_generation(config, generation)
+    basis_error = _commit_prepared_dispatch_under_evidence_lock(
+        config,
+        generation,
+        prepared,
+        decision_basis=decision_basis,
+        consume_provider_retry=consume_provider_retry,
+        source_evidence=receipt.evidence,
+    )
+    if basis_error is not None:
+        return {}, BuildNextReceipt(
+            status="BLOCKED",
+            pipeline_id=receipt.pipeline_id,
+            work_item_id=receipt.work_item_id,
+            job_id=receipt.job_id,
+            repository=receipt.repository,
+            source_commit=receipt.source_commit,
+            feed_path=receipt.feed_path,
+            feed_commit=receipt.feed_commit,
+            message="Prepared refill dispatch is blocked by stale canonical basis.",
+            evidence={"reason": basis_error.get("reason"), "dispatch_error": basis_error},
+            submitted=False,
+            projected_status=receipt.projected_status,
+            publication_enabled=receipt.publication_enabled,
+            merge_enabled=receipt.merge_enabled,
+            product_main_write_enabled=receipt.product_main_write_enabled,
+        )
     identity = None
     work_item_digest = receipt.evidence.get("work_item_source_sha256_v1")
     if isinstance(work_item_digest, str) and config.build_next.host_root is not None:
@@ -3070,7 +3145,10 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
                 )
         elif category == "item_terminal":
             evidence = classification.get("evidence")
-            if isinstance(evidence, Mapping):
+            if (
+                classification.get("stage") == "canonical_lifecycle"
+                and isinstance(evidence, Mapping)
+            ):
                 decision_basis = {
                     "decision_basis_schema_version": "decision_basis.v1",
                     "basis_kind": "prior_work_item",

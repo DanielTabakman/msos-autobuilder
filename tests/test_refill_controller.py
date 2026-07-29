@@ -2567,7 +2567,7 @@ def test_fresh_canonical_host_evidence_before_recorder_catchup_blocks(tmp_path: 
     assert report.decision_evidence["reason"] == "canonical_snapshot_missing"
 
 
-def test_genuine_historical_attempt_without_canonical_heads_uses_legacy_fallback(
+def test_post_recorder_attempt_without_surviving_heads_blocks_canonical_fail_closed(
     tmp_path: Path,
 ) -> None:
     config = _refill_config(tmp_path)
@@ -2587,8 +2587,59 @@ def test_genuine_historical_attempt_without_canonical_heads_uses_legacy_fallback
 
     report = reconcile_refill(config)
 
-    assert report.status == "BACKPRESSURE"
-    assert report.decision_evidence["reason"] == "provider_backpressure"
+    assert report.status == "BLOCKED"
+    assert report.decision_evidence["reason"] == "canonical_snapshot_missing"
+
+
+def test_changed_a_evidence_cannot_slip_before_durable_b_preparation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
+    config = _refill_config(tmp_path, ppe=ppe, feed=_feed_repo(tmp_path / "feed-work"))
+    _write_host_status(config)
+    job_a = _submit_tracked_attempt(config)
+    _mark_post_recorder_generation(config)
+    _emit_successful_canonical_a(config, job_a)
+    assert config.build_next.host_root is not None
+    identity = attempt_identity_from_job_yaml(_feed_job_path(config, job_a))
+    assert identity is not None
+    digest = identity_digest(identity)
+    head_path = (
+        config.build_next.host_root
+        / "state"
+        / "host-evidence"
+        / "heads"
+        / "execution"
+        / f"{digest}.json"
+    )
+    real_build_next = refill_controller.build_next
+    mutated = False
+
+    def mutate_a_after_classification(build_config: object) -> object:
+        nonlocal mutated
+        receipt = real_build_next(build_config)
+        if not getattr(build_config, "submit", True) and not mutated:
+            head = json.loads(head_path.read_text(encoding="utf-8"))
+            head["envelope_sha256"] = "0" * 64
+            head_path.write_text(json.dumps(head, sort_keys=True) + "\n", encoding="utf-8")
+            mutated = True
+        return receipt
+
+    monkeypatch.setattr(refill_controller, "build_next", mutate_a_after_classification)
+
+    report = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert report.status == "BLOCKED"
+    assert report.build_next_receipt is not None
+    assert report.build_next_receipt.submitted is False
+    assert report.decision_evidence["reason"] == "build_next_reconciled"
+    assert report.decision_evidence["build_next"]["status"] == "BLOCKED"
+    assert generation is not None
+    assert generation["state"] == "BLOCKED"
+    assert generation["dispatch_error"]["reason"] == "prepared_dispatch_basis_canonical_unfresh"
+    assert "prepared_dispatch" not in generation
 
 
 def test_fresh_canonical_crash_before_submission_replays_same_b(
@@ -3785,7 +3836,9 @@ def test_paused_revision_disposition_missing_generation_can_be_superseded(
     assert receipt["classification"]["stage"] == "revision_disposition_missing"
     assert receipt["active_release_commit"] == EXACT_RELEASE
     assert receipt["new_generation_id"] == new_generation["generation_id"]
+    assert receipt["new_generation"]["canonical_lifecycle_boundary"] == "post_recorder"
     assert new_generation["generation_id"] != old_generation["generation_id"]
+    assert new_generation["canonical_lifecycle_boundary"] == "post_recorder"
     assert new_generation["current_attempt"] is None
     assert new_generation["attempt_sequence"] == []
     assert new_generation["item_scoped_terminal_exclusions"] == []

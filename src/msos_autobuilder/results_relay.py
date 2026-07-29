@@ -29,6 +29,7 @@ from .lifecycle_evidence import (
     attempt_identity_from_job_yaml,
     emit_lifecycle_evidence,
     record_producer_evidence_error,
+    reduce_attempt_lifecycle,
 )
 
 
@@ -499,6 +500,7 @@ class ResultsRelay:
                     identity=identity,
                     primary_outcome={"job_id": job_id, "relay_disposition": "not_applicable"},
                 )
+        reduce_attempt_lifecycle(self.host_root)
         return tuple(relayed)
 
     def run_forever(self) -> None:

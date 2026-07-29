@@ -28,7 +28,9 @@ from .build_next import (
     build_next,
 )
 from .lifecycle_evidence import (
+    LifecycleEvidenceError,
     attempt_identity,
+    canonical_refill_classification,
     emit_lifecycle_evidence,
     record_producer_evidence_error,
 )
@@ -1669,6 +1671,28 @@ def _classify_attempt(
     job_id = str(attempt.get("job_id") or "")
     if not job_id:
         return {"category": "unknown", "evidence": {"error": "attempt lacks job_id"}}
+    if config.build_next.host_root is not None:
+        try:
+            canonical = canonical_refill_classification(
+                config.build_next.host_root,
+                job_id=job_id,
+                generation_id=str(attempt.get("generation_id") or "")
+                or str((load_refill_generation(config) or {}).get("generation_id") or "")
+                or None,
+            )
+        except LifecycleEvidenceError as exc:
+            return {
+                "category": "unknown",
+                "stage": "canonical_lifecycle",
+                "evidence": {
+                    "reason": "canonical_lifecycle_unfresh",
+                    "error": str(exc),
+                    "job_id": job_id,
+                    "refill_action": "block_fail_closed",
+                },
+            }
+        if canonical is not None:
+            return canonical
     if _job_in_active_queue(paths, job_id):
         return {"category": "in_flight", "stage": "host_queue"}
     archive_state, archive = _attempt_archive(paths, job_id)
@@ -1722,6 +1746,7 @@ def _attempt_from_receipt(
     attempt_ordinal: int,
     retry_ordinal: int,
     reason: str,
+    decision_basis: Mapping[str, Any] | None = None,
     recovered_from: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     attempt = {
@@ -1736,6 +1761,8 @@ def _attempt_from_receipt(
         "feed_commit": receipt.feed_commit,
         "created_at": _utc_now(),
     }
+    if decision_basis is not None:
+        attempt["decision_basis"] = dict(decision_basis)
     if recovered_from is not None:
         attempt["recovered_from"] = dict(recovered_from)
     return attempt
@@ -1861,6 +1888,7 @@ def _prepare_dispatch(
     active_running: int = 0,
     active_queued: int = 0,
     consume_provider_retry: bool = False,
+    decision_basis: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], BuildNextReceipt]:
     dry_config = replace(
         config.build_next,
@@ -1892,6 +1920,7 @@ def _prepare_dispatch(
         "prepared_at": _utc_now(),
         "feed_path": receipt.feed_path,
         "feed_commit": receipt.feed_commit,
+        **({"decision_basis": dict(decision_basis)} if decision_basis is not None else {}),
     }
     generation["prepared_dispatch"] = prepared
     generation["state"] = "DISPATCHING"
@@ -2029,6 +2058,8 @@ def _recover_or_replay_prepared_dispatch(
                 str(item.get("recovered_from", {}).get("stage")), 5
             ),
         )[0]
+        if isinstance(prepared.get("decision_basis"), Mapping):
+            candidate["decision_basis"] = dict(prepared["decision_basis"])
         _commit_prepared_attempt(config, generation, candidate)
         return None
     if not allow_replay:
@@ -2040,6 +2071,11 @@ def _recover_or_replay_prepared_dispatch(
             attempt_ordinal=int(prepared["attempt_ordinal"]),
             retry_ordinal=int(prepared.get("retry_ordinal") or 0),
             reason=str(prepared.get("reason") or "initial"),
+            decision_basis=(
+                prepared.get("decision_basis")
+                if isinstance(prepared.get("decision_basis"), Mapping)
+                else None
+            ),
         )
         _record_attempt(generation, attempt)
         generation.pop("prepared_dispatch", None)
@@ -2862,6 +2898,7 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
     retry_same_item: str | None = None
     retry_reason = "initial"
     retry_ordinal = 0
+    decision_basis: dict[str, Any] | None = None
     if isinstance(current, dict):
         pin_block = _source_pin_block(config, generation)
         if pin_block is not None:
@@ -2944,30 +2981,54 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
                     },
                 )
         elif category == "item_terminal":
+            evidence = classification.get("evidence")
+            if isinstance(evidence, Mapping):
+                decision_basis = {
+                    "schema_version": "canonical_refill_action_basis.v1",
+                    "action": evidence.get("refill_action"),
+                    "source_job_id": current.get("job_id"),
+                    "source_work_item_id": current.get("work_item_id"),
+                    "source_attempt_identity": evidence.get("attempt_identity"),
+                    "source_snapshot_sha256": evidence.get("snapshot_sha256"),
+                    "source_latest_evidence_set_sha256": evidence.get(
+                        "latest_evidence_set_sha256"
+                    ),
+                    "source_reduced_through": evidence.get("reduced_through"),
+                }
             exclusions = list(generation.get("item_scoped_terminal_exclusions") or [])
             work_item_id = str(current.get("work_item_id") or "")
             if work_item_id and work_item_id not in exclusions:
                 exclusions.append(work_item_id)
             generation["item_scoped_terminal_exclusions"] = exclusions
+            if decision_basis is not None:
+                generation["last_refill_action_basis"] = decision_basis
             generation["current_attempt"] = None
             generation["provider_failure"] = None
             generation["trustworthy_retry_at"] = None
             generation["state"] = "READY"
             save_refill_generation(config, generation)
         else:
+            classification_evidence = classification.get("evidence")
+            block_reason = "ambiguous_attempt"
+            if (
+                classification.get("stage") == "canonical_lifecycle"
+                and isinstance(classification_evidence, Mapping)
+                and classification_evidence.get("reason")
+            ):
+                block_reason = str(classification_evidence["reason"])
             generation["state"] = "BLOCKED"
             save_refill_generation(config, generation)
             return _report(
                 config=config,
                 policy=policy,
                 status="BLOCKED",
-                message="Tracked refill attempt has ambiguous terminal evidence.",
+                message="Tracked refill attempt is blocked by canonical terminal evidence.",
                 active_running=active_running,
                 active_queued=active_queued,
                 feed_awaiting_import=feed_awaiting_import,
                 awaiting_review=awaiting_review,
                 evidence={
-                    "reason": "ambiguous_attempt",
+                    "reason": block_reason,
                     "generation": generation,
                     "health": snapshot.health,
                 },
@@ -3016,6 +3077,7 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
         active_running=active_running,
         active_queued=active_queued,
         consume_provider_retry=retry_reason == "provider_retry",
+        decision_basis=decision_basis or generation.get("last_refill_action_basis"),
     )
     if (
         dry_receipt.source_commit
@@ -3052,6 +3114,7 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
             attempt_ordinal=attempt_ordinal,
             retry_ordinal=retry_ordinal,
             reason=retry_reason,
+            decision_basis=decision_basis or generation.get("last_refill_action_basis"),
         )
         _record_attempt(generation, attempt)
         generation.pop("prepared_dispatch", None)

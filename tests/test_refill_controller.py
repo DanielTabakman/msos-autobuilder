@@ -13,6 +13,11 @@ from test_build_next import _commit_all, _config, _feed_repo, _git, _snapshot, _
 
 import msos_autobuilder.refill_controller as refill_controller
 from msos_autobuilder.cli import _refill_keep_one_command, build_parser
+from msos_autobuilder.lifecycle_evidence import (
+    attempt_identity_from_job_yaml,
+    emit_lifecycle_evidence,
+    reduce_attempt_lifecycle,
+)
 from msos_autobuilder.refill_controller import (
     RefillConfig,
     RefillControllerError,
@@ -2357,6 +2362,213 @@ def _archive_job_yaml_from_feed(
             json.dumps({"message": "unexpected local crash", "traceback": ""}) + "\n",
             encoding="utf-8",
         )
+
+
+def _host_source(config: RefillConfig, relative: str, payload: dict[str, object]) -> Path:
+    assert config.build_next.host_root is not None
+    path = config.build_next.host_root / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def _emit_successful_canonical_a(config: RefillConfig, job_id: str) -> None:
+    assert config.build_next.host_root is not None
+    identity = attempt_identity_from_job_yaml(_feed_job_path(config, job_id))
+    assert identity is not None
+    _archive_job_yaml_from_feed(config, job_id)
+    emit_lifecycle_evidence(
+        config.build_next.host_root,
+        evidence_kind="host.execution",
+        identity=identity,
+        source_path=_host_source(config, f"queue/completed/{job_id}/host.json", {"job_id": job_id}),
+        payload={
+            "execution_outcome": "completed",
+            "host_archive_path": f"queue/completed/{job_id}",
+            "error_class": None,
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:00:00Z",
+    )
+    emit_lifecycle_evidence(
+        config.build_next.host_root,
+        evidence_kind="relay.result",
+        identity=identity,
+        source_path=_host_source(config, f"state/relay-fixtures/{job_id}.json", {"job_id": job_id}),
+        payload={
+            "relay_disposition": "relayed",
+            "relayed_commit": "b" * 40,
+            "canonical_report_sha256": "1" * 64,
+            "source_report_sha256": "2" * 64,
+            "complete_patch_reconstruction": True,
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:01:00Z",
+    )
+    emit_lifecycle_evidence(
+        config.build_next.host_root,
+        evidence_kind="gate.validation",
+        identity=identity,
+        source_path=_host_source(config, f"state/gate-fixtures/{job_id}.json", {"job_id": job_id}),
+        payload={
+            "validation_outcome": "passed",
+            "validation_state": "candidate_passed",
+            "validation_contract_sha256": "3" * 64,
+            "gate_report_sha256": "4" * 64,
+            "results_commit": "c" * 40,
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:02:00Z",
+    )
+    emit_lifecycle_evidence(
+        config.build_next.host_root,
+        evidence_kind="revision.disposition",
+        identity=identity,
+        source_path=_host_source(
+            config, f"state/revision-fixtures/{job_id}.json", {"job_id": job_id}
+        ),
+        payload={
+            "revision_disposition": "not_applicable",
+            "descendant_job_id": None,
+            "gate_report_sha256": "4" * 64,
+            "jobs_commit": None,
+        },
+        final=True,
+        closed_status="not_applicable",
+        observed_at="2026-07-29T12:03:00Z",
+    )
+    emit_lifecycle_evidence(
+        config.build_next.host_root,
+        evidence_kind="publication_review.disposition",
+        identity=identity,
+        source_path=_host_source(
+            config, f"state/publisher-fixtures/{job_id}.json", {"job_id": job_id}
+        ),
+        payload={
+            "publication_review_disposition": "drafted",
+            "reason_code": "publication_review.drafted.v1",
+            "draft_pr": "https://github.example/pull/1",
+            "product_branch": "autobuilder/job",
+            "product_commit": "d" * 40,
+            "results_commit": "e" * 40,
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:04:00Z",
+    )
+    reduce_attempt_lifecycle(config.build_next.host_root)
+
+
+def test_fresh_canonical_terminal_a_authorizes_exactly_one_b_and_pause_blocks_c(
+    tmp_path: Path,
+) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
+    config = _refill_config(tmp_path, ppe=ppe, feed=_feed_repo(tmp_path / "feed-work"))
+    _write_host_status(config)
+    job_a = _submit_tracked_attempt(config)
+    _emit_successful_canonical_a(config, job_a)
+
+    first = reconcile_refill(config)
+    second = reconcile_refill(config)
+    pause_report = pause_builds_and_reconcile(config)
+    generation = load_refill_generation(config)
+
+    assert first.status == "QUEUED"
+    assert first.build_next_receipt is not None
+    assert first.build_next_receipt.work_item_id == B_WORK_ITEM
+    assert second.status == "QUEUED"
+    assert second.build_next_receipt is None
+    assert pause_report.status == "PAUSED"
+    assert generation is not None
+    assert generation["item_scoped_terminal_exclusions"] == [A_WORK_ITEM]
+    assert generation["current_attempt"]["work_item_id"] == B_WORK_ITEM
+    assert len(
+        [
+            item
+            for item in generation["attempt_sequence"]
+            if item["work_item_id"] == B_WORK_ITEM
+        ]
+    ) == 1
+    prepared_basis = generation["attempt_sequence"][-1].get("decision_basis")
+    assert prepared_basis is not None
+    assert prepared_basis["source_job_id"] == job_a
+    basis = generation["last_refill_action_basis"]
+    assert basis["source_job_id"] == job_a
+    assert basis["source_work_item_id"] == A_WORK_ITEM
+    assert basis["source_attempt_identity"]["job_id"] == job_a
+
+
+def test_fresh_canonical_permission_error_blocks_operator_required_without_ambiguity(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    assert config.build_next.host_root is not None
+    identity = attempt_identity_from_job_yaml(_feed_job_path(config, job_id))
+    assert identity is not None
+    _archive_job_yaml_from_feed(config, job_id, failed=True)
+    error_path = config.build_next.host_root / "queue" / "failed" / job_id / "error.json"
+    error_path.write_text(
+        json.dumps(
+            {
+                "message": (
+                    "PermissionError: [WinError 5] Access is denied: "
+                    "'.pytest_cache/v/cache/nodeids'"
+                ),
+                "traceback": "PermissionError: .pytest_cache",
+                "recorded_at": "2026-07-29T12:00:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    emit_lifecycle_evidence(
+        config.build_next.host_root,
+        evidence_kind="host.execution",
+        identity=identity,
+        source_path=error_path,
+        payload={
+            "execution_outcome": "failed",
+            "host_archive_path": f"queue/failed/{job_id}",
+            "error_class": "PermissionError",
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:00:00Z",
+    )
+    emit_lifecycle_evidence(
+        config.build_next.host_root,
+        evidence_kind="relay.result",
+        identity=identity,
+        source_path=error_path,
+        payload={
+            "relay_disposition": "not_applicable",
+            "relayed_commit": None,
+            "canonical_report_sha256": None,
+            "source_report_sha256": None,
+            "complete_patch_reconstruction": False,
+        },
+        final=True,
+        closed_status="not_applicable",
+        observed_at="2026-07-29T12:00:00Z",
+    )
+    reduce_attempt_lifecycle(config.build_next.host_root)
+
+    report = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert report.status == "BLOCKED"
+    assert report.build_next_receipt is None
+    assert generation is not None
+    classification = generation["last_attempt_classification"]
+    assert classification["stage"] == "canonical_lifecycle"
+    assert classification["evidence"]["reason"] == "operator_required_execution_failed"
+    assert report.decision_evidence["reason"] == "operator_required_execution_failed"
+    assert generation["item_scoped_terminal_exclusions"] == []
 
 
 def test_keep_one_creates_generation_and_refuses_ready_overwrite(tmp_path: Path) -> None:

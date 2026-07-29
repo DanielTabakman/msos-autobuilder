@@ -543,6 +543,51 @@ class EvidenceHeadsLock(AbstractContextManager["EvidenceHeadsLock"]):
             self._handle = None
 
 
+class AttemptLifecycleLock(AbstractContextManager["AttemptLifecycleLock"]):
+    def __init__(self, host_root: Path) -> None:
+        self.path = host_root / "state" / "attempt-lifecycle.lock"
+        self._handle: Any = None
+
+    def __enter__(self) -> AttemptLifecycleLock:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._handle = self.path.open("a+b")
+        self._handle.seek(0)
+        self._handle.write(b"0")
+        self._handle.flush()
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                self._handle.seek(0)
+                msvcrt.locking(self._handle.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX)
+        except OSError as exc:
+            self._handle.close()
+            self._handle = None
+            raise LifecycleEvidenceError("could not acquire state/attempt-lifecycle.lock") from exc
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        if self._handle is None:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                self._handle.seek(0)
+                msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._handle.close()
+            self._handle = None
+
+
 def emit_lifecycle_evidence(
     host_root: Path,
     *,
@@ -637,6 +682,394 @@ def emit_lifecycle_evidence(
         raise
     except Exception as exc:
         raise LifecycleEvidenceError("lifecycle evidence operation failed") from exc
+
+
+def reduce_attempt_lifecycle(host_root: Path) -> dict[str, Any]:
+    """Reduce producer heads into canonical attempt/work-item snapshots."""
+    with EvidenceHeadsLock(host_root):
+        with AttemptLifecycleLock(host_root):
+            groups = _load_current_producer_heads(host_root)
+            reduced: list[dict[str, Any]] = []
+            for digest, heads in sorted(groups.items()):
+                snapshot = _reduce_identity_heads(host_root, heads)
+                _publish_lifecycle_snapshot(host_root, digest, snapshot)
+                reduced.append(
+                    {
+                        "identity_digest": digest,
+                        "lifecycle_phase": snapshot["lifecycle_phase"],
+                        "item_disposition": snapshot["item_disposition"],
+                        "refill_action": snapshot["refill_action"],
+                    }
+                )
+            report = {
+                "schema_version": "attempt_lifecycle_reduce_report.v1",
+                "reduced_at": datetime.now().astimezone().isoformat(),
+                "identity_count": len(reduced),
+                "reduced": reduced,
+            }
+            _atomic_json(host_root / "state" / "attempt-lifecycle" / "last-reduce.json", report)
+            return report
+
+
+def canonical_refill_classification(
+    host_root: Path,
+    *,
+    job_id: str,
+    generation_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Return a freshness-verified canonical refill classification for a job if one exists."""
+    with EvidenceHeadsLock(host_root):
+        snapshot_path = _find_attempt_snapshot(
+            host_root,
+            job_id=job_id,
+            generation_id=generation_id,
+        )
+        if snapshot_path is None:
+            kinds = _head_kinds_for_job(host_root, job_id=job_id, generation_id=generation_id)
+            if not kinds or kinds <= {"dispatch.prepared", "dispatch.submitted"}:
+                return None
+            return {
+                "category": "unknown",
+                "stage": "canonical_lifecycle_missing",
+                "evidence": {
+                    "reason": "canonical_snapshot_missing",
+                    "job_id": job_id,
+                    "refill_action": "block_fail_closed",
+                },
+            }
+        snapshot = _read_json_mapping(snapshot_path)
+        _verify_snapshot_freshness(host_root, snapshot)
+        refill_action = str(snapshot.get("refill_action") or "block_fail_closed")
+        item_terminal = snapshot.get("item_terminal") is True
+        if refill_action == "exclude_item_and_select_next" and item_terminal:
+            category = "item_terminal"
+        elif str(snapshot.get("attempt_terminality")) == "in_flight":
+            category = "in_flight"
+        else:
+            category = "unknown"
+        return {
+            "category": category,
+            "stage": "canonical_lifecycle",
+            "evidence": {
+                "reason": str(snapshot.get("item_disposition") or "canonical_disposition"),
+                "refill_action": refill_action,
+                "snapshot_path": _host_relative_path(host_root, snapshot_path),
+                "snapshot_sha256": sha256_bytes(canonical_json_bytes(snapshot)),
+                "latest_evidence_set_sha256": snapshot.get("latest_evidence_set_sha256"),
+                "reduced_through": snapshot.get("reduced_through"),
+                "lifecycle_phase": snapshot.get("lifecycle_phase"),
+                "attempt_terminal": snapshot.get("attempt_terminal"),
+                "item_terminal": snapshot.get("item_terminal"),
+                "attempt_identity": dict(
+                    _mapping(snapshot.get("attempt_identity"), "attempt_identity")
+                ),
+            },
+        }
+
+
+def _load_current_producer_heads(host_root: Path) -> dict[str, list[dict[str, Any]]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for parts in HEAD_PATH_PARTS.values():
+        root = host_root.joinpath(*parts)
+        if not root.exists():
+            continue
+        for path in sorted(root.glob("*.json")):
+            head = _read_json_mapping(path)
+            validate_producer_head(head, host_root=host_root)
+            digest = str(head["identity_digest"])
+            groups.setdefault(digest, []).append(dict(head))
+    return groups
+
+
+def _reduce_identity_heads(host_root: Path, heads: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    if not heads:
+        raise LifecycleEvidenceError("cannot reduce empty producer head set")
+    identity = dict(_mapping(heads[0].get("attempt_identity"), "attempt_identity"))
+    digest = identity_digest(identity)
+    if any(head.get("identity_digest") != digest for head in heads):
+        raise LifecycleEvidenceError("producer head identity group mismatch")
+    envelopes = {
+        str(head["evidence_kind"]): _load_envelope_for_head(host_root, head) for head in heads
+    }
+    latest_heads = sorted(
+        (dict(head) for head in heads),
+        key=lambda head: str(head["evidence_kind"]),
+    )
+    latest_digest = latest_evidence_set_sha256_v1(latest_heads)
+    base: dict[str, Any] = {
+        "schema_version": "attempt_lifecycle_snapshot.v1",
+        "attempt_identity": identity,
+        "identity_digest": digest,
+        "lifecycle_phase": "dispatch_prepared",
+        "execution_outcome": "not_started",
+        "validation_outcome": "not_recorded",
+        "revision_disposition": "not_recorded",
+        "publication_review_disposition": "not_recorded",
+        "attempt_terminal": False,
+        "attempt_terminality": "in_flight",
+        "item_terminal": False,
+        "item_disposition": "in_flight",
+        "retry_eligibility": "not_applicable",
+        "evidence_integrity": "complete",
+        "refill_action": "block_fail_closed",
+        "latest_evidence_set": latest_heads,
+        "latest_evidence_set_sha256": latest_digest,
+        "reduced_through": {
+            "schema_version": "attempt_lifecycle_reduced_through.v1",
+            "identity_digest": digest,
+            "latest_evidence_set_sha256": latest_digest,
+        },
+    }
+
+    def payload(kind: str) -> Mapping[str, Any] | None:
+        envelope = envelopes.get(kind)
+        if envelope is None:
+            return None
+        return _mapping(envelope.get("payload"), "payload")
+
+    prepared = payload("dispatch.prepared")
+    if prepared is None:
+        return _blocked(base, "evidence_missing", "operator_required_evidence_missing")
+
+    submitted = payload("dispatch.submitted")
+    if submitted is None:
+        return base
+    base["lifecycle_phase"] = "dispatch_submitted"
+
+    host = payload("host.execution")
+    if host is None:
+        base["lifecycle_phase"] = "host_awaiting_import"
+        return base
+    execution = str(host.get("execution_outcome") or "")
+    if execution in {"imported", "pending", "running"}:
+        base["lifecycle_phase"] = "host_" + ("pending" if execution == "imported" else execution)
+        base["execution_outcome"] = "running" if execution == "running" else "not_started"
+        return base
+    if execution in {"failed", "interrupted"}:
+        base["lifecycle_phase"] = "execution_archived"
+        base["execution_outcome"] = execution
+        base["attempt_terminal"] = True
+        base["attempt_terminality"] = "terminal"
+        base["retry_eligibility"] = "operator_required"
+        return _blocked(base, "complete", "operator_required_execution_failed")
+    if execution != "completed":
+        return _blocked(base, "evidence_conflict", "operator_required_evidence_conflict")
+    base["lifecycle_phase"] = "execution_archived"
+    base["execution_outcome"] = "completed"
+
+    relay = payload("relay.result")
+    if relay is None or relay.get("relay_disposition") != "relayed":
+        return _blocked(base, "evidence_missing", "operator_required_evidence_missing")
+    base["lifecycle_phase"] = "result_relayed"
+
+    gate = payload("gate.validation")
+    if gate is None:
+        return _blocked(base, "evidence_missing", "operator_required_evidence_missing")
+    validation = str(gate.get("validation_outcome") or "")
+    base["lifecycle_phase"] = "validation_recorded"
+    base["validation_outcome"] = validation
+    if validation in {"blocked", "missing", "conflict"}:
+        return _blocked(base, f"evidence_{validation}", "operator_required_validation_blocked")
+
+    revision = payload("revision.disposition")
+    publication = payload("publication_review.disposition")
+    if validation == "failed":
+        if revision is None:
+            return _blocked(base, "evidence_missing", "operator_required_revision_blocked")
+        disposition = str(revision.get("revision_disposition") or "")
+        base["lifecycle_phase"] = "revision_recorded"
+        base["revision_disposition"] = disposition
+        if disposition == "queued":
+            return base
+        if disposition == "exhausted":
+            reason = str(revision.get("reason_code") or "")
+            return _terminal_item(base, "item_terminal_revision_exhausted", reason)
+        return _blocked(
+            base,
+            "evidence_" + (disposition or "missing"),
+            "operator_required_revision_blocked",
+        )
+
+    if validation != "passed":
+        return _blocked(base, "evidence_conflict", "operator_required_validation_blocked")
+    if revision is None or revision.get("revision_disposition") != "not_applicable":
+        return _blocked(base, "evidence_missing", "operator_required_revision_blocked")
+    base["revision_disposition"] = "not_applicable"
+    if publication is None:
+        return _blocked(base, "evidence_missing", "operator_required_publication_blocked")
+    disposition = str(publication.get("publication_review_disposition") or "")
+    base["lifecycle_phase"] = "publication_review_recorded"
+    base["publication_review_disposition"] = disposition
+    if disposition == "awaiting_review":
+        return base
+    if disposition == "drafted":
+        return _terminal_item(
+            base,
+            "item_terminal_success_drafted",
+            str(publication.get("reason_code") or ""),
+        )
+    if disposition == "rejected":
+        return _terminal_item(
+            base,
+            "item_terminal_rejected",
+            str(publication.get("reason_code") or ""),
+        )
+    if disposition == "terminal_no_publication":
+        return _terminal_item(
+            base,
+            "item_terminal_no_publication",
+            str(publication.get("reason_code") or ""),
+        )
+    return _blocked(
+        base,
+        "evidence_" + (disposition or "missing"),
+        "operator_required_publication_blocked",
+    )
+
+
+def _blocked(snapshot: dict[str, Any], integrity: str, disposition: str) -> dict[str, Any]:
+    snapshot["lifecycle_phase"] = "blocked"
+    snapshot["evidence_integrity"] = integrity
+    snapshot["attempt_terminality"] = (
+        "terminal" if snapshot.get("attempt_terminal") is True else "blocked"
+    )
+    snapshot["item_terminal"] = False
+    snapshot["item_disposition"] = disposition
+    snapshot["refill_action"] = "block_fail_closed"
+    return snapshot
+
+
+def _terminal_item(snapshot: dict[str, Any], disposition: str, reason_code: str) -> dict[str, Any]:
+    if reason_code not in TERMINAL_REASON_CODES_V1:
+        return _blocked(snapshot, "evidence_conflict", "operator_required_unknown_terminal_reason")
+    expected = TERMINAL_REASON_CODES_V1[reason_code]
+    if expected["item_disposition"] != disposition:
+        return _blocked(snapshot, "evidence_conflict", "operator_required_unknown_terminal_reason")
+    snapshot["attempt_terminal"] = True
+    snapshot["attempt_terminality"] = "terminal"
+    snapshot["item_terminal"] = True
+    snapshot["item_disposition"] = disposition
+    snapshot["retry_eligibility"] = "not_applicable"
+    snapshot["refill_action"] = str(expected["refill_action"])
+    return snapshot
+
+
+def _load_envelope_for_head(host_root: Path, head: Mapping[str, Any]) -> dict[str, Any]:
+    path = host_root.joinpath(*Path(str(head["envelope_path"])).parts)
+    envelope = _read_json_mapping(path)
+    validate_lifecycle_evidence_envelope(envelope)
+    validate_producer_head(head, envelope=envelope, host_root=host_root)
+    return dict(envelope)
+
+
+def _publish_lifecycle_snapshot(host_root: Path, digest: str, snapshot: Mapping[str, Any]) -> None:
+    root = host_root / "state" / "attempt-lifecycle"
+    snapshot_payload = dict(snapshot)
+    snapshot_sha = sha256_bytes(canonical_json_bytes(snapshot_payload))
+    transition = {
+        "schema_version": "attempt_lifecycle_transition.v1",
+        "identity_digest": digest,
+        "snapshot_sha256": snapshot_sha,
+        "latest_evidence_set_sha256": snapshot_payload["latest_evidence_set_sha256"],
+        "lifecycle_phase": snapshot_payload["lifecycle_phase"],
+        "item_disposition": snapshot_payload["item_disposition"],
+        "refill_action": snapshot_payload["refill_action"],
+    }
+    transition_sha = sha256_bytes(canonical_json_bytes(transition))
+    journal_path = root / "journal" / digest / f"{transition_sha}.json"
+    _write_immutable(journal_path, canonical_json_bytes(transition) + b"\n")
+    _atomic_json(root / "attempts" / f"{digest}.json", snapshot_payload)
+    _atomic_json(root / "work-items" / f"{digest}.json", snapshot_payload)
+    generation_id = _safe_path_segment(str(snapshot_payload["attempt_identity"]["generation_id"]))
+    _atomic_json(root / "generations" / generation_id / f"{digest}.json", snapshot_payload)
+    watermark = {
+        **dict(_mapping(snapshot_payload["reduced_through"], "reduced_through")),
+        "attempt_snapshot_sha256": snapshot_sha,
+        "journal_transition_sha256": transition_sha,
+    }
+    _atomic_json(root / "reduced-through" / f"{digest}.json", watermark)
+
+
+def _find_attempt_snapshot(
+    host_root: Path,
+    *,
+    job_id: str,
+    generation_id: str | None,
+) -> Path | None:
+    root = host_root / "state" / "attempt-lifecycle" / "attempts"
+    if not root.exists():
+        return None
+    matches: list[Path] = []
+    for path in sorted(root.glob("*.json")):
+        try:
+            snapshot = _read_json_mapping(path)
+            identity = _mapping(snapshot.get("attempt_identity"), "attempt_identity")
+        except LifecycleEvidenceError:
+            continue
+        if identity.get("job_id") == job_id and (
+            generation_id is None or identity.get("generation_id") == generation_id
+        ):
+            matches.append(path)
+    if len(matches) > 1:
+        raise LifecycleEvidenceError("multiple canonical snapshots match current job")
+    return matches[0] if matches else None
+
+
+def _head_kinds_for_job(
+    host_root: Path,
+    *,
+    job_id: str,
+    generation_id: str | None,
+) -> set[str]:
+    kinds: set[str] = set()
+    for parts in HEAD_PATH_PARTS.values():
+        root = host_root.joinpath(*parts)
+        if not root.exists():
+            continue
+        for path in sorted(root.glob("*.json")):
+            try:
+                head = _read_json_mapping(path)
+                identity = _mapping(head.get("attempt_identity"), "attempt_identity")
+            except LifecycleEvidenceError:
+                continue
+            if identity.get("job_id") == job_id and (
+                generation_id is None or identity.get("generation_id") == generation_id
+            ):
+                kind = head.get("evidence_kind")
+                if isinstance(kind, str):
+                    kinds.add(kind)
+    return kinds
+
+
+def _verify_snapshot_freshness(host_root: Path, snapshot: Mapping[str, Any]) -> None:
+    identity = _mapping(snapshot.get("attempt_identity"), "attempt_identity")
+    digest = identity_digest(identity)
+    heads = _load_current_producer_heads(host_root).get(digest, [])
+    latest_digest = latest_evidence_set_sha256_v1(heads)
+    if latest_digest != snapshot.get("latest_evidence_set_sha256"):
+        raise LifecycleEvidenceError("canonical lifecycle snapshot is stale")
+    watermark = _read_json_mapping(
+        host_root / "state" / "attempt-lifecycle" / "reduced-through" / f"{digest}.json"
+    )
+    if watermark.get("latest_evidence_set_sha256") != latest_digest:
+        raise LifecycleEvidenceError("canonical lifecycle watermark is stale")
+    if watermark.get("attempt_snapshot_sha256") != sha256_bytes(canonical_json_bytes(snapshot)):
+        raise LifecycleEvidenceError("canonical lifecycle snapshot hash mismatch")
+
+
+def _read_json_mapping(path: Path) -> dict[str, Any]:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise LifecycleEvidenceError(f"JSON evidence is unreadable: {path}") from exc
+    if not isinstance(raw, Mapping):
+        raise LifecycleEvidenceError(f"JSON evidence must be an object: {path}")
+    return dict(raw)
+
+
+def _safe_path_segment(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip(".-")
+    return cleaned or "unknown"
 
 
 def _write_immutable(path: Path, data: bytes) -> None:

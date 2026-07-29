@@ -120,7 +120,11 @@ def test_emit_lifecycle_evidence_replay_and_head_digest(tmp_path: Path) -> None:
         evidence_kind="host.execution",
         identity=identity,
         source_path=source,
-        payload={"execution_outcome": "completed"},
+        payload={
+            "execution_outcome": "completed",
+            "host_archive_path": "queue/completed/build-next-ppe-A",
+            "error_class": None,
+        },
         final=True,
         closed_status="final",
         observed_at="2026-07-28T00:00:00Z",
@@ -130,7 +134,11 @@ def test_emit_lifecycle_evidence_replay_and_head_digest(tmp_path: Path) -> None:
         evidence_kind="host.execution",
         identity=identity,
         source_path=source,
-        payload={"execution_outcome": "completed"},
+        payload={
+            "execution_outcome": "completed",
+            "host_archive_path": "queue/completed/build-next-ppe-A",
+            "error_class": None,
+        },
         final=True,
         closed_status="final",
         observed_at="2026-07-28T00:00:00Z",
@@ -206,7 +214,11 @@ def test_latest_evidence_set_rejects_malformed_heads(tmp_path: Path) -> None:
         evidence_kind="host.execution",
         identity=identity,
         source_path=source,
-        payload={"execution_outcome": "completed"},
+        payload={
+            "execution_outcome": "completed",
+            "host_archive_path": "queue/completed/build-next-ppe-A",
+            "error_class": None,
+        },
         final=True,
         closed_status="final",
         observed_at="2026-07-28T00:00:00Z",
@@ -225,14 +237,10 @@ def test_regression_gap_conflict_and_post_final_mutation_fail_closed(tmp_path: P
     source = _source(tmp_path)
     emit_lifecycle_evidence(
         tmp_path,
-        evidence_kind="gate.validation",
+        evidence_kind="host.execution",
         identity=identity,
         source_path=source,
-        payload={
-            "validation_outcome": "failed",
-            "gate_report_sha256": "0" * 64,
-            "results_commit": "a" * 40,
-        },
+        payload={"execution_outcome": "imported"},
         producer_sequence=1,
         final=False,
         closed_status="open",
@@ -241,30 +249,22 @@ def test_regression_gap_conflict_and_post_final_mutation_fail_closed(tmp_path: P
     with pytest.raises(LifecycleEvidenceError, match="sequence gap"):
         emit_lifecycle_evidence(
             tmp_path,
-            evidence_kind="gate.validation",
+            evidence_kind="host.execution",
             identity=identity,
             source_path=source,
-            payload={
-                "validation_outcome": "passed",
-                "gate_report_sha256": "1" * 64,
-                "results_commit": "b" * 40,
-            },
+            payload={"execution_outcome": "pending"},
             producer_sequence=3,
-            final=True,
-            closed_status="final",
+            final=False,
+            closed_status="open",
             observed_at="2026-07-28T00:00:01Z",
         )
     with pytest.raises(LifecycleEvidenceError, match="conflicting same-sequence"):
         emit_lifecycle_evidence(
             tmp_path,
-            evidence_kind="gate.validation",
+            evidence_kind="host.execution",
             identity=identity,
             source_path=source,
-            payload={
-                "validation_outcome": "passed",
-                "gate_report_sha256": "1" * 64,
-                "results_commit": "b" * 40,
-            },
+            payload={"execution_outcome": "pending"},
             producer_sequence=1,
             final=False,
             closed_status="open",
@@ -272,13 +272,13 @@ def test_regression_gap_conflict_and_post_final_mutation_fail_closed(tmp_path: P
         )
     emit_lifecycle_evidence(
         tmp_path,
-        evidence_kind="gate.validation",
+        evidence_kind="host.execution",
         identity=identity,
         source_path=source,
         payload={
-            "validation_outcome": "failed",
-            "gate_report_sha256": "2" * 64,
-            "results_commit": "c" * 40,
+            "execution_outcome": "completed",
+            "host_archive_path": "queue/completed/build-next-ppe-A",
+            "error_class": None,
         },
         producer_sequence=2,
         final=True,
@@ -288,13 +288,13 @@ def test_regression_gap_conflict_and_post_final_mutation_fail_closed(tmp_path: P
     with pytest.raises(LifecycleEvidenceError, match="closed producer stream mutated"):
         emit_lifecycle_evidence(
             tmp_path,
-            evidence_kind="gate.validation",
+            evidence_kind="host.execution",
             identity=identity,
             source_path=source,
             payload={
-                "validation_outcome": "failed",
-                "gate_report_sha256": "2" * 64,
-                "results_commit": "d" * 40,
+                "execution_outcome": "completed",
+                "host_archive_path": "queue/completed/other",
+                "error_class": None,
             },
             producer_sequence=2,
             final=True,
@@ -304,18 +304,63 @@ def test_regression_gap_conflict_and_post_final_mutation_fail_closed(tmp_path: P
     with pytest.raises(LifecycleEvidenceError, match="closed producer stream mutated"):
         emit_lifecycle_evidence(
             tmp_path,
-            evidence_kind="gate.validation",
+            evidence_kind="host.execution",
             identity=identity,
             source_path=source,
             payload={
-                "validation_outcome": "failed",
-                "gate_report_sha256": "2" * 64,
-                "results_commit": "c" * 40,
+                "execution_outcome": "completed",
+                "host_archive_path": "queue/completed/build-next-ppe-A",
+                "error_class": None,
             },
             producer_sequence=1,
             final=True,
             closed_status="final",
             observed_at="2026-07-28T00:00:05Z",
+        )
+
+
+def test_initial_producer_sequence_must_start_at_one(tmp_path: Path) -> None:
+    identity = _identity()
+    source = _source(tmp_path)
+
+    with pytest.raises(LifecycleEvidenceError, match="producer sequence gap"):
+        emit_lifecycle_evidence(
+            tmp_path,
+            evidence_kind="gate.validation",
+            identity=identity,
+            source_path=source,
+            payload={
+                "validation_outcome": "failed",
+                "gate_report_sha256": "0" * 64,
+                "results_commit": "a" * 40,
+            },
+            producer_sequence=2,
+            final=True,
+            closed_status="final",
+            observed_at="2026-07-28T00:00:00Z",
+        )
+
+    assert not producer_head_path(
+        tmp_path,
+        evidence_kind="gate.validation",
+        identity=identity,
+    ).exists()
+
+    with pytest.raises(LifecycleEvidenceError, match="producer_sequence must be an integer"):
+        emit_lifecycle_evidence(
+            tmp_path,
+            evidence_kind="gate.validation",
+            identity=identity,
+            source_path=source,
+            payload={
+                "validation_outcome": "failed",
+                "gate_report_sha256": "0" * 64,
+                "results_commit": "a" * 40,
+            },
+            producer_sequence=True,
+            final=True,
+            closed_status="final",
+            observed_at="2026-07-28T00:00:00Z",
         )
 
 
@@ -345,7 +390,8 @@ def test_attempt_identity_from_job_yaml_requires_refill_metadata(tmp_path: Path)
 
     job["founder_build_next"]["refill_attempt"]["attempt_ordinal"] = "not-an-int"
     path.write_text(yaml.safe_dump(job, sort_keys=True), encoding="utf-8")
-    assert attempt_identity_from_job_yaml(path) is None
+    with pytest.raises(LifecycleEvidenceError, match="refill attempt identity is malformed"):
+        attempt_identity_from_job_yaml(path)
 
 
 def test_observational_failures_are_normalized(
@@ -645,6 +691,14 @@ def test_required_producer_outcomes_emit_verifiable_bytes_and_replay(
     closed_status: str,
 ) -> None:
     identity = _identity()
+    if kind == "dispatch.prepared":
+        payload = {
+            **payload,
+            "selected_work_item": {
+                **payload["selected_work_item"],  # type: ignore[index]
+                "work_item_source_sha256_v1": identity["work_item_digest"],
+            },
+        }
     source = _source(tmp_path, text=f"{kind}\n{closed_status}\n")
 
     first = emit_lifecycle_evidence(
@@ -675,3 +729,258 @@ def test_required_producer_outcomes_emit_verifiable_bytes_and_replay(
     assert envelope["payload"] == payload
     assert head["envelope_sha256"] == lifecycle.sha256_file(first.envelope_path)
     validate_producer_head(head, envelope=envelope, host_root=tmp_path)
+
+
+def test_canonical_semantic_payload_validation_rejects_impossible_combinations(
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    source = _source(tmp_path)
+    source_ref = SourceRef(
+        repository="git@example.invalid/repo.git",
+        ref="jobs",
+        commit="a" * 40,
+        path="jobs/approved/job.yaml",
+        sha256="b" * 64,
+    )
+    prepared = {
+        "selected_work_item": {
+            "pipeline_id": identity["pipeline_id"],
+            "work_item_id": identity["work_item_id"],
+            "work_item_source_sha256_v1": identity["work_item_digest"],
+        },
+        "generation_id": identity["generation_id"],
+        "dispatch_intent_sha256": "2" * 64,
+        "capacity_slot": {
+            "slot_id": "capacity-one",
+            "desired_capacity": 1,
+            "active_running": 0,
+            "active_queued": 0,
+        },
+    }
+    submitted = {
+        "feed_commit": source_ref.commit,
+        "feed_path": source_ref.path,
+        "submitted_job_sha256": source_ref.sha256,
+    }
+
+    cases = [
+        (
+            "dispatch.prepared",
+            {**prepared, "generation_id": "other-generation"},
+            True,
+            "final",
+            "attempt identity",
+            None,
+        ),
+        (
+            "dispatch.prepared",
+            {
+                **prepared,
+                "capacity_slot": {**prepared["capacity_slot"], "active_running": -1},
+            },
+            True,
+            "final",
+            "non-negative",
+            None,
+        ),
+        (
+            "dispatch.prepared",
+            {
+                **prepared,
+                "capacity_slot": {**prepared["capacity_slot"], "desired_capacity": 2},
+            },
+            True,
+            "final",
+            "desired_capacity",
+            None,
+        ),
+        (
+            "dispatch.submitted",
+            {**submitted, "feed_commit": "c" * 40},
+            True,
+            "final",
+            "source_ref",
+            source_ref,
+        ),
+        (
+            "host.execution",
+            {"execution_outcome": "imported"},
+            True,
+            "final",
+            "finality",
+            None,
+        ),
+        (
+            "host.execution",
+            {"execution_outcome": "completed"},
+            True,
+            "final",
+            "archive path",
+            None,
+        ),
+        (
+            "host.execution",
+            {"execution_outcome": "failed", "host_archive_path": "queue/failed/job"},
+            True,
+            "final",
+            "error_class",
+            None,
+        ),
+        (
+            "relay.result",
+            {
+                "relay_disposition": "relayed",
+                "relayed_commit": None,
+                "canonical_report_sha256": None,
+                "source_report_sha256": None,
+                "complete_patch_reconstruction": True,
+            },
+            True,
+            "final",
+            "relay.result requires",
+            None,
+        ),
+        (
+            "relay.result",
+            {
+                "relay_disposition": "not_applicable",
+                "relayed_commit": "a" * 40,
+                "canonical_report_sha256": "3" * 64,
+                "source_report_sha256": "4" * 64,
+                "complete_patch_reconstruction": True,
+            },
+            True,
+            "not_applicable",
+            "prohibits relay proof",
+            None,
+        ),
+        (
+            "gate.validation",
+            {
+                "validation_outcome": "passed",
+                "validation_state": "candidate_failed",
+                "gate_report_sha256": "6" * 64,
+                "results_commit": "b" * 40,
+            },
+            True,
+            "final",
+            "state is incompatible",
+            None,
+        ),
+        (
+            "gate.validation",
+            {
+                "validation_outcome": "failed",
+                "gate_report_sha256": "7" * 64,
+                "results_commit": "c" * 40,
+            },
+            False,
+            "open",
+            "finality",
+            None,
+        ),
+        (
+            "revision.disposition",
+            {"revision_disposition": "queued", "gate_report_sha256": "8" * 64},
+            True,
+            "final",
+            "descendant proof",
+            None,
+        ),
+        (
+            "revision.disposition",
+            {
+                "revision_disposition": "not_applicable",
+                "descendant_job_id": "child",
+                "gate_report_sha256": "9" * 64,
+                "jobs_commit": None,
+            },
+            True,
+            "not_applicable",
+            "prohibits job proof",
+            None,
+        ),
+        (
+            "revision.disposition",
+            {"revision_disposition": "exhausted", "gate_report_sha256": "9" * 64},
+            True,
+            "final",
+            "terminal reason",
+            None,
+        ),
+        (
+            "publication_review.disposition",
+            {
+                "publication_review_disposition": "drafted",
+                "draft_pr": "https://github.invalid/pull/1",
+                "product_branch": "autobuilder/job",
+                "product_commit": "e" * 40,
+                "results_commit": "f" * 40,
+            },
+            True,
+            "final",
+            "drafted reason",
+            None,
+        ),
+        (
+            "publication_review.disposition",
+            {
+                "publication_review_disposition": "rejected",
+                "reason_code": "publication_review.no_publication.not_required.v1",
+            },
+            True,
+            "final",
+            "incompatible",
+            None,
+        ),
+        (
+            "publication_review.disposition",
+            {"publication_review_disposition": "terminal_no_publication"},
+            True,
+            "final",
+            "accepted reason",
+            None,
+        ),
+        (
+            "publication_review.disposition",
+            {
+                "publication_review_disposition": "not_applicable",
+                "reason_code": "publication_review.drafted.v1",
+                "draft_pr": "https://github.invalid/pull/1",
+                "product_branch": "autobuilder/job",
+                "product_commit": "e" * 40,
+                "results_commit": "f" * 40,
+            },
+            True,
+            "not_applicable",
+            "prohibits terminal proof",
+            None,
+        ),
+        (
+            "publication_review.disposition",
+            {
+                "publication_review_disposition": "awaiting_review",
+                "draft_pr": "https://github.invalid/pull/1",
+            },
+            False,
+            "open",
+            "terminal",
+            None,
+        ),
+    ]
+
+    for index, (kind, payload, final, closed_status, match, ref) in enumerate(cases, start=1):
+        with pytest.raises(LifecycleEvidenceError, match=match):
+            emit_lifecycle_evidence(
+                tmp_path,
+                evidence_kind=kind,
+                identity=identity,
+                source_ref=ref,
+                source_path=None if ref is not None else source,
+                payload=payload,
+                producer_sequence=1,
+                final=final,
+                closed_status=closed_status,
+                observed_at=f"2026-07-28T00:00:{index:02d}Z",
+            )

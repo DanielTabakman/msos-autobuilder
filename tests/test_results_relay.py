@@ -5,6 +5,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import yaml
+
 from msos_autobuilder.results_relay import (
     ResultsRelay,
     ResultsRelayConfig,
@@ -67,6 +69,31 @@ def _write_host_config(host_root: Path, workspace_root: Path) -> None:
     )
 
 
+def _job_identity(job_id: str) -> dict[str, object]:
+    return {
+        "version": 1,
+        "job_id": job_id,
+        "founder_build_next": {
+            "pipeline_id": "ppe",
+            "work_item_id": "fixture-work",
+            "work_item_source_sha256_v1": "a" * 64,
+            "refill_attempt": {
+                "generation_id": "refill-12345678",
+                "attempt_ordinal": 1,
+                "retry_ordinal": 0,
+            },
+        },
+    }
+
+
+def _read_single_relay_head(host_root: Path) -> tuple[dict, dict]:
+    heads = list((host_root / "state" / "relay-evidence" / "heads" / "result").glob("*.json"))
+    assert len(heads) == 1
+    head = json.loads(heads[0].read_text(encoding="utf-8"))
+    envelope = json.loads((host_root / head["envelope_path"]).read_text(encoding="utf-8"))
+    return head, envelope
+
+
 def test_complete_patch_includes_untracked_files_without_touching_real_index(
     tmp_path: Path,
 ) -> None:
@@ -93,7 +120,10 @@ def test_results_relay_reconstructs_and_pushes_complete_patch(tmp_path: Path) ->
 
     job_dir = host_root / "queue" / "completed" / "job-1"
     job_dir.mkdir(parents=True)
-    (job_dir / "job.yaml").write_text("version: 1\njob_id: job-1\n", encoding="utf-8")
+    (job_dir / "job.yaml").write_text(
+        yaml.safe_dump(_job_identity("job-1"), sort_keys=False),
+        encoding="utf-8",
+    )
     report = {
         "version": 1,
         "job_id": "job-1",
@@ -153,6 +183,77 @@ def test_results_relay_reconstructs_and_pushes_complete_patch(tmp_path: Path) ->
     assert relayed_report["patches"][0]["changed_paths"] == ["README.md", "new-contract.py"]
     assert "diff --git a/new-contract.py b/new-contract.py" in patch
     assert (result_root / "source-report.json").exists()
+
+    head, envelope = _read_single_relay_head(host_root)
+    assert head["producer_sequence"] == 1
+    assert envelope["payload"] == {
+        "relay_disposition": "relayed",
+        "relayed_commit": _git(review, "rev-parse", "HEAD"),
+        "canonical_report_sha256": integrity["corrected_report_sha256"],
+        "source_report_sha256": integrity["source_report_sha256"],
+        "complete_patch_reconstruction": True,
+    }
+    source_path = host_root / envelope["source"]["path"]
+    staging_report = host_root / "state" / "results-relay-staging" / "job-1" / "report.json"
+    assert source_path.read_bytes() == staging_report.read_bytes()
+    assert envelope["source_sha256"] == hashlib.sha256(source_path.read_bytes()).hexdigest()
+    assert head["envelope_sha256"] == hashlib.sha256(
+        (host_root / head["envelope_path"]).read_bytes()
+    ).hexdigest()
+
+    assert ResultsRelay(config).run_once() == ()
+    assert (host_root / head["envelope_path"]).read_text(encoding="utf-8") == json.dumps(
+        envelope,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ) + "\n"
+
+
+def test_results_relay_emits_not_applicable_for_host_failure(tmp_path: Path) -> None:
+    host_root = tmp_path / "host"
+    workspace_root = tmp_path / "workspaces"
+    _write_host_config(host_root, workspace_root)
+    failed_dir = host_root / "queue" / "failed" / "job-failed"
+    failed_dir.mkdir(parents=True)
+    (failed_dir / "job.yaml").write_text(
+        yaml.safe_dump(_job_identity("job-failed"), sort_keys=False),
+        encoding="utf-8",
+    )
+    error = {
+        "job_id": "job-failed",
+        "outcome": "failed",
+        "error_type": "HostJobError",
+        "message": "source mismatch",
+        "recorded_at": "2026-07-29T00:00:00+00:00",
+        "publication_enabled": False,
+    }
+    (failed_dir / "error.json").write_text(json.dumps(error, sort_keys=True), encoding="utf-8")
+    remote = _create_results_remote(tmp_path)
+    config = ResultsRelayConfig(
+        host_root=host_root,
+        repo_url=str(remote),
+        branch="results",
+        machine_id="test-host",
+        poll_seconds=1,
+    )
+
+    assert ResultsRelay(config).run_once() == ()
+
+    head, envelope = _read_single_relay_head(host_root)
+    assert head["producer_sequence"] == 1
+    assert envelope["closed_status"] == "not_applicable"
+    assert envelope["payload"] == {
+        "relay_disposition": "not_applicable",
+        "relayed_commit": None,
+        "canonical_report_sha256": None,
+        "source_report_sha256": None,
+        "complete_patch_reconstruction": False,
+    }
+    assert envelope["source"]["path"] == "queue/failed/job-failed/error.json"
+    assert envelope["source_sha256"] == hashlib.sha256(
+        (failed_dir / "error.json").read_bytes()
+    ).hexdigest()
 
 
 def test_results_relay_rejects_workspace_drift(tmp_path: Path) -> None:

@@ -237,7 +237,12 @@ def _generic_contract(
     )
 
 
-def _generic_job_yaml(job_id: str, source_head: str, changed_paths: tuple[str, ...], contract: dict) -> str:
+def _generic_job_yaml(
+    job_id: str,
+    source_head: str,
+    changed_paths: tuple[str, ...],
+    contract: dict,
+) -> str:
     return yaml.safe_dump(
         {
             "version": 1,
@@ -247,6 +252,7 @@ def _generic_job_yaml(job_id: str, source_head: str, changed_paths: tuple[str, .
                 "version": 1,
                 "pipeline_id": "ppe",
                 "work_item_id": "fixture-work",
+                "work_item_source_sha256_v1": "a" * 64,
                 "repository": "DanielTabakman/Probability-prediction-engine",
                 "registered_adapter": "ppe_operator",
                 "source": {"commit": source_head},
@@ -259,11 +265,24 @@ def _generic_job_yaml(job_id: str, source_head: str, changed_paths: tuple[str, .
                     "merge_enabled": False,
                     "product_main_write_enabled": False,
                 },
+                "refill_attempt": {
+                    "generation_id": "refill-12345678",
+                    "attempt_ordinal": 1,
+                    "retry_ordinal": 0,
+                },
             },
             "candidate_validation": contract,
         },
         sort_keys=False,
     )
+
+
+def _read_gate_evidence(host_root: Path) -> tuple[dict, dict]:
+    heads = list((host_root / "state" / "gate-evidence" / "heads" / "validation").glob("*.json"))
+    assert len(heads) == 1
+    head = json.loads(heads[0].read_text(encoding="utf-8"))
+    envelope = json.loads((host_root / head["envelope_path"]).read_text(encoding="utf-8"))
+    return head, envelope
 
 
 def _write_config(
@@ -588,6 +607,23 @@ def test_candidate_gate_discovers_generic_build_next_contract(tmp_path: Path) ->
     assert ".msos-candidate-env" in report["candidate_environment"]["path_prepend"].replace("\\", "/")
     assert report["candidate_environment_removed"] is True
     assert all(check["required"] is True for check in [*report["bootstrap"], *report["checks"]])
+    ledger = json.loads(
+        (tmp_path / "host" / "state" / "candidate-gate-seen.json").read_text(encoding="utf-8")
+    )
+    head, envelope = _read_gate_evidence(tmp_path / "host")
+    source_path = tmp_path / "host" / envelope["source"]["path"]
+    assert head["producer_sequence"] == 1
+    assert envelope["payload"] == {
+        "validation_outcome": "passed",
+        "validation_state": "candidate_passed",
+        "validation_contract_sha256": report["validation_contract_sha256"],
+        "gate_report_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+        "results_commit": ledger[job_id]["results_commit"],
+    }
+    assert envelope["source_sha256"] == hashlib.sha256(source_path.read_bytes()).hexdigest()
+    assert head["envelope_sha256"] == hashlib.sha256(
+        (tmp_path / "host" / head["envelope_path"]).read_bytes()
+    ).hexdigest()
     assert _pip_freeze() == packages_before
 
 
@@ -669,6 +705,20 @@ def test_generic_dependency_hash_rejects_candidate_dependency_content_drift(
     assert "dependency source SHA-256" in report["errors"][0]["message"]
     assert report["bootstrap"] == []
     assert report["checks"] == []
+    ledger = json.loads(
+        (tmp_path / "host" / "state" / "candidate-gate-seen.json").read_text(encoding="utf-8")
+    )
+    head, envelope = _read_gate_evidence(tmp_path / "host")
+    source_path = tmp_path / "host" / envelope["source"]["path"]
+    assert head["producer_sequence"] == 1
+    assert envelope["payload"] == {
+        "validation_outcome": "failed",
+        "validation_state": "candidate_failed",
+        "validation_contract_sha256": report["validation_contract_sha256"],
+        "gate_report_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+        "results_commit": ledger[job_id]["results_commit"],
+    }
+    assert envelope["source_sha256"] == hashlib.sha256(source_path.read_bytes()).hexdigest()
 
 
 def test_candidate_gate_report_publication_failure_records_job_identity(

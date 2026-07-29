@@ -444,12 +444,14 @@ def attempt_identity_from_job(job: Mapping[str, Any]) -> dict[str, Any] | None:
     founder = job.get("founder_build_next")
     if not isinstance(founder, Mapping):
         return None
+    if "refill_attempt" not in founder:
+        return None
     refill = founder.get("refill_attempt")
     if not isinstance(refill, Mapping):
-        return None
+        raise LifecycleEvidenceError("refill attempt metadata is malformed")
     digest = founder.get(WORK_ITEM_DIGEST_CONTRACT)
     if not isinstance(digest, str) or not digest:
-        return None
+        raise LifecycleEvidenceError("refill attempt identity is missing work item digest")
     try:
         return attempt_identity(
             pipeline_id=str(founder.get("pipeline_id") or ""),
@@ -461,7 +463,7 @@ def attempt_identity_from_job(job: Mapping[str, Any]) -> dict[str, Any] | None:
             retry_ordinal=int(refill.get("retry_ordinal") or 0),
         )
     except (TypeError, ValueError, LifecycleEvidenceError):
-        return None
+        raise LifecycleEvidenceError("refill attempt identity is malformed") from None
 
 
 def attempt_identity_from_job_yaml(path: Path) -> dict[str, Any] | None:
@@ -557,6 +559,8 @@ def emit_lifecycle_evidence(
     validate_attempt_identity(identity)
     if not _is_canonical_timestamp(observed_at):
         raise LifecycleEvidenceError("observed_at must be a stable source-recorded value")
+    if not isinstance(producer_sequence, int) or isinstance(producer_sequence, bool):
+        raise LifecycleEvidenceError("producer_sequence must be an integer")
     if producer_sequence < 1:
         raise LifecycleEvidenceError("producer_sequence must be positive")
     if closed_status not in {"open", "final", "not_applicable"}:
@@ -674,6 +678,8 @@ def _replace_head(path: Path, head: Mapping[str, Any]) -> None:
             raise LifecycleEvidenceError("producer head is malformed")
         validate_producer_head(current)
         _validate_head_update(current, head)
+    elif head.get("producer_sequence") != 1:
+        raise LifecycleEvidenceError("evidence_conflict: producer sequence gap")
     data = canonical_json_bytes(dict(head)) + b"\n"
     with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as handle:
         temp_path = Path(handle.name)
@@ -699,7 +705,12 @@ def _validate_head_update(current: Mapping[str, Any], new: Mapping[str, Any]) ->
             raise LifecycleEvidenceError("producer head ownership conflict")
     current_sequence = current.get("producer_sequence")
     new_sequence = new.get("producer_sequence")
-    if not isinstance(current_sequence, int) or not isinstance(new_sequence, int):
+    if (
+        not isinstance(current_sequence, int)
+        or isinstance(current_sequence, bool)
+        or not isinstance(new_sequence, int)
+        or isinstance(new_sequence, bool)
+    ):
         raise LifecycleEvidenceError("producer head sequence is malformed")
     if current.get("closed_status") in {"final", "not_applicable"}:
         if all(current.get(field) == new.get(field) for field in _HEAD_COMPARE_FIELDS):
@@ -797,7 +808,11 @@ def validate_lifecycle_evidence_envelope(envelope: Mapping[str, Any]) -> None:
     validate_attempt_identity(_mapping(envelope.get("attempt_identity"), "attempt_identity"))
     if envelope.get("identity_digest") != identity_digest(envelope["attempt_identity"]):
         raise LifecycleEvidenceError("identity digest mismatch")
-    if not isinstance(envelope.get("producer_sequence"), int) or envelope["producer_sequence"] < 1:
+    if (
+        not isinstance(envelope.get("producer_sequence"), int)
+        or isinstance(envelope.get("producer_sequence"), bool)
+        or envelope["producer_sequence"] < 1
+    ):
         raise LifecycleEvidenceError("producer sequence must be positive")
     if not _is_lower_hex(envelope.get("evidence_id"), length=32):
         raise LifecycleEvidenceError("evidence_id is malformed")
@@ -826,8 +841,10 @@ def validate_lifecycle_evidence_envelope(envelope: Mapping[str, Any]) -> None:
     _validate_payload(
         str(kind),
         _mapping(envelope.get("payload"), "payload"),
-        bool(envelope["final"]),
-        str(envelope["closed_status"]),
+        identity=envelope["attempt_identity"],
+        source=source,
+        final=bool(envelope["final"]),
+        closed_status=str(envelope["closed_status"]),
     )
 
 
@@ -862,7 +879,11 @@ def validate_producer_head(
         raise LifecycleEvidenceError("producer head identity digest mismatch")
     if head.get("producer") != PRODUCER_OWNERS[str(kind)]:
         raise LifecycleEvidenceError("producer head ownership conflict")
-    if not isinstance(head.get("producer_sequence"), int) or head["producer_sequence"] < 1:
+    if (
+        not isinstance(head.get("producer_sequence"), int)
+        or isinstance(head.get("producer_sequence"), bool)
+        or head["producer_sequence"] < 1
+    ):
         raise LifecycleEvidenceError("producer head sequence is malformed")
     if not _is_lower_hex(head.get("evidence_id"), length=32):
         raise LifecycleEvidenceError("producer head evidence_id is malformed")
@@ -914,6 +935,9 @@ def _validate_final_closed(final: Any, closed_status: Any) -> None:
 def _validate_payload(
     kind: str,
     payload: Mapping[str, Any],
+    *,
+    identity: Mapping[str, Any],
+    source: Mapping[str, Any],
     final: bool,
     closed_status: str,
 ) -> None:
@@ -945,7 +969,7 @@ def _validate_payload(
         }:
             if value is not None and not _is_git_commit(value):
                 raise LifecycleEvidenceError(f"{key} must be a Git commit SHA or null")
-        if key in {"feed_path"}:
+        if key in {"feed_path", "host_archive_path"} and value is not None:
             _validate_canonical_relative_path(value, label=key)
         if key in {"complete_patch_reconstruction"} and not isinstance(value, bool):
             raise LifecycleEvidenceError(f"{key} must be a boolean")
@@ -972,6 +996,40 @@ def _validate_payload(
         for key in ("desired_capacity", "active_running", "active_queued"):
             if not isinstance(capacity[key], int) or isinstance(capacity[key], bool):
                 raise LifecycleEvidenceError(f"capacity_slot.{key} must be an integer")
+            if capacity[key] < 0:
+                raise LifecycleEvidenceError(f"capacity_slot.{key} must be non-negative")
+        if capacity["desired_capacity"] != 1:
+            raise LifecycleEvidenceError("capacity_slot.desired_capacity must be 1")
+        if (
+            selected["pipeline_id"] != identity["pipeline_id"]
+            or selected["work_item_id"] != identity["work_item_id"]
+            or selected["work_item_source_sha256_v1"] != identity["work_item_digest"]
+            or payload["generation_id"] != identity["generation_id"]
+        ):
+            raise LifecycleEvidenceError(
+                "dispatch.prepared payload does not match attempt identity"
+            )
+        _require_finality(kind, final, closed_status, final_expected=True, status="final")
+    elif kind == "dispatch.submitted":
+        if source.get("type") != "git_ref":
+            raise LifecycleEvidenceError("dispatch.submitted source must be a git_ref")
+        if (
+            payload["feed_commit"] != source.get("commit")
+            or payload["feed_path"] != source.get("path")
+            or payload["submitted_job_sha256"] != source.get("sha256")
+        ):
+            raise LifecycleEvidenceError("dispatch.submitted payload does not match source_ref")
+        _require_finality(kind, final, closed_status, final_expected=True, status="final")
+    elif kind == "host.execution":
+        _validate_host_execution_payload(payload, final, closed_status)
+    elif kind == "relay.result":
+        _validate_relay_result_payload(payload, final, closed_status)
+    elif kind == "gate.validation":
+        _validate_gate_validation_payload(payload, final, closed_status)
+    elif kind == "revision.disposition":
+        _validate_revision_disposition_payload(payload, final, closed_status)
+    elif kind == "publication_review.disposition":
+        _validate_publication_review_payload(payload, final, closed_status)
     reason = payload.get("reason_code")
     if reason is not None:
         if not isinstance(reason, str) or reason not in TERMINAL_REASON_CODES_V1:
@@ -985,6 +1043,224 @@ def _validate_payload(
             raise LifecycleEvidenceError("terminal reason code is incompatible")
     if closed_status == "not_applicable" and not final:
         raise LifecycleEvidenceError("not_applicable streams must be final")
+
+
+def _require_finality(
+    kind: str,
+    final: bool,
+    closed_status: str,
+    *,
+    final_expected: bool,
+    status: str,
+) -> None:
+    if final is not final_expected or closed_status != status:
+        raise LifecycleEvidenceError(f"{kind} finality is incompatible with outcome")
+
+
+def _null_or_absent(payload: Mapping[str, Any], *fields: str) -> bool:
+    return all(payload.get(field) is None for field in fields)
+
+
+def _non_empty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+def _validate_host_execution_payload(
+    payload: Mapping[str, Any],
+    final: bool,
+    closed_status: str,
+) -> None:
+    outcome = payload["execution_outcome"]
+    if outcome in {"imported", "pending", "running"}:
+        _require_finality(
+            "host.execution",
+            final,
+            closed_status,
+            final_expected=False,
+            status="open",
+        )
+        if not _null_or_absent(payload, "host_archive_path", "error_class"):
+            raise LifecycleEvidenceError("open host.execution outcomes prohibit terminal proof")
+        return
+    _require_finality("host.execution", final, closed_status, final_expected=True, status="final")
+    if not _non_empty_string(payload.get("host_archive_path")):
+        raise LifecycleEvidenceError("terminal host.execution requires archive path")
+    if outcome == "completed":
+        if payload.get("error_class") is not None:
+            raise LifecycleEvidenceError("completed host.execution prohibits error_class")
+        return
+    if not _non_empty_string(payload.get("error_class")):
+        raise LifecycleEvidenceError("failed host.execution requires error_class")
+
+
+def _validate_relay_result_payload(
+    payload: Mapping[str, Any],
+    final: bool,
+    closed_status: str,
+) -> None:
+    disposition = payload["relay_disposition"]
+    if disposition == "relayed":
+        _require_finality("relay.result", final, closed_status, final_expected=True, status="final")
+        if (
+            not _is_git_commit(payload.get("relayed_commit"))
+            or not _is_sha256(payload.get("canonical_report_sha256"))
+            or not _is_sha256(payload.get("source_report_sha256"))
+            or payload.get("complete_patch_reconstruction") is not True
+        ):
+            raise LifecycleEvidenceError("relayed relay.result requires commit/report proof")
+        return
+    _require_finality(
+        "relay.result",
+        final,
+        closed_status,
+        final_expected=True,
+        status="not_applicable",
+    )
+    if not _null_or_absent(
+        payload,
+        "relayed_commit",
+        "canonical_report_sha256",
+        "source_report_sha256",
+    ) or payload.get("complete_patch_reconstruction") is not False:
+        raise LifecycleEvidenceError("not_applicable relay.result prohibits relay proof")
+
+
+def _validate_gate_validation_payload(
+    payload: Mapping[str, Any],
+    final: bool,
+    closed_status: str,
+) -> None:
+    _require_finality("gate.validation", final, closed_status, final_expected=True, status="final")
+    outcome = payload["validation_outcome"]
+    if outcome in {"passed", "failed"}:
+        if not _is_sha256(payload.get("gate_report_sha256")) or not _is_git_commit(
+            payload.get("results_commit")
+        ):
+            raise LifecycleEvidenceError("gate.validation requires report and results proof")
+        state = payload.get("validation_state")
+        if state is not None:
+            expected = f"candidate_{outcome}"
+            if state != expected:
+                raise LifecycleEvidenceError("gate.validation state is incompatible")
+
+
+def _validate_revision_disposition_payload(
+    payload: Mapping[str, Any],
+    final: bool,
+    closed_status: str,
+) -> None:
+    disposition = payload["revision_disposition"]
+    if disposition == "queued":
+        _require_finality(
+            "revision.disposition", final, closed_status, final_expected=True, status="final"
+        )
+        if (
+            not _non_empty_string(payload.get("descendant_job_id"))
+            or not _is_sha256(payload.get("gate_report_sha256"))
+            or not _is_git_commit(payload.get("jobs_commit"))
+        ):
+            raise LifecycleEvidenceError("queued revision.disposition requires descendant proof")
+        if payload.get("reason_code") is not None:
+            raise LifecycleEvidenceError("queued revision.disposition prohibits reason_code")
+    elif disposition == "not_applicable":
+        _require_finality(
+            "revision.disposition",
+            final,
+            closed_status,
+            final_expected=True,
+            status="not_applicable",
+        )
+        if not _null_or_absent(payload, "descendant_job_id", "jobs_commit", "reason_code"):
+            raise LifecycleEvidenceError("not_applicable revision.disposition prohibits job proof")
+        if not _is_sha256(payload.get("gate_report_sha256")):
+            raise LifecycleEvidenceError("not_applicable revision.disposition requires gate proof")
+    elif disposition == "exhausted":
+        _require_finality(
+            "revision.disposition", final, closed_status, final_expected=True, status="final"
+        )
+        reason = payload.get("reason_code")
+        if not (isinstance(reason, str) and reason.startswith("revision.exhausted.")):
+            raise LifecycleEvidenceError("exhausted revision.disposition requires terminal reason")
+    else:
+        _require_finality(
+            "revision.disposition", final, closed_status, final_expected=True, status="final"
+        )
+
+
+def _validate_publication_review_payload(
+    payload: Mapping[str, Any],
+    final: bool,
+    closed_status: str,
+) -> None:
+    disposition = payload["publication_review_disposition"]
+    terminal_fields = (
+        "reason_code",
+        "draft_pr",
+        "product_branch",
+        "product_commit",
+        "results_commit",
+    )
+    if disposition == "awaiting_review":
+        _require_finality(
+            "publication_review.disposition",
+            final,
+            closed_status,
+            final_expected=False,
+            status="open",
+        )
+        if not _null_or_absent(payload, *terminal_fields):
+            raise LifecycleEvidenceError("awaiting_review publication proof is terminal")
+    elif disposition == "drafted":
+        _require_finality(
+            "publication_review.disposition",
+            final,
+            closed_status,
+            final_expected=True,
+            status="final",
+        )
+        if payload.get("reason_code") != "publication_review.drafted.v1":
+            raise LifecycleEvidenceError("drafted publication_review requires drafted reason")
+        if (
+            not _non_empty_string(payload.get("draft_pr"))
+            or not _non_empty_string(payload.get("product_branch"))
+            or not _is_git_commit(payload.get("product_commit"))
+            or not _is_git_commit(payload.get("results_commit"))
+        ):
+            raise LifecycleEvidenceError("drafted publication_review requires publication proof")
+    elif disposition in {"rejected", "terminal_no_publication"}:
+        _require_finality(
+            "publication_review.disposition",
+            final,
+            closed_status,
+            final_expected=True,
+            status="final",
+        )
+        reason = payload.get("reason_code")
+        if not isinstance(reason, str) or reason not in TERMINAL_REASON_CODES_V1:
+            raise LifecycleEvidenceError("terminal publication_review requires accepted reason")
+        expected = TERMINAL_REASON_CODES_V1[reason]["canonical_outcome"].split("=")[-1]
+        if expected != disposition:
+            raise LifecycleEvidenceError("terminal publication_review reason is incompatible")
+    elif disposition == "not_applicable":
+        _require_finality(
+            "publication_review.disposition",
+            final,
+            closed_status,
+            final_expected=True,
+            status="not_applicable",
+        )
+        if not _null_or_absent(payload, *terminal_fields):
+            raise LifecycleEvidenceError(
+                "not_applicable publication_review prohibits terminal proof"
+            )
+    else:
+        _require_finality(
+            "publication_review.disposition",
+            final,
+            closed_status,
+            final_expected=True,
+            status="final",
+        )
 
 
 def _mapping(value: Any, label: str) -> Mapping[str, Any]:

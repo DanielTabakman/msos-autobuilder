@@ -626,54 +626,65 @@ def sync_git_job_feed(config: PersistentHostConfig, paths: HostPaths) -> tuple[s
         destination = paths.pending / f"{job.job_id}.yaml"
         _atomic_write_text(destination, text)
         ledger[job.job_id] = job.content_sha256
-        identity = attempt_identity_from_job_yaml(destination)
-        if identity is not None:
-            source_ref = SourceRef(
-                repository=feed.repo_url,
-                ref=feed.branch,
-                commit=feed_commit,
-                path=(Path(feed.relative_path) / f"{job.job_id}.yaml").as_posix(),
-                sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            )
-            _emit_host_evidence(
-                config.host_root,
-                identity=identity,
-                source_ref=source_ref,
-                payload={"execution_outcome": "imported"},
-                producer_sequence=1,
-                final=False,
-                closed_status="open",
-                observed_at=feed_recorded_at,
-                primary_outcome={"outcome": "imported", "job_id": job.job_id},
-            )
-            try:
-                pending_receipt, pending_observed_at = _write_host_transition_receipt(
-                    paths,
-                    outcome="pending",
-                    job_id=job.job_id,
-                    text=text,
-                    observed_at=feed_recorded_at,
+        identity = None
+        try:
+            identity = attempt_identity_from_job_yaml(destination)
+            if identity is not None:
+                source_ref = SourceRef(
+                    repository=feed.repo_url,
+                    ref=feed.branch,
+                    commit=feed_commit,
+                    path=(Path(feed.relative_path) / f"{job.job_id}.yaml").as_posix(),
+                    sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
                 )
                 _emit_host_evidence(
                     config.host_root,
                     identity=identity,
-                    source_path=pending_receipt,
-                    payload={"execution_outcome": "pending"},
-                    producer_sequence=2,
+                    source_ref=source_ref,
+                    payload={"execution_outcome": "imported"},
+                    producer_sequence=1,
                     final=False,
                     closed_status="open",
-                    observed_at=pending_observed_at,
-                    primary_outcome={"outcome": "pending", "job_id": job.job_id},
+                    observed_at=feed_recorded_at,
+                    primary_outcome={"outcome": "imported", "job_id": job.job_id},
                 )
-            except Exception as exc:
-                record_producer_evidence_error(
-                    config.host_root,
-                    producer="persistent_host",
-                    evidence_kind="host.execution",
-                    error=exc,
-                    identity=identity,
-                    primary_outcome={"outcome": "pending", "job_id": job.job_id},
-                )
+                try:
+                    pending_receipt, pending_observed_at = _write_host_transition_receipt(
+                        paths,
+                        outcome="pending",
+                        job_id=job.job_id,
+                        text=text,
+                        observed_at=feed_recorded_at,
+                    )
+                    _emit_host_evidence(
+                        config.host_root,
+                        identity=identity,
+                        source_path=pending_receipt,
+                        payload={"execution_outcome": "pending"},
+                        producer_sequence=2,
+                        final=False,
+                        closed_status="open",
+                        observed_at=pending_observed_at,
+                        primary_outcome={"outcome": "pending", "job_id": job.job_id},
+                    )
+                except Exception as exc:
+                    record_producer_evidence_error(
+                        config.host_root,
+                        producer="persistent_host",
+                        evidence_kind="host.execution",
+                        error=exc,
+                        identity=identity,
+                        primary_outcome={"outcome": "pending", "job_id": job.job_id},
+                    )
+        except Exception as exc:
+            record_producer_evidence_error(
+                config.host_root,
+                producer="persistent_host",
+                evidence_kind="host.execution",
+                error=exc,
+                identity=identity,
+                primary_outcome={"outcome": "imported", "job_id": job.job_id},
+            )
         imported.append(job.job_id)
     _atomic_write_json(paths.feed_ledger, ledger)
     return tuple(imported)
@@ -909,23 +920,35 @@ class PersistentHost:
             },
         )
         os.replace(staging, destination)
-        identity = attempt_identity_from_job_yaml(destination / "job.yaml")
-        if identity is not None:
-            _emit_host_evidence(
+        identity = None
+        try:
+            identity = attempt_identity_from_job_yaml(destination / "job.yaml")
+            if identity is not None:
+                error_recorded_at = json.loads(
+                    (destination / "error.json").read_text(encoding="utf-8")
+                )["recorded_at"]
+                _emit_host_evidence(
+                    self.config.host_root,
+                    identity=identity,
+                    source_path=destination / "error.json",
+                    payload={
+                        "execution_outcome": outcome,
+                        "host_archive_path": _host_relative(self.config.host_root, destination),
+                        "error_class": type(error).__name__,
+                    },
+                    producer_sequence=4,
+                    final=True,
+                    closed_status="final",
+                    observed_at=error_recorded_at,
+                    primary_outcome={"outcome": outcome, "job_id": job_id},
+                )
+        except Exception as exc:
+            record_producer_evidence_error(
                 self.config.host_root,
+                producer="persistent_host",
+                evidence_kind="host.execution",
+                error=exc,
                 identity=identity,
-                source_path=destination / "error.json",
-                payload={
-                    "execution_outcome": outcome,
-                    "host_archive_path": _host_relative(self.config.host_root, destination),
-                    "error_class": type(error).__name__,
-                },
-                producer_sequence=4,
-                final=True,
-                closed_status="final",
-                observed_at=json.loads((destination / "error.json").read_text(encoding="utf-8"))[
-                    "recorded_at"
-                ],
                 primary_outcome={"outcome": outcome, "job_id": job_id},
             )
         return destination
@@ -955,9 +978,10 @@ class PersistentHost:
                 os.replace(pending_path, running_path)
             except FileNotFoundError:
                 continue
-            identity = attempt_identity_from_job_yaml(running_path)
-            if identity is not None:
-                try:
+            identity = None
+            try:
+                identity = attempt_identity_from_job_yaml(running_path)
+                if identity is not None:
                     running_observed_at = _timestamp()
                     running_receipt, stored_observed_at = _write_host_transition_receipt(
                         self.paths,
@@ -977,15 +1001,15 @@ class PersistentHost:
                         observed_at=stored_observed_at,
                         primary_outcome={"outcome": "running", "job_id": job.job_id},
                     )
-                except Exception as exc:
-                    record_producer_evidence_error(
-                        self.config.host_root,
-                        producer="persistent_host",
-                        evidence_kind="host.execution",
-                        error=exc,
-                        identity=identity,
-                        primary_outcome={"outcome": "running", "job_id": job.job_id},
-                    )
+            except Exception as exc:
+                record_producer_evidence_error(
+                    self.config.host_root,
+                    producer="persistent_host",
+                    evidence_kind="host.execution",
+                    error=exc,
+                    identity=identity,
+                    primary_outcome={"outcome": "running", "job_id": job.job_id},
+                )
             return running_path, job
         return None
 
@@ -1098,21 +1122,32 @@ class PersistentHost:
         _atomic_write_json(staging / "report.json", report_payload)
         running_path.unlink()
         os.replace(staging, destination)
-        identity = attempt_identity_from_job_yaml(destination / "job.yaml")
-        if identity is not None:
-            _emit_host_evidence(
+        identity = None
+        try:
+            identity = attempt_identity_from_job_yaml(destination / "job.yaml")
+            if identity is not None:
+                _emit_host_evidence(
+                    self.config.host_root,
+                    identity=identity,
+                    source_path=destination / "report.json",
+                    payload={
+                        "execution_outcome": "completed",
+                        "host_archive_path": _host_relative(self.config.host_root, destination),
+                        "error_class": None,
+                    },
+                    producer_sequence=4,
+                    final=True,
+                    closed_status="final",
+                    observed_at=str(report_payload["completed_at"]),
+                    primary_outcome={"outcome": "completed", "job_id": job.job_id},
+                )
+        except Exception as exc:
+            record_producer_evidence_error(
                 self.config.host_root,
+                producer="persistent_host",
+                evidence_kind="host.execution",
+                error=exc,
                 identity=identity,
-                source_path=destination / "report.json",
-                payload={
-                    "execution_outcome": "completed",
-                    "host_archive_path": _host_relative(self.config.host_root, destination),
-                    "error_class": None,
-                },
-                producer_sequence=4,
-                final=True,
-                closed_status="final",
-                observed_at=str(report_payload["completed_at"]),
                 primary_outcome={"outcome": "completed", "job_id": job.job_id},
             )
         return destination

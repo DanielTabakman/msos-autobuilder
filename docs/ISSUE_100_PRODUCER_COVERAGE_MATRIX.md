@@ -29,6 +29,22 @@ Issue #50 runtime changes, or Issue #101 reduction.
 | `publication_review.disposition` | blocked/missing/conflict | `blocked` | service error marker | Issue #101 dependency for reduction semantics |
 | `publication_review.disposition` | not-applicable after failed validation/revision path | `validation_recorded` / `revision_recorded` | immutable host-root `state/publisher-evidence/sources/not-applicable/<machine>/<job>.<gate-sha>.json` receipt; does not write `state/controlled-publisher-seen.json` | implemented for failed gate reports |
 
+Shared producer-head validation now enforces contiguous committed streams from the first head:
+an absent head accepts only `producer_sequence == 1`, sequence booleans are rejected as
+malformed, and an orphan immutable envelope is not treated as committed until a producer head
+references it. Host feed integration has regression coverage where imported sequence 1 evidence
+fails, pending sequence 2 writes only orphan evidence, and no producer head is published.
+
+Shared envelope validation is canonical-semantic, not only syntactic. The validator binds
+`dispatch.prepared` selected identity and capacity-one proof to `attempt_identity`, binds
+`dispatch.submitted` feed commit/path/hash to `source_ref`, and rejects outcome/finality/proof
+combinations that cannot represent a valid v1 producer event for host, relay, gate, revision,
+and publication review evidence.
+
+Canonical identity extraction returns `None` only when refill lifecycle markers are genuinely
+absent. If refill markers are present but malformed, producer hooks preserve the committed
+primary result and write a best-effort `producer-evidence-errors` diagnostic.
+
 Producer evidence failures after committed primary side effects follow one shared policy:
 preserve the primary operation, write `state/producer-evidence-errors/<producer>/...json`,
 surface the evidence gap there, and do not reclassify or retry the primary action.

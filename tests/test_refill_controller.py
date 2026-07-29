@@ -2907,6 +2907,96 @@ def test_failed_source_gate_without_revision_ledger_blocks_without_b(tmp_path: P
     assert generation["last_attempt_classification"]["stage"] == "revision_disposition_missing"
 
 
+def test_failed_validation_publisher_not_applicable_receipt_is_not_legacy_terminal(
+    tmp_path: Path,
+) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
+    feed = _feed_repo(tmp_path / "feed-work")
+    config = _refill_config(tmp_path, ppe=ppe, feed=feed)
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _archive_job_yaml_from_feed(config, job_id)
+    _write_gate_report(config, job_id, status="failed", state="candidate_failed")
+    assert config.build_next.host_root is not None
+    receipt = (
+        config.build_next.host_root
+        / "state"
+        / "publisher-evidence"
+        / "sources"
+        / "not-applicable"
+        / "test-host"
+        / f"{job_id}.{'1' * 64}.json"
+    )
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "receipt_type": "publication_review.disposition.not_applicable.source",
+                "source_job_id": job_id,
+                "gate_report_sha256": "1" * 64,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert report.status == "BLOCKED"
+    assert report.build_next_receipt is None
+    assert generation is not None
+    assert generation["item_scoped_terminal_exclusions"] == []
+    assert generation["last_attempt_classification"]["stage"] == "revision_disposition_missing"
+    assert not (config.build_next.host_root / "state" / "controlled-publisher-seen.json").exists()
+
+
+def test_passed_validation_revision_not_applicable_receipt_preserves_awaiting_review(
+    tmp_path: Path,
+) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
+    feed = _feed_repo(tmp_path / "feed-work")
+    config = _refill_config(tmp_path, ppe=ppe, feed=feed)
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _archive_job_yaml_from_feed(config, job_id)
+    _write_gate_report(config, job_id, status="passed", state="candidate_passed")
+    assert config.build_next.host_root is not None
+    receipt = (
+        config.build_next.host_root
+        / "state"
+        / "revision-evidence"
+        / "sources"
+        / "not-applicable"
+        / "test-host"
+        / f"{job_id}.{'2' * 64}.json"
+    )
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "receipt_type": "revision.disposition.not_applicable.source",
+                "source_job_id": job_id,
+                "gate_report_sha256": "2" * 64,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert report.awaiting_review == {"unknown": 1}
+    assert generation is not None
+    assert generation["last_attempt_classification"]["stage"] == "publisher_review"
+    assert not (config.build_next.host_root / "state" / "revision-loop-seen.json").exists()
+
+
 def test_failed_source_gate_later_revision_pending_occupies_a_without_b(
     tmp_path: Path,
 ) -> None:

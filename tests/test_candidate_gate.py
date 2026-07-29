@@ -17,6 +17,7 @@ from msos_autobuilder.candidate_gate import (
     GateCheck,
     load_candidate_gate_config,
 )
+from msos_autobuilder.lifecycle_evidence import identity_digest
 from msos_autobuilder.validation_contract import (
     build_ppe_validation_contract,
     canonical_dependency_source_sha256,
@@ -237,7 +238,12 @@ def _generic_contract(
     )
 
 
-def _generic_job_yaml(job_id: str, source_head: str, changed_paths: tuple[str, ...], contract: dict) -> str:
+def _generic_job_yaml(
+    job_id: str,
+    source_head: str,
+    changed_paths: tuple[str, ...],
+    contract: dict,
+) -> str:
     return yaml.safe_dump(
         {
             "version": 1,
@@ -247,6 +253,7 @@ def _generic_job_yaml(job_id: str, source_head: str, changed_paths: tuple[str, .
                 "version": 1,
                 "pipeline_id": "ppe",
                 "work_item_id": "fixture-work",
+                "work_item_source_sha256_v1": "a" * 64,
                 "repository": "DanielTabakman/Probability-prediction-engine",
                 "registered_adapter": "ppe_operator",
                 "source": {"commit": source_head},
@@ -259,11 +266,24 @@ def _generic_job_yaml(job_id: str, source_head: str, changed_paths: tuple[str, .
                     "merge_enabled": False,
                     "product_main_write_enabled": False,
                 },
+                "refill_attempt": {
+                    "generation_id": "refill-12345678",
+                    "attempt_ordinal": 1,
+                    "retry_ordinal": 0,
+                },
             },
             "candidate_validation": contract,
         },
         sort_keys=False,
     )
+
+
+def _read_gate_evidence(host_root: Path) -> tuple[dict, dict]:
+    heads = list((host_root / "state" / "gate-evidence" / "heads" / "validation").glob("*.json"))
+    assert len(heads) == 1
+    head = json.loads(heads[0].read_text(encoding="utf-8"))
+    envelope = json.loads((host_root / head["envelope_path"]).read_text(encoding="utf-8"))
+    return head, envelope
 
 
 def _write_config(
@@ -588,6 +608,23 @@ def test_candidate_gate_discovers_generic_build_next_contract(tmp_path: Path) ->
     assert ".msos-candidate-env" in report["candidate_environment"]["path_prepend"].replace("\\", "/")
     assert report["candidate_environment_removed"] is True
     assert all(check["required"] is True for check in [*report["bootstrap"], *report["checks"]])
+    ledger = json.loads(
+        (tmp_path / "host" / "state" / "candidate-gate-seen.json").read_text(encoding="utf-8")
+    )
+    head, envelope = _read_gate_evidence(tmp_path / "host")
+    source_path = tmp_path / "host" / envelope["source"]["path"]
+    assert head["producer_sequence"] == 1
+    assert envelope["payload"] == {
+        "validation_outcome": "passed",
+        "validation_state": "candidate_passed",
+        "validation_contract_sha256": report["validation_contract_sha256"],
+        "gate_report_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+        "results_commit": ledger[job_id]["results_commit"],
+    }
+    assert envelope["source_sha256"] == hashlib.sha256(source_path.read_bytes()).hexdigest()
+    assert head["envelope_sha256"] == hashlib.sha256(
+        (tmp_path / "host" / head["envelope_path"]).read_bytes()
+    ).hexdigest()
     assert _pip_freeze() == packages_before
 
 
@@ -669,6 +706,108 @@ def test_generic_dependency_hash_rejects_candidate_dependency_content_drift(
     assert "dependency source SHA-256" in report["errors"][0]["message"]
     assert report["bootstrap"] == []
     assert report["checks"] == []
+    ledger = json.loads(
+        (tmp_path / "host" / "state" / "candidate-gate-seen.json").read_text(encoding="utf-8")
+    )
+    head, envelope = _read_gate_evidence(tmp_path / "host")
+    source_path = tmp_path / "host" / envelope["source"]["path"]
+    assert head["producer_sequence"] == 1
+    assert envelope["payload"] == {
+        "validation_outcome": "failed",
+        "validation_state": "candidate_failed",
+        "validation_contract_sha256": report["validation_contract_sha256"],
+        "gate_report_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+        "results_commit": ledger[job_id]["results_commit"],
+    }
+    assert envelope["source_sha256"] == hashlib.sha256(source_path.read_bytes()).hexdigest()
+
+
+def test_candidate_gate_two_job_malformed_identity_diagnostic_does_not_leak_first_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_candidate_environment(tmp_path, monkeypatch)
+    source = _init_repo(tmp_path / "source")
+    source_head = _git(source, "rev-parse", "HEAD")
+    patch, changed_paths = _candidate_patch(source)
+    first_job = "build-next-ppe-fixture-work-Fixture-Slice002-abcdef123456"
+    second_job = "build-next-ppe-fixture-work-Fixture-Slice002-badbad123456"
+    first_contract = _generic_contract(
+        job_id=first_job,
+        source_head=source_head,
+        changed_paths=changed_paths,
+    )
+    remote = _results_remote(
+        tmp_path,
+        source_head=source_head,
+        patch=patch,
+        changed_paths=changed_paths,
+        job_id=first_job,
+        job_yaml=_generic_job_yaml(first_job, source_head, changed_paths, first_contract),
+    )
+
+    def add_second_job(checkout: Path) -> None:
+        first_dir = checkout / "results" / "test-host" / first_job
+        second_dir = checkout / "results" / "test-host" / second_job
+        shutil.copytree(first_dir, second_dir)
+        second_contract = _generic_contract(
+            job_id=second_job,
+            source_head=source_head,
+            changed_paths=changed_paths,
+        )
+        job = yaml.safe_load(
+            _generic_job_yaml(second_job, source_head, changed_paths, second_contract)
+        )
+        job["founder_build_next"]["refill_attempt"]["attempt_ordinal"] = "not-an-int"
+        (second_dir / "job.yaml").write_text(yaml.safe_dump(job, sort_keys=False), "utf-8")
+        for name in ("source-report.json", "report.json"):
+            path = second_dir / name
+            payload = json.loads(path.read_text("utf-8"))
+            payload["job_id"] = second_job
+            path.write_text(json.dumps(payload), "utf-8")
+        integrity = json.loads((second_dir / "result-integrity.json").read_text("utf-8"))
+        integrity["source_report_sha256"] = hashlib.sha256(
+            (second_dir / "source-report.json").read_bytes()
+        ).hexdigest()
+        integrity["corrected_report_sha256"] = hashlib.sha256(
+            (second_dir / "report.json").read_bytes()
+        ).hexdigest()
+        (second_dir / "result-integrity.json").write_text(json.dumps(integrity), "utf-8")
+
+    _edit_results_remote(tmp_path, remote, add_second_job)
+    config_path = _write_generic_config(
+        tmp_path,
+        host_root=tmp_path / "host",
+        source=source,
+        remote=remote,
+    )
+
+    assert CandidateGate(load_candidate_gate_config(config_path)).run_once() == (
+        first_job,
+        second_job,
+    )
+
+    ledger = json.loads(
+        (tmp_path / "host" / "state" / "candidate-gate-seen.json").read_text("utf-8")
+    )
+    assert set(ledger) == {first_job, second_job}
+    diagnostics = list(
+        (
+            tmp_path
+            / "host"
+            / "state"
+            / "producer-evidence-errors"
+            / "candidate_gate"
+        ).glob("*.json")
+    )
+    assert len(diagnostics) == 1
+    diagnostic = json.loads(diagnostics[0].read_text("utf-8"))
+    assert diagnostic["primary_outcome"]["job_id"] == second_job
+    assert diagnostic["primary_outcome"]["status"] == "passed"
+    assert diagnostic["identity_digest"] == "unknown"
+    head, _envelope = _read_gate_evidence(tmp_path / "host")
+    assert diagnostic["identity_digest"] != head["identity_digest"]
+    assert head["identity_digest"] == identity_digest(head["attempt_identity"])
 
 
 def test_candidate_gate_report_publication_failure_records_job_identity(

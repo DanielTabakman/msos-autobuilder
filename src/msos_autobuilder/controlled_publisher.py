@@ -29,6 +29,11 @@ from typing import Any
 import yaml
 
 from .candidate_gate import GateCheck, _atomic_write_json, _bounded, _safe_segment, run_check
+from .lifecycle_evidence import (
+    attempt_identity_from_job_yaml,
+    emit_lifecycle_evidence,
+    record_producer_evidence_error,
+)
 from .service_error_lifecycle import record_service_cycle_success, write_service_error_marker
 
 
@@ -233,6 +238,50 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _immutable_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps(dict(payload), indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    if path.exists():
+        if path.read_bytes() != data:
+            raise PublisherError(f"immutable publisher evidence receipt conflict: {path}")
+        return
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+        temporary = Path(handle.name)
+    try:
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _publisher_not_applicable_receipt_path(
+    host_root: Path,
+    *,
+    machine_id: str,
+    job_id: str,
+    gate_sha: str,
+) -> Path:
+    safe_job_id = _safe_segment(job_id, fallback="job")
+    return (
+        host_root
+        / "state"
+        / "publisher-evidence"
+        / "sources"
+        / "not-applicable"
+        / machine_id
+        / f"{safe_job_id}.{gate_sha}.json"
+    )
 
 
 def _canonical_patch_bytes(path: Path) -> bytes:
@@ -777,6 +826,8 @@ class ControlledPublisher:
     ) -> None:
         if entry.get("gate_report_sha256") != gate_sha:
             raise PublisherError(f"passed gate report changed after publication: {job_id}")
+        if entry.get("status") == "not_applicable":
+            return
         branch = str(entry.get("branch") or "")
         commit_sha = str(entry.get("commit_sha") or "")
         if not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
@@ -974,6 +1025,11 @@ class ControlledPublisher:
                 if not gate_path.exists():
                     continue
                 gate_sha = _sha256_file(gate_path)
+                try:
+                    gate_report_for_disposition = json.loads(gate_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as exc:
+                    self._write_error_marker(exc, associated=associated)
+                    raise
                 existing = ledger.get(job_id)
                 if existing:
                     try:
@@ -985,6 +1041,68 @@ class ControlledPublisher:
                     except PublisherError as exc:
                         self._write_error_marker(exc, associated=associated)
                         raise
+                    verified.add(job_id)
+                    continue
+                if (
+                    isinstance(gate_report_for_disposition, dict)
+                    and gate_report_for_disposition.get("status") != "passed"
+                ):
+                    observed_at = str(
+                        gate_report_for_disposition.get("finished_at")
+                        or gate_report_for_disposition.get("started_at")
+                        or ""
+                    )
+                    identity = None
+                    try:
+                        source_receipt = _publisher_not_applicable_receipt_path(
+                            self.host_root,
+                            machine_id=self.config.machine_id,
+                            job_id=job_id,
+                            gate_sha=gate_sha,
+                        )
+                        _immutable_write_json(
+                            source_receipt,
+                            {
+                                "version": 1,
+                                "receipt_type": (
+                                    "publication_review.disposition.not_applicable.source"
+                                ),
+                                "machine_id": self.config.machine_id,
+                                "source_job_id": job_id,
+                                "gate_report_sha256": gate_sha,
+                                "recorded_at": observed_at,
+                            },
+                        )
+                        identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
+                        if identity is not None:
+                            emit_lifecycle_evidence(
+                                self.host_root,
+                                evidence_kind="publication_review.disposition",
+                                identity=identity,
+                                source_path=source_receipt,
+                                payload={
+                                    "publication_review_disposition": "not_applicable",
+                                    "results_commit": None,
+                                    "draft_pr": None,
+                                    "product_branch": None,
+                                    "product_commit": None,
+                                },
+                                final=True,
+                                closed_status="not_applicable",
+                                observed_at=observed_at,
+                            )
+                    except Exception as exc:
+                        record_producer_evidence_error(
+                            self.host_root,
+                            producer="controlled_publisher",
+                            evidence_kind="publication_review.disposition",
+                            error=exc,
+                            identity=identity,
+                            primary_outcome={
+                                "job_id": job_id,
+                                "publication_review_disposition": "not_applicable",
+                            },
+                        )
                     verified.add(job_id)
                     continue
                 try:
@@ -1001,6 +1119,40 @@ class ControlledPublisher:
                         "status": report["status"],
                     }
                     self._save_ledger(ledger)
+                    identity = None
+                    try:
+                        identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
+                        if identity is not None:
+                            emit_lifecycle_evidence(
+                                self.host_root,
+                                evidence_kind="publication_review.disposition",
+                                identity=identity,
+                                source_path=job_dir / "publication-report.json",
+                                payload={
+                                    "publication_review_disposition": "drafted",
+                                    "reason_code": "publication_review.drafted.v1",
+                                    "draft_pr": report["pr_url"],
+                                    "product_branch": report["product_branch"],
+                                    "product_commit": report["product_commit"],
+                                    "results_commit": results_commit,
+                                },
+                                final=True,
+                                closed_status="final",
+                                observed_at=str(report["published_at"]),
+                            )
+                    except Exception as exc:
+                        record_producer_evidence_error(
+                            self.host_root,
+                            producer="controlled_publisher",
+                            evidence_kind="publication_review.disposition",
+                            error=exc,
+                            identity=identity,
+                            primary_outcome={
+                                "job_id": job_id,
+                                "pr_url": report["pr_url"],
+                                "results_commit": results_commit,
+                            },
+                        )
                     processed.append(job_id)
                     verified.add(job_id)
                 except (PublisherError, OSError, KeyError, TypeError, ValueError) as exc:

@@ -25,6 +25,12 @@ from typing import Any
 
 import yaml
 
+from .lifecycle_evidence import (
+    attempt_identity_from_job_yaml,
+    emit_lifecycle_evidence,
+    record_producer_evidence_error,
+)
+
 
 class ResultsRelayError(RuntimeError):
     """Raised when a result cannot be reconstructed or relayed safely."""
@@ -377,6 +383,7 @@ class ResultsRelay:
             fallback="windows-host",
         )
         self.completed = self.host_root / "queue" / "completed"
+        self.failed = self.host_root / "queue" / "failed"
         self.state = self.host_root / "state"
         self.staging = self.state / "results-relay-staging"
         self.ledger_path = self.state / "results-relay-seen.json"
@@ -415,7 +422,83 @@ class ResultsRelay:
             commit = self.sink.publish(staging_job, job_id, self.machine_id)
             ledger[job_id] = commit
             self._save_ledger(ledger)
+            identity = None
+            try:
+                identity = attempt_identity_from_job_yaml(staging_job / "job.yaml")
+                if identity is not None:
+                    integrity = json.loads(
+                        (staging_job / "result-integrity.json").read_text(encoding="utf-8")
+                    )
+                    report = json.loads((staging_job / "report.json").read_text(encoding="utf-8"))
+                    relay = report.get("relay") if isinstance(report, dict) else {}
+                    emit_lifecycle_evidence(
+                        self.host_root,
+                        evidence_kind="relay.result",
+                        identity=identity,
+                        source_path=staging_job / "report.json",
+                        payload={
+                            "relay_disposition": "relayed",
+                            "relayed_commit": commit,
+                            "canonical_report_sha256": integrity.get("corrected_report_sha256"),
+                            "source_report_sha256": integrity.get("source_report_sha256"),
+                            "complete_patch_reconstruction": True,
+                        },
+                        final=True,
+                        closed_status="final",
+                        observed_at=str(
+                            relay.get("relayed_at") if isinstance(relay, dict) else ""
+                        ),
+                    )
+            except Exception as exc:
+                record_producer_evidence_error(
+                    self.host_root,
+                    producer="results_relay",
+                    evidence_kind="relay.result",
+                    error=exc,
+                    identity=identity,
+                    primary_outcome={"job_id": job_id, "relayed_commit": commit},
+                )
             relayed.append(job_id)
+        failed_dirs = self.failed.iterdir() if self.failed.exists() else ()
+        for job_dir in sorted(path for path in failed_dirs if path.is_dir()):
+            job_id = _safe_segment(job_dir.name, fallback="job")
+            key = f"not-applicable/{job_id}"
+            if key in ledger:
+                continue
+            identity = None
+            try:
+                identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
+                source = job_dir / "error.json"
+                if identity is None or not source.exists():
+                    continue
+                error = json.loads(source.read_text(encoding="utf-8"))
+                ledger[key] = str(error.get("recorded_at") or "")
+                self._save_ledger(ledger)
+                emit_lifecycle_evidence(
+                    self.host_root,
+                    evidence_kind="relay.result",
+                    identity=identity,
+                    source_path=source,
+                    payload={
+                        "relay_disposition": "not_applicable",
+                        "relayed_commit": None,
+                        "canonical_report_sha256": None,
+                        "source_report_sha256": None,
+                        "complete_patch_reconstruction": False,
+                    },
+                    final=True,
+                    closed_status="not_applicable",
+                    observed_at=str(error.get("recorded_at") or job_id),
+                )
+            except Exception as exc:
+                record_producer_evidence_error(
+                    self.host_root,
+                    producer="results_relay",
+                    evidence_kind="relay.result",
+                    error=exc,
+                    identity=identity,
+                    primary_outcome={"job_id": job_id, "relay_disposition": "not_applicable"},
+                )
         return tuple(relayed)
 
     def run_forever(self) -> None:

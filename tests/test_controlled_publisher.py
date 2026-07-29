@@ -196,6 +196,30 @@ def make_fixture(tmp_path: Path, *, overlap: bool = False) -> tuple[Path, Path, 
         ],
     }
     write_json(job_dir / "gate-report.json", gate_report)
+    (job_dir / "job.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                f"job_id: {job_id}",
+                "approved: true",
+                "publication_enabled: false",
+                "founder_build_next:",
+                "  pipeline_id: ppe",
+                "  work_item_id: fixture-work",
+                f"  work_item_source_sha256_v1: {'a' * 64}",
+                "  refill_attempt:",
+                "    generation_id: refill-12345678",
+                "    attempt_ordinal: 1",
+                "    retry_ordinal: 0",
+                "manifest:",
+                "  version: 1",
+                "  publication_enabled: false",
+                "  lanes: []",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
     git(evidence_work, "add", ".")
     git(evidence_work, "commit", "-m", "evidence")
     evidence_bare = tmp_path / "evidence.git"
@@ -294,6 +318,66 @@ def test_existing_valid_ledger_entry_is_verified_not_processed(tmp_path: Path) -
     assert success["associated_jobs"] == [job_id]
     assert success["terminal_evidence"]["processed_jobs"] == []
     assert success["terminal_evidence"]["verified_jobs"] == [job_id]
+
+
+def test_failed_gate_publisher_not_applicable_uses_source_receipt_not_legacy_ledger(
+    tmp_path: Path,
+) -> None:
+    config_path, product_bare, evidence_bare, job_id = make_fixture(tmp_path)
+    edit = tmp_path / "failed-gate-edit"
+    git(None, "clone", "--branch", "results", str(evidence_bare), str(edit))
+    git(edit, "config", "user.name", "Fixture")
+    git(edit, "config", "user.email", "fixture@example.invalid")
+    gate_path = edit / "results" / "MACHINE" / job_id / "gate-report.json"
+    gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    gate["status"] = "failed"
+    gate["state"] = "candidate_failed"
+    gate["checks"][0]["passed"] = False
+    gate["checks"][0]["returncode"] = 1
+    write_json(gate_path, gate)
+    gate_sha = sha256(gate_path)
+    git(edit, "add", ".")
+    git(edit, "commit", "-m", "mark gate failed")
+    git(edit, "push", "origin", "HEAD:results")
+
+    config = load_publisher_config(config_path)
+    publisher = ControlledPublisher(config, github_client=FakeGitHubClient(product_bare))
+
+    assert publisher.run_once() == ()
+    assert not (config.host_root / "state" / "controlled-publisher-seen.json").exists()
+
+    receipts = list(
+        (config.host_root / "state" / "publisher-evidence" / "sources" / "not-applicable").rglob(
+            "*.json"
+        )
+    )
+    assert len(receipts) == 1
+    receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
+    assert receipt["receipt_type"] == "publication_review.disposition.not_applicable.source"
+    assert receipt["source_job_id"] == job_id
+    assert receipt["gate_report_sha256"] == gate_sha
+
+    heads = list(
+        (
+            config.host_root
+            / "state"
+            / "publisher-evidence"
+            / "heads"
+            / "publication-review"
+        ).rglob("*.json")
+    )
+    assert len(heads) == 1
+    head = json.loads(heads[0].read_text(encoding="utf-8"))
+    assert head["evidence_kind"] == "publication_review.disposition"
+    assert head["closed_status"] == "not_applicable"
+    envelope = json.loads((config.host_root / head["envelope_path"]).read_text(encoding="utf-8"))
+    assert envelope["payload"]["publication_review_disposition"] == "not_applicable"
+    assert envelope["source"]["path"] == receipts[0].relative_to(config.host_root).as_posix()
+
+    first_envelope_bytes = (config.host_root / head["envelope_path"]).read_bytes()
+    assert publisher.run_once() == ()
+    assert (config.host_root / head["envelope_path"]).read_bytes() == first_envelope_bytes
+    assert not (config.host_root / "state" / "controlled-publisher-seen.json").exists()
 
 
 def test_configured_cycle_cannot_claim_unplanned_historical_job_verified(

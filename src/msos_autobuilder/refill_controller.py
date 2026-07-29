@@ -27,6 +27,11 @@ from .build_next import (
     _source_identity,
     build_next,
 )
+from .lifecycle_evidence import (
+    attempt_identity,
+    emit_lifecycle_evidence,
+    record_producer_evidence_error,
+)
 from .managed_source import ManagedSourceSyncError, ensure_managed_source_fresh
 from .persistent_host import HostPaths, HostProcessLock, _pid_alive, parse_host_job
 from .service_error_lifecycle import (
@@ -76,6 +81,31 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
         os.fsync(handle.fileno())
         temporary = Path(handle.name)
     os.replace(temporary, path)
+
+
+def _immutable_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    data = json.dumps(dict(payload), indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        if path.read_bytes() != data:
+            raise RefillControllerError(f"immutable receipt conflict: {path}")
+        return
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+        temporary = Path(handle.name)
+    try:
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def _atomic_write_bytes(path: Path, payload: bytes) -> None:
@@ -323,6 +353,22 @@ def validate_expected_generation_sha256(value: str) -> str:
 
 def _generation_path(config: RefillConfig) -> Path:
     return _host_paths(config).state / "refill-generation.json"
+
+
+def _prepared_dispatch_receipt_path(config: RefillConfig, prepared: Mapping[str, Any]) -> Path:
+    generation_id = str(prepared.get("generation_id") or "unknown")
+    job_id = str(prepared.get("job_id") or "unknown")
+    digest = hashlib.sha256(
+        json.dumps(dict(prepared), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return (
+        _host_paths(config).state
+        / "refill-evidence"
+        / "sources"
+        / "dispatch-prepared"
+        / generation_id
+        / f"{job_id}.{digest}.json"
+    )
 
 
 def _generation_history_path(config: RefillConfig, generation: Mapping[str, Any]) -> Path:
@@ -1812,6 +1858,8 @@ def _prepare_dispatch(
     reason: str,
     selected_work_item_id: str | None,
     pinned_commit: str | None,
+    active_running: int = 0,
+    active_queued: int = 0,
     consume_provider_retry: bool = False,
 ) -> tuple[dict[str, Any], BuildNextReceipt]:
     dry_config = replace(
@@ -1852,6 +1900,70 @@ def _prepare_dispatch(
     if receipt.evidence.get("source"):
         generation["source_ppe_identity"] = receipt.evidence["source"]
     save_refill_generation(config, generation)
+    identity = None
+    work_item_digest = receipt.evidence.get("work_item_source_sha256_v1")
+    if isinstance(work_item_digest, str) and config.build_next.host_root is not None:
+        try:
+            source_receipt = _prepared_dispatch_receipt_path(config, prepared)
+            _immutable_write_json(
+                source_receipt,
+                {
+                    "version": 1,
+                    "receipt_type": "dispatch.prepared.source",
+                    "prepared_dispatch": prepared,
+                    "generation_id": generation.get("generation_id"),
+                    "job_id": receipt.job_id,
+                    "recorded_at": prepared["prepared_at"],
+                },
+            )
+            identity = attempt_identity(
+                pipeline_id=str(receipt.pipeline_id or ""),
+                work_item_id=str(receipt.work_item_id or ""),
+                work_item_digest=work_item_digest,
+                generation_id=str(generation.get("generation_id") or ""),
+                job_id=str(receipt.job_id or ""),
+                attempt_ordinal=attempt_ordinal,
+                retry_ordinal=retry_ordinal,
+            )
+            dispatch_intent_sha256 = hashlib.sha256(
+                json.dumps(prepared, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            emit_lifecycle_evidence(
+                config.build_next.host_root,
+                evidence_kind="dispatch.prepared",
+                identity=identity,
+                source_path=source_receipt,
+                payload={
+                    "selected_work_item": {
+                        "pipeline_id": str(receipt.pipeline_id or ""),
+                        "work_item_id": str(receipt.work_item_id or ""),
+                        "work_item_source_sha256_v1": work_item_digest,
+                    },
+                    "generation_id": str(generation.get("generation_id") or ""),
+                    "dispatch_intent_sha256": dispatch_intent_sha256,
+                    "capacity_slot": {
+                        "slot_id": "capacity-one",
+                        "desired_capacity": 1,
+                        "active_running": active_running,
+                        "active_queued": active_queued,
+                    },
+                },
+                final=True,
+                closed_status="final",
+                observed_at=str(prepared["prepared_at"]),
+            )
+        except Exception as exc:
+            try:
+                record_producer_evidence_error(
+                    config.build_next.host_root,
+                    producer="refill_controller",
+                    evidence_kind="dispatch.prepared",
+                    error=exc,
+                    identity=identity,
+                    primary_outcome={"state": "DISPATCHING", "job_id": receipt.job_id},
+                )
+            except Exception:
+                pass
     return prepared, receipt
 
 
@@ -2901,6 +3013,8 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
         reason=retry_reason,
         selected_work_item_id=retry_same_item,
         pinned_commit=pinned_commit,
+        active_running=active_running,
+        active_queued=active_queued,
         consume_provider_retry=retry_reason == "provider_retry",
     )
     if (

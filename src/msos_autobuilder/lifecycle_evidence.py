@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -122,7 +124,15 @@ _HEAD_COMPARE_FIELDS = (
 _SHA256_HEX = set("0123456789abcdef")
 _CLOSED_STATUSES = {"open", "final", "not_applicable"}
 _PAYLOAD_CODES: dict[str, dict[str, set[str]]] = {
-    "dispatch.prepared": {"required": {"dispatch_intent_sha256"}, "optional": set()},
+    "dispatch.prepared": {
+        "required": {
+            "selected_work_item",
+            "generation_id",
+            "dispatch_intent_sha256",
+            "capacity_slot",
+        },
+        "optional": set(),
+    },
     "dispatch.submitted": {
         "required": {"feed_commit", "feed_path", "submitted_job_sha256"},
         "optional": set(),
@@ -160,6 +170,12 @@ _PAYLOAD_CODES: dict[str, dict[str, set[str]]] = {
         },
     },
 }
+
+_GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+_TIMESTAMP_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
+    r"(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$"
+)
 
 _PAYLOAD_ALLOWED_VALUES: dict[str, dict[str, set[str]]] = {
     "host.execution": {
@@ -236,29 +252,35 @@ def record_producer_evidence_error(
     error: BaseException,
     identity: Mapping[str, Any] | None = None,
     primary_outcome: Mapping[str, Any] | None = None,
-) -> Path:
-    state = host_root / "state" / "producer-evidence-errors" / producer
-    state.mkdir(parents=True, exist_ok=True)
-    digest = "unknown"
-    if identity is not None:
-        try:
-            digest = identity_digest(identity)
-        except LifecycleEvidenceError:
-            digest = sha256_bytes(canonical_json_bytes(dict(identity)))[:32]
-    payload = {
-        "schema_version": "producer_evidence_error.v1",
-        "producer": producer,
-        "evidence_kind": evidence_kind,
-        "identity_digest": digest,
-        "error_type": type(error).__name__,
-        "message": str(error),
-        "primary_outcome_preserved": True,
-        "primary_outcome": dict(primary_outcome or {}),
-    }
-    suffix = sha256_bytes(canonical_json_bytes(payload))[:16]
-    path = state / f"{evidence_kind.replace('.', '-')}.{digest}.{suffix}.json"
-    _atomic_json(path, payload)
-    return path
+) -> Path | None:
+    try:
+        state = host_root / "state" / "producer-evidence-errors" / producer
+        state.mkdir(parents=True, exist_ok=True)
+        digest = "unknown"
+        if identity is not None:
+            try:
+                digest = identity_digest(identity)
+            except Exception:
+                try:
+                    digest = sha256_bytes(canonical_json_bytes(dict(identity)))[:32]
+                except Exception:
+                    digest = "unknown"
+        payload = {
+            "schema_version": "producer_evidence_error.v1",
+            "producer": producer,
+            "evidence_kind": evidence_kind,
+            "identity_digest": digest,
+            "error_type": type(error).__name__,
+            "message": str(error),
+            "primary_outcome_preserved": True,
+            "primary_outcome": dict(primary_outcome or {}),
+        }
+        suffix = sha256_bytes(canonical_json_bytes(payload))[:16]
+        path = state / f"{evidence_kind.replace('.', '-')}.{digest}.{suffix}.json"
+        _atomic_json(path, payload)
+        return path
+    except Exception:
+        return None
 
 
 def canonical_json_bytes(value: Mapping[str, Any] | Sequence[Any]) -> bytes:
@@ -368,8 +390,13 @@ def identity_digest(identity: Mapping[str, Any]) -> str:
 
 
 def latest_evidence_set_sha256_v1(heads: Sequence[Mapping[str, Any]]) -> str:
+    seen: set[tuple[str, str]] = set()
     for head in heads:
         validate_producer_head(head)
+        key = (str(head.get("identity_digest")), str(head.get("evidence_kind")))
+        if key in seen:
+            raise LifecycleEvidenceError("duplicate producer head for identity/evidence kind")
+        seen.add(key)
     stable = sorted(
         (dict(head) for head in heads),
         key=lambda head: (str(head.get("evidence_kind")), str(head.get("identity_digest"))),
@@ -423,15 +450,18 @@ def attempt_identity_from_job(job: Mapping[str, Any]) -> dict[str, Any] | None:
     digest = founder.get(WORK_ITEM_DIGEST_CONTRACT)
     if not isinstance(digest, str) or not digest:
         return None
-    return attempt_identity(
-        pipeline_id=str(founder.get("pipeline_id") or ""),
-        work_item_id=str(founder.get("work_item_id") or ""),
-        work_item_digest=digest,
-        generation_id=str(refill.get("generation_id") or ""),
-        job_id=str(job.get("job_id") or ""),
-        attempt_ordinal=int(refill.get("attempt_ordinal")),
-        retry_ordinal=int(refill.get("retry_ordinal") or 0),
-    )
+    try:
+        return attempt_identity(
+            pipeline_id=str(founder.get("pipeline_id") or ""),
+            work_item_id=str(founder.get("work_item_id") or ""),
+            work_item_digest=digest,
+            generation_id=str(refill.get("generation_id") or ""),
+            job_id=str(job.get("job_id") or ""),
+            attempt_ordinal=int(refill.get("attempt_ordinal")),
+            retry_ordinal=int(refill.get("retry_ordinal") or 0),
+        )
+    except (TypeError, ValueError, LifecycleEvidenceError):
+        return None
 
 
 def attempt_identity_from_job_yaml(path: Path) -> dict[str, Any] | None:
@@ -525,7 +555,7 @@ def emit_lifecycle_evidence(
     if evidence_kind not in PRODUCER_OWNERS:
         raise LifecycleEvidenceError(f"unknown evidence kind: {evidence_kind}")
     validate_attempt_identity(identity)
-    if not isinstance(observed_at, str) or not observed_at:
+    if not _is_canonical_timestamp(observed_at):
         raise LifecycleEvidenceError("observed_at must be a stable source-recorded value")
     if producer_sequence < 1:
         raise LifecycleEvidenceError("producer_sequence must be positive")
@@ -533,68 +563,74 @@ def emit_lifecycle_evidence(
         raise LifecycleEvidenceError("closed_status must be open, final, or not_applicable")
     if closed_status in {"final", "not_applicable"} and final is not True:
         raise LifecycleEvidenceError("closed producer streams must set final=true")
-    source_payload, source_sha = _source_payload(
-        host_root,
-        source_path=source_path,
-        source_ref=source_ref,
-    )
-    digest = identity_digest(identity)
-    evidence_seed = {
-        "evidence_kind": evidence_kind,
-        "identity_digest": digest,
-        "producer_sequence": producer_sequence,
-        "source_sha256": source_sha,
-        "payload": dict(payload),
-        "final": final,
-        "closed_status": closed_status,
-    }
-    evidence_id = sha256_bytes(canonical_json_bytes(evidence_seed))[:32]
-    envelope = {
-        "schema_version": ENVELOPE_SCHEMA_VERSION,
-        "evidence_kind": evidence_kind,
-        "evidence_id": evidence_id,
-        "producer_sequence": producer_sequence,
-        "attempt_identity": dict(identity),
-        "identity_digest": digest,
-        "source": source_payload,
-        "source_sha256": source_sha,
-        "producer": {
-            "name": PRODUCER_OWNERS[evidence_kind],
-            "release": "observational-v1",
-        },
-        "observed_at": observed_at,
-        "final": final,
-        "closed_status": closed_status,
-        "payload": dict(payload),
-    }
-    envelope_bytes = canonical_json_bytes(envelope) + b"\n"
-    envelope_sha = sha256_bytes(envelope_bytes)
-    envelope_path = producer_envelope_path(
-        host_root,
-        evidence_kind=evidence_kind,
-        identity=identity,
-        evidence_id=evidence_id,
-    )
-    head_path = producer_head_path(host_root, evidence_kind=evidence_kind, identity=identity)
-    head = {
-        "head_schema_version": HEAD_SCHEMA_VERSION,
-        "attempt_identity": dict(identity),
-        "identity_digest": digest,
-        "evidence_kind": evidence_kind,
-        "producer": PRODUCER_OWNERS[evidence_kind],
-        "producer_sequence": producer_sequence,
-        "evidence_id": evidence_id,
-        "envelope_path": _host_relative_path(host_root, envelope_path),
-        "envelope_sha256": envelope_sha,
-        "final": final,
-        "closed_status": closed_status,
-    }
-    validate_lifecycle_evidence_envelope(envelope)
-    validate_producer_head(head, envelope=envelope, host_root=host_root)
-    with EvidenceHeadsLock(host_root):
-        _write_immutable(envelope_path, envelope_bytes)
-        _replace_head(head_path, head)
-    return EvidenceWriteResult(envelope_path, head_path, evidence_id, digest, envelope_sha)
+    try:
+        source_payload, source_sha = _source_payload(
+            host_root,
+            source_path=source_path,
+            source_ref=source_ref,
+        )
+        digest = identity_digest(identity)
+        evidence_seed = {
+            "evidence_kind": evidence_kind,
+            "identity_digest": digest,
+            "producer_sequence": producer_sequence,
+            "source_sha256": source_sha,
+            "payload": dict(payload),
+            "final": final,
+            "closed_status": closed_status,
+        }
+        evidence_id = sha256_bytes(canonical_json_bytes(evidence_seed))[:32]
+        envelope = {
+            "schema_version": ENVELOPE_SCHEMA_VERSION,
+            "evidence_kind": evidence_kind,
+            "evidence_id": evidence_id,
+            "producer_sequence": producer_sequence,
+            "attempt_identity": dict(identity),
+            "identity_digest": digest,
+            "source": source_payload,
+            "source_sha256": source_sha,
+            "producer": {
+                "name": PRODUCER_OWNERS[evidence_kind],
+                "release": "observational-v1",
+            },
+            "observed_at": observed_at,
+            "final": final,
+            "closed_status": closed_status,
+            "payload": dict(payload),
+        }
+        envelope_bytes = canonical_json_bytes(envelope) + b"\n"
+        envelope_sha = sha256_bytes(envelope_bytes)
+        envelope_path = producer_envelope_path(
+            host_root,
+            evidence_kind=evidence_kind,
+            identity=identity,
+            evidence_id=evidence_id,
+        )
+        head_path = producer_head_path(host_root, evidence_kind=evidence_kind, identity=identity)
+        head = {
+            "head_schema_version": HEAD_SCHEMA_VERSION,
+            "attempt_identity": dict(identity),
+            "identity_digest": digest,
+            "evidence_kind": evidence_kind,
+            "producer": PRODUCER_OWNERS[evidence_kind],
+            "producer_sequence": producer_sequence,
+            "evidence_id": evidence_id,
+            "envelope_path": _host_relative_path(host_root, envelope_path),
+            "envelope_sha256": envelope_sha,
+            "final": final,
+            "closed_status": closed_status,
+        }
+        validate_lifecycle_evidence_envelope(envelope)
+        validate_producer_head(head, envelope=envelope)
+        with EvidenceHeadsLock(host_root):
+            _write_immutable(envelope_path, envelope_bytes)
+            _replace_head(head_path, head)
+        validate_producer_head(head, envelope=envelope, host_root=host_root)
+        return EvidenceWriteResult(envelope_path, head_path, evidence_id, digest, envelope_sha)
+    except LifecycleEvidenceError:
+        raise
+    except Exception as exc:
+        raise LifecycleEvidenceError("lifecycle evidence operation failed") from exc
 
 
 def _write_immutable(path: Path, data: bytes) -> None:
@@ -728,6 +764,8 @@ def validate_source_ref(source_ref: Mapping[str, Any]) -> None:
     for field in ("repository", "ref", "commit", "path"):
         if not isinstance(source_ref.get(field), str) or not source_ref.get(field):
             raise LifecycleEvidenceError("source_ref fields must be non-empty strings")
+    if not _is_git_commit(source_ref.get("commit")):
+        raise LifecycleEvidenceError("source_ref commit must be a lowercase Git commit SHA")
     _validate_canonical_relative_path(source_ref["path"], label="source_ref.path")
     if not _is_sha256(source_ref.get("sha256")):
         raise LifecycleEvidenceError("source_ref sha256 must be SHA-256 hex")
@@ -761,7 +799,7 @@ def validate_lifecycle_evidence_envelope(envelope: Mapping[str, Any]) -> None:
         raise LifecycleEvidenceError("identity digest mismatch")
     if not isinstance(envelope.get("producer_sequence"), int) or envelope["producer_sequence"] < 1:
         raise LifecycleEvidenceError("producer sequence must be positive")
-    if not isinstance(envelope.get("evidence_id"), str) or len(envelope["evidence_id"]) != 32:
+    if not _is_lower_hex(envelope.get("evidence_id"), length=32):
         raise LifecycleEvidenceError("evidence_id is malformed")
     if not _is_sha256(envelope.get("source_sha256")):
         raise LifecycleEvidenceError("source_sha256 is malformed")
@@ -782,7 +820,7 @@ def validate_lifecycle_evidence_envelope(envelope: Mapping[str, Any]) -> None:
         str,
     ):
         raise LifecycleEvidenceError("producer ownership is invalid")
-    if not isinstance(envelope.get("observed_at"), str) or not envelope["observed_at"]:
+    if not _is_canonical_timestamp(envelope.get("observed_at")):
         raise LifecycleEvidenceError("observed_at is malformed")
     _validate_final_closed(envelope.get("final"), envelope.get("closed_status"))
     _validate_payload(
@@ -826,12 +864,17 @@ def validate_producer_head(
         raise LifecycleEvidenceError("producer head ownership conflict")
     if not isinstance(head.get("producer_sequence"), int) or head["producer_sequence"] < 1:
         raise LifecycleEvidenceError("producer head sequence is malformed")
-    if not isinstance(head.get("evidence_id"), str) or len(head["evidence_id"]) != 32:
+    if not _is_lower_hex(head.get("evidence_id"), length=32):
         raise LifecycleEvidenceError("producer head evidence_id is malformed")
     _validate_canonical_relative_path(head.get("envelope_path"), label="envelope_path")
-    expected_prefix = "/".join(ENVELOPE_PATH_PARTS[str(kind)])
-    if not str(head["envelope_path"]).startswith(expected_prefix + "/"):
-        raise LifecycleEvidenceError("producer head envelope path does not match kind")
+    expected_path = producer_envelope_path(
+        Path("."),
+        evidence_kind=str(kind),
+        identity=head["attempt_identity"],
+        evidence_id=str(head["evidence_id"]),
+    ).as_posix()
+    if head["envelope_path"] != expected_path:
+        raise LifecycleEvidenceError("producer head envelope path does not match identity/evidence")
     if not _is_sha256(head.get("envelope_sha256")):
         raise LifecycleEvidenceError("producer head envelope_sha256 is malformed")
     _validate_final_closed(head.get("final"), head.get("closed_status"))
@@ -851,7 +894,9 @@ def validate_producer_head(
                 raise LifecycleEvidenceError("producer head envelope binding mismatch")
     if host_root is not None:
         bound = host_root.joinpath(*Path(str(head["envelope_path"])).parts)
-        if bound.exists() and sha256_file(bound) != head["envelope_sha256"]:
+        if not bound.exists():
+            raise LifecycleEvidenceError("producer head envelope file is missing")
+        if sha256_file(bound) != head["envelope_sha256"]:
             raise LifecycleEvidenceError("producer head envelope-path/SHA binding mismatch")
 
 
@@ -881,6 +926,52 @@ def _validate_payload(
     for field, values in _PAYLOAD_ALLOWED_VALUES.get(kind, {}).items():
         if field in payload and payload[field] not in values:
             raise LifecycleEvidenceError("producer payload code is invalid")
+    for key, value in payload.items():
+        if key in {
+            "dispatch_intent_sha256",
+            "submitted_job_sha256",
+            "canonical_report_sha256",
+            "source_report_sha256",
+            "gate_report_sha256",
+            "validation_contract_sha256",
+        } and value is not None and not _is_sha256(value):
+            raise LifecycleEvidenceError(f"{key} must be SHA-256 hex or null")
+        if key in {
+            "feed_commit",
+            "relayed_commit",
+            "results_commit",
+            "jobs_commit",
+            "product_commit",
+        }:
+            if value is not None and not _is_git_commit(value):
+                raise LifecycleEvidenceError(f"{key} must be a Git commit SHA or null")
+        if key in {"feed_path"}:
+            _validate_canonical_relative_path(value, label=key)
+        if key in {"complete_patch_reconstruction"} and not isinstance(value, bool):
+            raise LifecycleEvidenceError(f"{key} must be a boolean")
+        if key in {"selected_work_item", "capacity_slot"} and not isinstance(value, Mapping):
+            raise LifecycleEvidenceError(f"{key} must be an object")
+        if key in {"generation_id", "descendant_job_id", "draft_pr", "product_branch"}:
+            if value is not None and (not isinstance(value, str) or not value):
+                raise LifecycleEvidenceError(f"{key} must be a non-empty string or null")
+    if kind == "dispatch.prepared":
+        selected = _mapping(payload.get("selected_work_item"), "selected_work_item")
+        capacity = _mapping(payload.get("capacity_slot"), "capacity_slot")
+        if set(selected) != {"pipeline_id", "work_item_id", "work_item_source_sha256_v1"}:
+            raise LifecycleEvidenceError("selected_work_item has unexpected fields")
+        if not isinstance(selected["pipeline_id"], str) or not selected["pipeline_id"]:
+            raise LifecycleEvidenceError("selected_work_item.pipeline_id must be non-empty")
+        if not isinstance(selected["work_item_id"], str) or not selected["work_item_id"]:
+            raise LifecycleEvidenceError("selected_work_item.work_item_id must be non-empty")
+        if not _is_sha256(selected["work_item_source_sha256_v1"]):
+            raise LifecycleEvidenceError("selected_work_item digest must be SHA-256 hex")
+        if set(capacity) != {"slot_id", "desired_capacity", "active_running", "active_queued"}:
+            raise LifecycleEvidenceError("capacity_slot has unexpected fields")
+        if not isinstance(capacity["slot_id"], str) or not capacity["slot_id"]:
+            raise LifecycleEvidenceError("capacity_slot.slot_id must be non-empty")
+        for key in ("desired_capacity", "active_running", "active_queued"):
+            if not isinstance(capacity[key], int) or isinstance(capacity[key], bool):
+                raise LifecycleEvidenceError(f"capacity_slot.{key} must be an integer")
     reason = payload.get("reason_code")
     if reason is not None:
         if not isinstance(reason, str) or reason not in TERMINAL_REASON_CODES_V1:
@@ -900,3 +991,22 @@ def _mapping(value: Any, label: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise LifecycleEvidenceError(f"{label} must be an object")
     return value
+
+
+def _is_lower_hex(value: Any, *, length: int) -> bool:
+    return isinstance(value, str) and len(value) == length and set(value) <= _SHA256_HEX
+
+
+def _is_git_commit(value: Any) -> bool:
+    return isinstance(value, str) and _GIT_COMMIT_RE.fullmatch(value) is not None
+
+
+def _is_canonical_timestamp(value: Any) -> bool:
+    if not isinstance(value, str) or _TIMESTAMP_RE.fullmatch(value) is None:
+        return False
+    try:
+        text = value[:-1] + "+00:00" if value.endswith("Z") else value
+        datetime.fromisoformat(text)
+    except ValueError:
+        return False
+    return True

@@ -27,7 +27,6 @@ from typing import Any
 import yaml
 
 from .lifecycle_evidence import (
-    LifecycleEvidenceError,
     attempt_identity_from_job_yaml,
     emit_lifecycle_evidence,
     record_producer_evidence_error,
@@ -1040,9 +1039,9 @@ class CandidateGate:
                     "state": gate_report.get("state"),
                 }
                 self._save_ledger(ledger)
-                identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
-                if identity is not None:
-                    try:
+                try:
+                    identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
+                    if identity is not None:
                         emit_lifecycle_evidence(
                             self.host_root,
                             evidence_kind="gate.validation",
@@ -1061,19 +1060,19 @@ class CandidateGate:
                             closed_status="final",
                             observed_at=str(gate_report["finished_at"]),
                         )
-                    except LifecycleEvidenceError as exc:
-                        record_producer_evidence_error(
-                            self.host_root,
-                            producer="candidate_gate",
-                            evidence_kind="gate.validation",
-                            error=exc,
-                            identity=identity,
-                            primary_outcome={
-                                "job_id": job_id,
-                                "results_commit": commit,
-                                "status": gate_report.get("status"),
-                            },
-                        )
+                except Exception as exc:
+                    record_producer_evidence_error(
+                        self.host_root,
+                        producer="candidate_gate",
+                        evidence_kind="gate.validation",
+                        error=exc,
+                        identity=locals().get("identity"),
+                        primary_outcome={
+                            "job_id": job_id,
+                            "results_commit": commit,
+                            "status": gate_report.get("status"),
+                        },
+                    )
                 processed.append(job_id)
             except (CandidateGateError, OSError, KeyError, TypeError, ValueError) as exc:
                 self._write_error_marker(exc, associated=associated)

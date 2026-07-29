@@ -32,7 +32,6 @@ from .codex_shadow import (
     run_codex_shadow,
 )
 from .lifecycle_evidence import (
-    LifecycleEvidenceError,
     SourceRef,
     attempt_identity_from_job_yaml,
     emit_lifecycle_evidence,
@@ -235,6 +234,46 @@ def _host_relative(host_root: Path, path: Path) -> str:
         return path.as_posix()
 
 
+def _host_transition_receipt_path(
+    paths: HostPaths,
+    *,
+    outcome: str,
+    job_id: str,
+    content_sha256: str,
+) -> Path:
+    safe_job_id = _safe_id(job_id)
+    return (
+        paths.state
+        / "host-evidence"
+        / "sources"
+        / "execution"
+        / outcome
+        / f"{safe_job_id}.{content_sha256}.yaml"
+    )
+
+
+def _write_host_transition_receipt(
+    paths: HostPaths,
+    *,
+    outcome: str,
+    job_id: str,
+    text: str,
+) -> Path:
+    content_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    path = _host_transition_receipt_path(
+        paths,
+        outcome=outcome,
+        job_id=job_id,
+        content_sha256=content_sha256,
+    )
+    if path.exists():
+        if path.read_text(encoding="utf-8") != text:
+            raise HostJobError(f"host evidence receipt conflicts for {job_id}")
+        return path
+    _atomic_write_text(path, text)
+    return path
+
+
 def _emit_host_evidence(
     host_root: Path,
     *,
@@ -261,7 +300,7 @@ def _emit_host_evidence(
             closed_status=closed_status,
             observed_at=observed_at,
         )
-    except LifecycleEvidenceError as exc:
+    except Exception as exc:
         record_producer_evidence_error(
             host_root,
             producer="persistent_host",
@@ -588,17 +627,33 @@ def sync_git_job_feed(config: PersistentHostConfig, paths: HostPaths) -> tuple[s
                 observed_at=feed_recorded_at,
                 primary_outcome={"outcome": "imported", "job_id": job.job_id},
             )
-            _emit_host_evidence(
-                config.host_root,
-                identity=identity,
-                source_path=destination,
-                payload={"execution_outcome": "pending"},
-                producer_sequence=2,
-                final=False,
-                closed_status="open",
-                observed_at=feed_recorded_at,
-                primary_outcome={"outcome": "pending", "job_id": job.job_id},
-            )
+            try:
+                pending_receipt = _write_host_transition_receipt(
+                    paths,
+                    outcome="pending",
+                    job_id=job.job_id,
+                    text=text,
+                )
+                _emit_host_evidence(
+                    config.host_root,
+                    identity=identity,
+                    source_path=pending_receipt,
+                    payload={"execution_outcome": "pending"},
+                    producer_sequence=2,
+                    final=False,
+                    closed_status="open",
+                    observed_at=feed_recorded_at,
+                    primary_outcome={"outcome": "pending", "job_id": job.job_id},
+                )
+            except Exception as exc:
+                record_producer_evidence_error(
+                    config.host_root,
+                    producer="persistent_host",
+                    evidence_kind="host.execution",
+                    error=exc,
+                    identity=identity,
+                    primary_outcome={"outcome": "pending", "job_id": job.job_id},
+                )
         imported.append(job.job_id)
     _atomic_write_json(paths.feed_ledger, ledger)
     return tuple(imported)
@@ -882,17 +937,33 @@ class PersistentHost:
                 continue
             identity = attempt_identity_from_job_yaml(running_path)
             if identity is not None:
-                _emit_host_evidence(
-                    self.config.host_root,
-                    identity=identity,
-                    source_path=running_path,
-                    payload={"execution_outcome": "running"},
-                    producer_sequence=3,
-                    final=False,
-                    closed_status="open",
-                    observed_at=job.content_sha256,
-                    primary_outcome={"outcome": "running", "job_id": job.job_id},
-                )
+                try:
+                    running_receipt = _write_host_transition_receipt(
+                        self.paths,
+                        outcome="running",
+                        job_id=job.job_id,
+                        text=running_path.read_text(encoding="utf-8"),
+                    )
+                    _emit_host_evidence(
+                        self.config.host_root,
+                        identity=identity,
+                        source_path=running_receipt,
+                        payload={"execution_outcome": "running"},
+                        producer_sequence=3,
+                        final=False,
+                        closed_status="open",
+                        observed_at=_timestamp(),
+                        primary_outcome={"outcome": "running", "job_id": job.job_id},
+                    )
+                except Exception as exc:
+                    record_producer_evidence_error(
+                        self.config.host_root,
+                        producer="persistent_host",
+                        evidence_kind="host.execution",
+                        error=exc,
+                        identity=identity,
+                        primary_outcome={"outcome": "running", "job_id": job.job_id},
+                    )
             return running_path, job
         return None
 

@@ -1387,16 +1387,17 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             and submission.source_sha256 is not None
             and submission.recorded_at is not None
         ):
-            identity = attempt_identity(
-                pipeline_id=pipeline_id,
-                work_item_id=work_item_id,
-                work_item_digest=work_item_source_sha256,
-                generation_id=str(refill_attempt["generation_id"]),
-                job_id=job_id,
-                attempt_ordinal=int(refill_attempt["attempt_ordinal"]),
-                retry_ordinal=int(refill_attempt.get("retry_ordinal") or 0),
-            )
+            identity = None
             try:
+                identity = attempt_identity(
+                    pipeline_id=pipeline_id,
+                    work_item_id=work_item_id,
+                    work_item_digest=work_item_source_sha256,
+                    generation_id=str(refill_attempt["generation_id"]),
+                    job_id=job_id,
+                    attempt_ordinal=int(refill_attempt["attempt_ordinal"]),
+                    retry_ordinal=int(refill_attempt.get("retry_ordinal") or 0),
+                )
                 emit_lifecycle_evidence(
                     config.host_root,
                     evidence_kind="dispatch.submitted",
@@ -1417,7 +1418,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                     closed_status="final",
                     observed_at=submission.recorded_at,
                 )
-            except LifecycleEvidenceError as exc:
+            except Exception as exc:
                 record_producer_evidence_error(
                     config.host_root,
                     producer="build_next",

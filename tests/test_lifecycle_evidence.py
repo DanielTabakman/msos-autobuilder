@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+import msos_autobuilder.lifecycle_evidence as lifecycle
 from msos_autobuilder.lifecycle_evidence import (
     ENVELOPE_PATH_PARTS,
     HEAD_PATH_PARTS,
@@ -341,3 +342,336 @@ def test_attempt_identity_from_job_yaml_requires_refill_metadata(tmp_path: Path)
 
     path.write_text(yaml.safe_dump({"job_id": "ordinary"}, sort_keys=True), encoding="utf-8")
     assert attempt_identity_from_job_yaml(path) is None
+
+    job["founder_build_next"]["refill_attempt"]["attempt_ordinal"] = "not-an-int"
+    path.write_text(yaml.safe_dump(job, sort_keys=True), encoding="utf-8")
+    assert attempt_identity_from_job_yaml(path) is None
+
+
+def test_observational_failures_are_normalized(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    source = _source(tmp_path)
+    original_read_bytes = Path.read_bytes
+
+    def deny_source_hash(path: Path) -> bytes:
+        if path == source:
+            raise PermissionError("hash denied")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", deny_source_hash)
+    with pytest.raises(LifecycleEvidenceError, match="lifecycle evidence operation failed"):
+        emit_lifecycle_evidence(
+            tmp_path,
+            evidence_kind="host.execution",
+            identity=identity,
+            source_path=source,
+            payload={"execution_outcome": "running"},
+            final=False,
+            closed_status="open",
+            observed_at="2026-07-28T00:00:00Z",
+        )
+
+    monkeypatch.setattr(Path, "read_bytes", original_read_bytes)
+    monkeypatch.setattr(
+        lifecycle,
+        "_write_immutable",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("write denied")),
+    )
+    with pytest.raises(LifecycleEvidenceError, match="lifecycle evidence operation failed"):
+        emit_lifecycle_evidence(
+            tmp_path,
+            evidence_kind="host.execution",
+            identity=identity,
+            source_path=source,
+            payload={"execution_outcome": "running"},
+            final=False,
+            closed_status="open",
+            observed_at="2026-07-28T00:00:00Z",
+        )
+
+
+def test_head_failures_are_normalized(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    identity = _identity()
+    source = _source(tmp_path)
+    head_path = producer_head_path(tmp_path, evidence_kind="host.execution", identity=identity)
+    head_path.parent.mkdir(parents=True)
+    head_path.write_text("{not-json", encoding="utf-8")
+
+    with pytest.raises(LifecycleEvidenceError, match="lifecycle evidence operation failed"):
+        emit_lifecycle_evidence(
+            tmp_path,
+            evidence_kind="host.execution",
+            identity=identity,
+            source_path=source,
+            payload={"execution_outcome": "running"},
+            final=False,
+            closed_status="open",
+            observed_at="2026-07-28T00:00:00Z",
+        )
+
+    head_path.unlink()
+    monkeypatch.setattr(
+        lifecycle,
+        "_replace_head",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("replace denied")),
+    )
+    with pytest.raises(LifecycleEvidenceError, match="lifecycle evidence operation failed"):
+        emit_lifecycle_evidence(
+            tmp_path,
+            evidence_kind="host.execution",
+            identity=identity,
+            source_path=source,
+            payload={"execution_outcome": "running"},
+            final=False,
+            closed_status="open",
+            observed_at="2026-07-28T00:00:00Z",
+        )
+
+
+def test_diagnostic_write_failure_does_not_escape(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        lifecycle,
+        "_atomic_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("diag denied")),
+    )
+
+    assert (
+        lifecycle.record_producer_evidence_error(
+            tmp_path,
+            producer="persistent_host",
+            evidence_kind="host.execution",
+            error=PermissionError("primary evidence failed"),
+            identity=_identity(),
+            primary_outcome={"outcome": "completed"},
+        )
+        is None
+    )
+
+
+def test_strict_v1_schema_rejects_duplicate_missing_path_and_bad_formats(tmp_path: Path) -> None:
+    identity = _identity()
+    source = _source(tmp_path)
+    result = emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind="host.execution",
+        identity=identity,
+        source_path=source,
+        payload={"execution_outcome": "running"},
+        final=False,
+        closed_status="open",
+        observed_at="2026-07-28T00:00:00Z",
+    )
+    head = json.loads(result.head_path.read_text(encoding="utf-8"))
+
+    with pytest.raises(LifecycleEvidenceError, match="duplicate producer head"):
+        latest_evidence_set_sha256_v1([head, dict(head)])
+
+    result.envelope_path.unlink()
+    with pytest.raises(LifecycleEvidenceError, match="envelope file is missing"):
+        validate_producer_head(head, host_root=tmp_path)
+
+    bad = dict(head)
+    bad["evidence_id"] = "G" * 32
+    with pytest.raises(LifecycleEvidenceError, match="evidence_id"):
+        validate_producer_head(bad)
+
+    with pytest.raises(LifecycleEvidenceError, match="observed_at"):
+        emit_lifecycle_evidence(
+            tmp_path,
+            evidence_kind="host.execution",
+            identity=identity,
+            source_path=source,
+            payload={"execution_outcome": "running"},
+            final=False,
+            closed_status="open",
+            observed_at="not-a-timestamp",
+        )
+
+
+@pytest.mark.parametrize(
+    ("kind", "payload", "final", "closed_status"),
+    [
+        (
+            "dispatch.prepared",
+            {
+                "selected_work_item": {
+                    "pipeline_id": "ppe",
+                    "work_item_id": "A",
+                    "work_item_source_sha256_v1": "1" * 64,
+                },
+                "generation_id": "refill-12345678",
+                "dispatch_intent_sha256": "2" * 64,
+                "capacity_slot": {
+                    "slot_id": "capacity-one",
+                    "desired_capacity": 1,
+                    "active_running": 0,
+                    "active_queued": 0,
+                },
+            },
+            True,
+            "final",
+        ),
+        ("host.execution", {"execution_outcome": "imported"}, False, "open"),
+        ("host.execution", {"execution_outcome": "pending"}, False, "open"),
+        ("host.execution", {"execution_outcome": "running"}, False, "open"),
+        (
+            "host.execution",
+            {
+                "execution_outcome": "completed",
+                "host_archive_path": "queue/completed/job",
+                "error_class": None,
+            },
+            True,
+            "final",
+        ),
+        (
+            "host.execution",
+            {
+                "execution_outcome": "failed",
+                "host_archive_path": "queue/failed/job",
+                "error_class": "RuntimeError",
+            },
+            True,
+            "final",
+        ),
+        (
+            "relay.result",
+            {
+                "relay_disposition": "relayed",
+                "relayed_commit": "a" * 40,
+                "canonical_report_sha256": "3" * 64,
+                "source_report_sha256": "4" * 64,
+                "complete_patch_reconstruction": True,
+            },
+            True,
+            "final",
+        ),
+        (
+            "relay.result",
+            {
+                "relay_disposition": "not_applicable",
+                "relayed_commit": None,
+                "canonical_report_sha256": None,
+                "source_report_sha256": None,
+                "complete_patch_reconstruction": False,
+            },
+            True,
+            "not_applicable",
+        ),
+        (
+            "gate.validation",
+            {
+                "validation_outcome": "passed",
+                "validation_state": "candidate_passed",
+                "validation_contract_sha256": "5" * 64,
+                "gate_report_sha256": "6" * 64,
+                "results_commit": "b" * 40,
+            },
+            True,
+            "final",
+        ),
+        (
+            "gate.validation",
+            {
+                "validation_outcome": "failed",
+                "validation_state": "candidate_failed",
+                "validation_contract_sha256": None,
+                "gate_report_sha256": "7" * 64,
+                "results_commit": "c" * 40,
+            },
+            True,
+            "final",
+        ),
+        (
+            "revision.disposition",
+            {
+                "revision_disposition": "queued",
+                "descendant_job_id": "job-revision-1",
+                "gate_report_sha256": "8" * 64,
+                "jobs_commit": "d" * 40,
+            },
+            True,
+            "final",
+        ),
+        (
+            "revision.disposition",
+            {
+                "revision_disposition": "not_applicable",
+                "descendant_job_id": None,
+                "gate_report_sha256": "9" * 64,
+                "jobs_commit": None,
+            },
+            True,
+            "not_applicable",
+        ),
+        (
+            "publication_review.disposition",
+            {
+                "publication_review_disposition": "drafted",
+                "reason_code": "publication_review.drafted.v1",
+                "draft_pr": "https://github.example/pull/1",
+                "product_branch": "autobuilder/job",
+                "product_commit": "e" * 40,
+                "results_commit": "f" * 40,
+            },
+            True,
+            "final",
+        ),
+        (
+            "publication_review.disposition",
+            {
+                "publication_review_disposition": "not_applicable",
+                "draft_pr": None,
+                "product_branch": None,
+                "product_commit": None,
+                "results_commit": None,
+            },
+            True,
+            "not_applicable",
+        ),
+    ],
+)
+def test_required_producer_outcomes_emit_verifiable_bytes_and_replay(
+    tmp_path: Path,
+    kind: str,
+    payload: dict[str, object],
+    final: bool,
+    closed_status: str,
+) -> None:
+    identity = _identity()
+    source = _source(tmp_path, text=f"{kind}\n{closed_status}\n")
+
+    first = emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind=kind,
+        identity=identity,
+        source_path=source,
+        payload=payload,
+        final=final,
+        closed_status=closed_status,
+        observed_at="2026-07-28T00:00:00Z",
+    )
+    replay = emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind=kind,
+        identity=identity,
+        source_path=source,
+        payload=payload,
+        final=final,
+        closed_status=closed_status,
+        observed_at="2026-07-28T00:00:00Z",
+    )
+
+    assert replay == first
+    envelope = json.loads(first.envelope_path.read_text(encoding="utf-8"))
+    head = json.loads(first.head_path.read_text(encoding="utf-8"))
+    assert head["evidence_kind"] == kind
+    assert envelope["payload"] == payload
+    assert head["envelope_sha256"] == lifecycle.sha256_file(first.envelope_path)
+    validate_producer_head(head, envelope=envelope, host_root=tmp_path)

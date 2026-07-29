@@ -26,7 +26,6 @@ from typing import Any
 import yaml
 
 from .lifecycle_evidence import (
-    LifecycleEvidenceError,
     attempt_identity_from_job_yaml,
     emit_lifecycle_evidence,
     record_producer_evidence_error,
@@ -486,9 +485,57 @@ class RevisionLoop:
             if not gate_path.exists() or not job_path.exists():
                 continue
             gate_report = json.loads(gate_path.read_text(encoding="utf-8"))
-            if not isinstance(gate_report, dict) or gate_report.get("status") != "failed":
+            if not isinstance(gate_report, dict):
                 continue
             job_id = _safe_segment(str(gate_report.get("job_id") or job_dir.name), fallback="job")
+            if gate_report.get("status") == "passed":
+                ledger_key = f"{self.config.machine_id}/{job_id}"
+                if ledger_key in ledger:
+                    continue
+                gate_sha = _sha256_file(gate_path)
+                observed_at = str(gate_report.get("finished_at") or gate_report.get("started_at") or "")
+                ledger[ledger_key] = {
+                    "gate_report_sha256": gate_sha,
+                    "revision_job_id": "",
+                    "jobs_commit": "",
+                    "queued_at": observed_at,
+                    "source_job_id": job_id,
+                    "disposition": "not_applicable",
+                }
+                self._save_ledger(ledger)
+                try:
+                    identity = attempt_identity_from_job_yaml(job_path)
+                    if identity is not None:
+                        emit_lifecycle_evidence(
+                            self.host_root,
+                            evidence_kind="revision.disposition",
+                            identity=identity,
+                            source_path=gate_path,
+                            payload={
+                                "revision_disposition": "not_applicable",
+                                "gate_report_sha256": gate_sha,
+                                "descendant_job_id": None,
+                                "jobs_commit": None,
+                            },
+                            final=True,
+                            closed_status="not_applicable",
+                            observed_at=observed_at,
+                        )
+                except Exception as exc:
+                    record_producer_evidence_error(
+                        self.host_root,
+                        producer="revision_loop",
+                        evidence_kind="revision.disposition",
+                        error=exc,
+                        identity=locals().get("identity"),
+                        primary_outcome={
+                            "source_job_id": job_id,
+                            "revision_disposition": "not_applicable",
+                        },
+                    )
+                continue
+            if gate_report.get("status") != "failed":
+                continue
             matched = _find_plan(job_id, plans)
             if matched is None:
                 continue
@@ -531,9 +578,9 @@ class RevisionLoop:
                     "source_job_id": job_id,
                 }
                 self._save_ledger(ledger)
-                identity = attempt_identity_from_job_yaml(job_path)
-                if identity is not None:
-                    try:
+                try:
+                    identity = attempt_identity_from_job_yaml(job_path)
+                    if identity is not None:
                         emit_lifecycle_evidence(
                             self.host_root,
                             evidence_kind="revision.disposition",
@@ -549,19 +596,19 @@ class RevisionLoop:
                             closed_status="final",
                             observed_at=str(ledger[ledger_key]["queued_at"]),
                         )
-                    except LifecycleEvidenceError as exc:
-                        record_producer_evidence_error(
-                            self.host_root,
-                            producer="revision_loop",
-                            evidence_kind="revision.disposition",
-                            error=exc,
-                            identity=identity,
-                            primary_outcome={
-                                "source_job_id": job_id,
-                                "revision_job_id": str(manifest["job_id"]),
-                                "jobs_commit": commit,
-                            },
-                        )
+                except Exception as exc:
+                    record_producer_evidence_error(
+                        self.host_root,
+                        producer="revision_loop",
+                        evidence_kind="revision.disposition",
+                        error=exc,
+                        identity=locals().get("identity"),
+                        primary_outcome={
+                            "source_job_id": job_id,
+                            "revision_job_id": str(manifest["job_id"]),
+                            "jobs_commit": commit,
+                        },
+                    )
                 processed.append(str(manifest["job_id"]))
             except (RevisionLoopError, OSError, ValueError, yaml.YAMLError) as exc:
                 self._write_error_marker(exc, associated=associated)

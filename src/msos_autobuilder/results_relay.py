@@ -26,7 +26,6 @@ from typing import Any
 import yaml
 
 from .lifecycle_evidence import (
-    LifecycleEvidenceError,
     attempt_identity_from_job_yaml,
     emit_lifecycle_evidence,
     record_producer_evidence_error,
@@ -423,12 +422,14 @@ class ResultsRelay:
             commit = self.sink.publish(staging_job, job_id, self.machine_id)
             ledger[job_id] = commit
             self._save_ledger(ledger)
-            identity = attempt_identity_from_job_yaml(staging_job / "job.yaml")
-            if identity is not None:
-                integrity = json.loads(
-                    (staging_job / "result-integrity.json").read_text(encoding="utf-8")
-                )
-                try:
+            try:
+                identity = attempt_identity_from_job_yaml(staging_job / "job.yaml")
+                if identity is not None:
+                    integrity = json.loads(
+                        (staging_job / "result-integrity.json").read_text(encoding="utf-8")
+                    )
+                    report = json.loads((staging_job / "report.json").read_text(encoding="utf-8"))
+                    relay = report.get("relay") if isinstance(report, dict) else {}
                     emit_lifecycle_evidence(
                         self.host_root,
                         evidence_kind="relay.result",
@@ -443,17 +444,19 @@ class ResultsRelay:
                         },
                         final=True,
                         closed_status="final",
-                        observed_at=commit,
+                        observed_at=str(
+                            relay.get("relayed_at") if isinstance(relay, dict) else ""
+                        ),
                     )
-                except LifecycleEvidenceError as exc:
-                    record_producer_evidence_error(
-                        self.host_root,
-                        producer="results_relay",
-                        evidence_kind="relay.result",
-                        error=exc,
-                        identity=identity,
-                        primary_outcome={"job_id": job_id, "relayed_commit": commit},
-                    )
+            except Exception as exc:
+                record_producer_evidence_error(
+                    self.host_root,
+                    producer="results_relay",
+                    evidence_kind="relay.result",
+                    error=exc,
+                    identity=locals().get("identity"),
+                    primary_outcome={"job_id": job_id, "relayed_commit": commit},
+                )
             relayed.append(job_id)
         failed_dirs = self.failed.iterdir() if self.failed.exists() else ()
         for job_dir in sorted(path for path in failed_dirs if path.is_dir()):
@@ -461,14 +464,15 @@ class ResultsRelay:
             key = f"not-applicable/{job_id}"
             if key in ledger:
                 continue
-            identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
-            source = job_dir / "error.json"
-            if identity is None or not source.exists():
-                continue
-            error = json.loads(source.read_text(encoding="utf-8"))
-            ledger[key] = str(error.get("recorded_at") or "")
-            self._save_ledger(ledger)
+            identity = None
             try:
+                identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
+                source = job_dir / "error.json"
+                if identity is None or not source.exists():
+                    continue
+                error = json.loads(source.read_text(encoding="utf-8"))
+                ledger[key] = str(error.get("recorded_at") or "")
+                self._save_ledger(ledger)
                 emit_lifecycle_evidence(
                     self.host_root,
                     evidence_kind="relay.result",
@@ -485,7 +489,7 @@ class ResultsRelay:
                     closed_status="not_applicable",
                     observed_at=str(error.get("recorded_at") or job_id),
                 )
-            except LifecycleEvidenceError as exc:
+            except Exception as exc:
                 record_producer_evidence_error(
                     self.host_root,
                     producer="results_relay",

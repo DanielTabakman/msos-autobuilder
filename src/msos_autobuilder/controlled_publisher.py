@@ -30,7 +30,6 @@ import yaml
 
 from .candidate_gate import GateCheck, _atomic_write_json, _bounded, _safe_segment, run_check
 from .lifecycle_evidence import (
-    LifecycleEvidenceError,
     attempt_identity_from_job_yaml,
     emit_lifecycle_evidence,
     record_producer_evidence_error,
@@ -783,6 +782,8 @@ class ControlledPublisher:
     ) -> None:
         if entry.get("gate_report_sha256") != gate_sha:
             raise PublisherError(f"passed gate report changed after publication: {job_id}")
+        if entry.get("status") == "not_applicable":
+            return
         branch = str(entry.get("branch") or "")
         commit_sha = str(entry.get("commit_sha") or "")
         if not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
@@ -980,6 +981,11 @@ class ControlledPublisher:
                 if not gate_path.exists():
                     continue
                 gate_sha = _sha256_file(gate_path)
+                try:
+                    gate_report_for_disposition = json.loads(gate_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as exc:
+                    self._write_error_marker(exc, associated=associated)
+                    raise
                 existing = ledger.get(job_id)
                 if existing:
                     try:
@@ -991,6 +997,54 @@ class ControlledPublisher:
                     except PublisherError as exc:
                         self._write_error_marker(exc, associated=associated)
                         raise
+                    verified.add(job_id)
+                    continue
+                if (
+                    isinstance(gate_report_for_disposition, dict)
+                    and gate_report_for_disposition.get("status") != "passed"
+                ):
+                    observed_at = str(
+                        gate_report_for_disposition.get("finished_at")
+                        or gate_report_for_disposition.get("started_at")
+                        or ""
+                    )
+                    ledger[job_id] = {
+                        "gate_report_sha256": gate_sha,
+                        "status": "not_applicable",
+                        "published_at": observed_at,
+                    }
+                    self._save_ledger(ledger)
+                    try:
+                        identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
+                        if identity is not None:
+                            emit_lifecycle_evidence(
+                                self.host_root,
+                                evidence_kind="publication_review.disposition",
+                                identity=identity,
+                                source_path=gate_path,
+                                payload={
+                                    "publication_review_disposition": "not_applicable",
+                                    "results_commit": None,
+                                    "draft_pr": None,
+                                    "product_branch": None,
+                                    "product_commit": None,
+                                },
+                                final=True,
+                                closed_status="not_applicable",
+                                observed_at=observed_at,
+                            )
+                    except Exception as exc:
+                        record_producer_evidence_error(
+                            self.host_root,
+                            producer="controlled_publisher",
+                            evidence_kind="publication_review.disposition",
+                            error=exc,
+                            identity=locals().get("identity"),
+                            primary_outcome={
+                                "job_id": job_id,
+                                "publication_review_disposition": "not_applicable",
+                            },
+                        )
                     verified.add(job_id)
                     continue
                 try:
@@ -1007,9 +1061,9 @@ class ControlledPublisher:
                         "status": report["status"],
                     }
                     self._save_ledger(ledger)
-                    identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
-                    if identity is not None:
-                        try:
+                    try:
+                        identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
+                        if identity is not None:
                             emit_lifecycle_evidence(
                                 self.host_root,
                                 evidence_kind="publication_review.disposition",
@@ -1027,19 +1081,19 @@ class ControlledPublisher:
                                 closed_status="final",
                                 observed_at=str(report["published_at"]),
                             )
-                        except LifecycleEvidenceError as exc:
-                            record_producer_evidence_error(
-                                self.host_root,
-                                producer="controlled_publisher",
-                                evidence_kind="publication_review.disposition",
-                                error=exc,
-                                identity=identity,
-                                primary_outcome={
-                                    "job_id": job_id,
-                                    "pr_url": report["pr_url"],
-                                    "results_commit": results_commit,
-                                },
-                            )
+                    except Exception as exc:
+                        record_producer_evidence_error(
+                            self.host_root,
+                            producer="controlled_publisher",
+                            evidence_kind="publication_review.disposition",
+                            error=exc,
+                            identity=locals().get("identity"),
+                            primary_outcome={
+                                "job_id": job_id,
+                                "pr_url": report["pr_url"],
+                                "results_commit": results_commit,
+                            },
+                        )
                     processed.append(job_id)
                     verified.add(job_id)
                 except (PublisherError, OSError, KeyError, TypeError, ValueError) as exc:

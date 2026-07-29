@@ -422,6 +422,7 @@ class ResultsRelay:
             commit = self.sink.publish(staging_job, job_id, self.machine_id)
             ledger[job_id] = commit
             self._save_ledger(ledger)
+            identity = None
             try:
                 identity = attempt_identity_from_job_yaml(staging_job / "job.yaml")
                 if identity is not None:
@@ -454,7 +455,7 @@ class ResultsRelay:
                     producer="results_relay",
                     evidence_kind="relay.result",
                     error=exc,
-                    identity=locals().get("identity"),
+                    identity=identity,
                     primary_outcome={"job_id": job_id, "relayed_commit": commit},
                 )
             relayed.append(job_id)

@@ -331,6 +331,8 @@ def test_initial_producer_sequence_must_start_at_one(tmp_path: Path) -> None:
             source_path=source,
             payload={
                 "validation_outcome": "failed",
+                "validation_state": "candidate_failed",
+                "validation_contract_sha256": "5" * 64,
                 "gate_report_sha256": "0" * 64,
                 "results_commit": "a" * 40,
             },
@@ -354,6 +356,8 @@ def test_initial_producer_sequence_must_start_at_one(tmp_path: Path) -> None:
             source_path=source,
             payload={
                 "validation_outcome": "failed",
+                "validation_state": "candidate_failed",
+                "validation_contract_sha256": "5" * 64,
                 "gate_report_sha256": "0" * 64,
                 "results_commit": "a" * 40,
             },
@@ -387,6 +391,14 @@ def test_attempt_identity_from_job_yaml_requires_refill_metadata(tmp_path: Path)
 
     path.write_text(yaml.safe_dump({"job_id": "ordinary"}, sort_keys=True), encoding="utf-8")
     assert attempt_identity_from_job_yaml(path) is None
+
+    path.write_text("[", encoding="utf-8")
+    with pytest.raises(LifecycleEvidenceError, match="job YAML is invalid"):
+        attempt_identity_from_job_yaml(path)
+
+    path.write_text("- ordinary\n", encoding="utf-8")
+    with pytest.raises(LifecycleEvidenceError, match="job YAML must be a mapping"):
+        attempt_identity_from_job_yaml(path)
 
     job["founder_build_next"]["refill_attempt"]["attempt_ordinal"] = "not-an-int"
     path.write_text(yaml.safe_dump(job, sort_keys=True), encoding="utf-8")
@@ -627,7 +639,7 @@ def test_strict_v1_schema_rejects_duplicate_missing_path_and_bad_formats(tmp_pat
             {
                 "validation_outcome": "failed",
                 "validation_state": "candidate_failed",
-                "validation_contract_sha256": None,
+                "validation_contract_sha256": "7" * 64,
                 "gate_report_sha256": "7" * 64,
                 "results_commit": "c" * 40,
             },
@@ -860,6 +872,7 @@ def test_canonical_semantic_payload_validation_rejects_impossible_combinations(
             {
                 "validation_outcome": "passed",
                 "validation_state": "candidate_failed",
+                "validation_contract_sha256": "5" * 64,
                 "gate_report_sha256": "6" * 64,
                 "results_commit": "b" * 40,
             },
@@ -872,12 +885,54 @@ def test_canonical_semantic_payload_validation_rejects_impossible_combinations(
             "gate.validation",
             {
                 "validation_outcome": "failed",
+                "validation_state": "candidate_failed",
+                "validation_contract_sha256": "7" * 64,
                 "gate_report_sha256": "7" * 64,
                 "results_commit": "c" * 40,
             },
             False,
             "open",
             "finality",
+            None,
+        ),
+        (
+            "gate.validation",
+            {
+                "validation_outcome": "passed",
+                "validation_state": "candidate_passed",
+                "gate_report_sha256": "6" * 64,
+                "results_commit": "b" * 40,
+            },
+            True,
+            "final",
+            "report and results proof",
+            None,
+        ),
+        (
+            "gate.validation",
+            {
+                "validation_outcome": "failed",
+                "validation_state": "candidate_failed",
+                "validation_contract_sha256": None,
+                "gate_report_sha256": "7" * 64,
+                "results_commit": "c" * 40,
+            },
+            True,
+            "final",
+            "report and results proof",
+            None,
+        ),
+        (
+            "gate.validation",
+            {
+                "validation_outcome": "passed",
+                "validation_contract_sha256": "5" * 64,
+                "gate_report_sha256": "6" * 64,
+                "results_commit": "b" * 40,
+            },
+            True,
+            "final",
+            "state is incompatible",
             None,
         ),
         (

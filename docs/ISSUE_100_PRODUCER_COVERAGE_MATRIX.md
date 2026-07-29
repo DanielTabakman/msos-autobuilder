@@ -15,8 +15,8 @@ Issue #50 runtime changes, or Issue #101 reduction.
 | `host.execution` | failed/interrupted | `execution_archived` | host-root `queue/failed/<job>/error.json` SHA-256 | implemented |
 | `relay.result` | relayed | `result_relayed` | host-root relay staging `report.json` SHA-256 | implemented |
 | `relay.result` | not-applicable after terminal host failure | `execution_archived` | host-root `queue/failed/<job>/error.json` SHA-256 | implemented |
-| `gate.validation` | passed | `validation_recorded` | host-root `gate-report.json` SHA-256 | implemented |
-| `gate.validation` | failed | `validation_recorded` | host-root `gate-report.json` SHA-256 | implemented |
+| `gate.validation` | passed | `validation_recorded` | host-root `gate-report.json` SHA-256 plus `validation_contract_sha256`, `results_commit`, and `validation_state=candidate_passed` | implemented |
+| `gate.validation` | failed | `validation_recorded` | host-root `gate-report.json` SHA-256 plus `validation_contract_sha256`, `results_commit`, and `validation_state=candidate_failed` | implemented |
 | `gate.validation` | blocked/missing/conflict | `blocked` | service error marker | Issue #101 dependency for reduction semantics; producer failure is diagnostic-only in this PR |
 | `revision.disposition` | queued | `revision_recorded` | host-root `gate-report.json` SHA-256 | implemented |
 | `revision.disposition` | exhausted | `revision_recorded` | gate report plus terminal reason | Issue #101 dependency; current revision service raises before committing an exhausted primary disposition |
@@ -41,13 +41,23 @@ Shared envelope validation is canonical-semantic, not only syntactic. The valida
 combinations that cannot represent a valid v1 producer event for host, relay, gate, revision,
 and publication review evidence.
 
-Canonical identity extraction returns `None` only when refill lifecycle markers are genuinely
-absent. If refill markers are present but malformed, producer hooks preserve the committed
-primary result and write a best-effort `producer-evidence-errors` diagnostic.
+Canonical identity extraction returns `None` only after a job YAML file is successfully parsed
+as a mapping and refill lifecycle markers are genuinely absent. Unreadable job YAML, invalid
+YAML, non-mapping YAML, and malformed refill markers raise `LifecycleEvidenceError`; producer
+hooks catch those evidence errors after their committed primary operation and write a best-effort
+`producer-evidence-errors` diagnostic.
 
 Producer evidence failures after committed primary side effects follow one shared policy:
 preserve the primary operation, write `state/producer-evidence-errors/<producer>/...json`,
 surface the evidence gap there, and do not reclassify or retry the primary action.
+Producer hooks reset `identity = None` immediately before each evidence-emission `try`, so a
+looped later job with malformed canonical identity records an `unknown` diagnostic identity
+rather than inheriting an earlier job's digest.
+
+Canonical `gate.validation` passed/failed envelopes are validation-contract bound: they require
+valid `validation_contract_sha256`, `gate_report_sha256`, and `results_commit` fields,
+non-null matching `validation_state`, `final=true`, and `closed_status=final`. Blocked,
+missing, and conflict outcome rules remain separately explicit for future producer writers.
 
 Legacy compatibility before Issue #102: canonical revision and publisher `not_applicable`
 closures are emitted from separate immutable producer-owned source receipts. They do not add

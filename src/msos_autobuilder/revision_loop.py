@@ -630,6 +630,7 @@ class RevisionLoop:
                     "source_job_id": job_id,
                 }
                 self._save_ledger(ledger)
+                identity = None
                 try:
                     identity = attempt_identity_from_job_yaml(job_path)
                     if identity is not None:
@@ -654,7 +655,7 @@ class RevisionLoop:
                         producer="revision_loop",
                         evidence_kind="revision.disposition",
                         error=exc,
-                        identity=locals().get("identity"),
+                        identity=identity,
                         primary_outcome={
                             "source_job_id": job_id,
                             "revision_job_id": str(manifest["job_id"]),

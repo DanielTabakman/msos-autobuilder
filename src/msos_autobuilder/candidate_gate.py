@@ -1039,6 +1039,7 @@ class CandidateGate:
                     "state": gate_report.get("state"),
                 }
                 self._save_ledger(ledger)
+                identity = None
                 try:
                     identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
                     if identity is not None:
@@ -1066,7 +1067,7 @@ class CandidateGate:
                         producer="candidate_gate",
                         evidence_kind="gate.validation",
                         error=exc,
-                        identity=locals().get("identity"),
+                        identity=identity,
                         primary_outcome={
                             "job_id": job_id,
                             "results_commit": commit,

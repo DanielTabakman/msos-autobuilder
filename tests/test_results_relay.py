@@ -5,8 +5,10 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
+from msos_autobuilder.lifecycle_evidence import attempt_identity_from_job, identity_digest
 from msos_autobuilder.results_relay import (
     ResultsRelay,
     ResultsRelayConfig,
@@ -84,6 +86,22 @@ def _job_identity(job_id: str) -> dict[str, object]:
             },
         },
     }
+
+
+def _write_completed_job(host_root: Path, job_id: str, job_yaml: str) -> Path:
+    job_dir = host_root / "queue" / "completed" / job_id
+    job_dir.mkdir(parents=True)
+    (job_dir / "job.yaml").write_text(job_yaml, encoding="utf-8")
+    report = {
+        "version": 1,
+        "job_id": job_id,
+        "outcome": "completed",
+        "publication_enabled": False,
+        "codex_report": {"evidence": []},
+        "patches": [],
+    }
+    (job_dir / "report.json").write_text(json.dumps(report), encoding="utf-8")
+    return job_dir
 
 
 def _read_single_relay_head(host_root: Path) -> tuple[dict, dict]:
@@ -208,6 +226,155 @@ def test_results_relay_reconstructs_and_pushes_complete_patch(tmp_path: Path) ->
         separators=(",", ":"),
         ensure_ascii=False,
     ) + "\n"
+
+
+@pytest.mark.parametrize(
+    ("job_id", "job_yaml", "message"),
+    [
+        ("invalid-yaml", "[", "job YAML is invalid"),
+        ("non-mapping-yaml", "- item\n", "job YAML must be a mapping"),
+    ],
+)
+def test_results_relay_malformed_job_yaml_preserves_primary_and_records_diagnostic(
+    tmp_path: Path,
+    job_id: str,
+    job_yaml: str,
+    message: str,
+) -> None:
+    host_root = tmp_path / "host"
+    workspace_root = tmp_path / "workspaces"
+    _write_host_config(host_root, workspace_root)
+    _write_completed_job(host_root, job_id, job_yaml)
+    remote = _create_results_remote(tmp_path)
+    config = ResultsRelayConfig(
+        host_root=host_root,
+        repo_url=str(remote),
+        branch="results",
+        machine_id="test-host",
+        poll_seconds=1,
+    )
+
+    assert ResultsRelay(config).run_once() == (job_id,)
+
+    ledger = json.loads((host_root / "state" / "results-relay-seen.json").read_text("utf-8"))
+    assert job_id in ledger
+    review = tmp_path / f"review-{job_id}"
+    _git(None, "clone", "-q", "--branch", "results", str(remote), str(review))
+    assert (review / "results" / "test-host" / job_id / "report.json").exists()
+    diagnostics = list(
+        (host_root / "state" / "producer-evidence-errors" / "results_relay").glob("*.json")
+    )
+    assert len(diagnostics) == 1
+    diagnostic = json.loads(diagnostics[0].read_text(encoding="utf-8"))
+    assert diagnostic["primary_outcome_preserved"] is True
+    assert diagnostic["primary_outcome"]["job_id"] == job_id
+    assert diagnostic["identity_digest"] == "unknown"
+    assert message in diagnostic["message"]
+
+
+def test_results_relay_unreadable_job_yaml_preserves_primary_and_records_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    host_root = tmp_path / "host"
+    workspace_root = tmp_path / "workspaces"
+    _write_host_config(host_root, workspace_root)
+    _write_completed_job(
+        host_root,
+        "unreadable-yaml",
+        yaml.safe_dump(_job_identity("unreadable-yaml"), sort_keys=False),
+    )
+    remote = _create_results_remote(tmp_path)
+    original_read_text = Path.read_text
+
+    def deny_staging_job_yaml(path: Path, *args: object, **kwargs: object) -> str:
+        if (
+            path.name == "job.yaml"
+            and "results-relay-staging" in path.as_posix()
+            and path.parent.name == "unreadable-yaml"
+        ):
+            raise PermissionError("job yaml denied")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", deny_staging_job_yaml)
+    config = ResultsRelayConfig(
+        host_root=host_root,
+        repo_url=str(remote),
+        branch="results",
+        machine_id="test-host",
+        poll_seconds=1,
+    )
+
+    assert ResultsRelay(config).run_once() == ("unreadable-yaml",)
+
+    ledger = json.loads((host_root / "state" / "results-relay-seen.json").read_text("utf-8"))
+    assert "unreadable-yaml" in ledger
+    diagnostics = list(
+        (host_root / "state" / "producer-evidence-errors" / "results_relay").glob("*.json")
+    )
+    assert len(diagnostics) == 1
+    diagnostic = json.loads(diagnostics[0].read_text(encoding="utf-8"))
+    assert diagnostic["primary_outcome"]["job_id"] == "unreadable-yaml"
+    assert diagnostic["identity_digest"] == "unknown"
+    assert "job YAML is unreadable" in diagnostic["message"]
+
+
+def test_results_relay_valid_non_refill_job_yaml_preserves_primary_without_evidence(
+    tmp_path: Path,
+) -> None:
+    host_root = tmp_path / "host"
+    workspace_root = tmp_path / "workspaces"
+    _write_host_config(host_root, workspace_root)
+    _write_completed_job(host_root, "ordinary-job", "version: 1\njob_id: ordinary-job\n")
+    remote = _create_results_remote(tmp_path)
+    config = ResultsRelayConfig(
+        host_root=host_root,
+        repo_url=str(remote),
+        branch="results",
+        machine_id="test-host",
+        poll_seconds=1,
+    )
+
+    assert ResultsRelay(config).run_once() == ("ordinary-job",)
+
+    ledger = json.loads((host_root / "state" / "results-relay-seen.json").read_text("utf-8"))
+    assert "ordinary-job" in ledger
+    assert not (host_root / "state" / "relay-evidence").exists()
+    assert not (host_root / "state" / "producer-evidence-errors").exists()
+
+
+def test_results_relay_two_job_malformed_identity_diagnostic_does_not_leak_first_identity(
+    tmp_path: Path,
+) -> None:
+    host_root = tmp_path / "host"
+    workspace_root = tmp_path / "workspaces"
+    _write_host_config(host_root, workspace_root)
+    first = _job_identity("first-job")
+    second = _job_identity("second-job")
+    second["founder_build_next"]["refill_attempt"]["attempt_ordinal"] = "not-an-int"  # type: ignore[index]
+    _write_completed_job(host_root, "first-job", yaml.safe_dump(first, sort_keys=False))
+    _write_completed_job(host_root, "second-job", yaml.safe_dump(second, sort_keys=False))
+    remote = _create_results_remote(tmp_path)
+    config = ResultsRelayConfig(
+        host_root=host_root,
+        repo_url=str(remote),
+        branch="results",
+        machine_id="test-host",
+        poll_seconds=1,
+    )
+
+    assert ResultsRelay(config).run_once() == ("first-job", "second-job")
+
+    ledger = json.loads((host_root / "state" / "results-relay-seen.json").read_text("utf-8"))
+    assert set(ledger) == {"first-job", "second-job"}
+    diagnostics = list(
+        (host_root / "state" / "producer-evidence-errors" / "results_relay").glob("*.json")
+    )
+    assert len(diagnostics) == 1
+    diagnostic = json.loads(diagnostics[0].read_text(encoding="utf-8"))
+    assert diagnostic["primary_outcome"]["job_id"] == "second-job"
+    assert diagnostic["identity_digest"] == "unknown"
+    assert diagnostic["identity_digest"] != identity_digest(attempt_identity_from_job(first))
 
 
 def test_results_relay_emits_not_applicable_for_host_failure(tmp_path: Path) -> None:

@@ -469,10 +469,12 @@ def attempt_identity_from_job(job: Mapping[str, Any]) -> dict[str, Any] | None:
 def attempt_identity_from_job_yaml(path: Path) -> dict[str, Any] | None:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, TypeError, ValueError, yaml.YAMLError):
-        return None
+    except OSError as exc:
+        raise LifecycleEvidenceError("job YAML is unreadable") from exc
+    except (TypeError, ValueError, yaml.YAMLError) as exc:
+        raise LifecycleEvidenceError("job YAML is invalid") from exc
     if not isinstance(raw, Mapping):
-        return None
+        raise LifecycleEvidenceError("job YAML must be a mapping")
     return attempt_identity_from_job(raw)
 
 
@@ -1133,15 +1135,16 @@ def _validate_gate_validation_payload(
     _require_finality("gate.validation", final, closed_status, final_expected=True, status="final")
     outcome = payload["validation_outcome"]
     if outcome in {"passed", "failed"}:
-        if not _is_sha256(payload.get("gate_report_sha256")) or not _is_git_commit(
-            payload.get("results_commit")
+        if (
+            not _is_sha256(payload.get("validation_contract_sha256"))
+            or not _is_sha256(payload.get("gate_report_sha256"))
+            or not _is_git_commit(payload.get("results_commit"))
         ):
             raise LifecycleEvidenceError("gate.validation requires report and results proof")
         state = payload.get("validation_state")
-        if state is not None:
-            expected = f"candidate_{outcome}"
-            if state != expected:
-                raise LifecycleEvidenceError("gate.validation state is incompatible")
+        expected = f"candidate_{outcome}"
+        if state != expected:
+            raise LifecycleEvidenceError("gate.validation state is incompatible")
 
 
 def _validate_revision_disposition_payload(

@@ -1119,6 +1119,7 @@ class ControlledPublisher:
                         "status": report["status"],
                     }
                     self._save_ledger(ledger)
+                    identity = None
                     try:
                         identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
                         if identity is not None:
@@ -1145,7 +1146,7 @@ class ControlledPublisher:
                             producer="controlled_publisher",
                             evidence_kind="publication_review.disposition",
                             error=exc,
-                            identity=locals().get("identity"),
+                            identity=identity,
                             primary_outcome={
                                 "job_id": job_id,
                                 "pr_url": report["pr_url"],

@@ -15,7 +15,9 @@ import msos_autobuilder.refill_controller as refill_controller
 from msos_autobuilder.cli import _refill_keep_one_command, build_parser
 from msos_autobuilder.lifecycle_evidence import (
     attempt_identity_from_job_yaml,
+    canonical_refill_classification,
     emit_lifecycle_evidence,
+    identity_digest,
     reduce_attempt_lifecycle,
 )
 from msos_autobuilder.refill_controller import (
@@ -2372,6 +2374,13 @@ def _host_source(config: RefillConfig, relative: str, payload: dict[str, object]
     return path
 
 
+def _mark_post_recorder_generation(config: RefillConfig) -> None:
+    generation = load_refill_generation(config)
+    assert generation is not None
+    generation["canonical_lifecycle_boundary"] = "post_recorder"
+    save_refill_generation(config, generation)
+
+
 def _emit_successful_canonical_a(config: RefillConfig, job_id: str) -> None:
     assert config.build_next.host_root is not None
     identity = attempt_identity_from_job_yaml(_feed_job_path(config, job_id))
@@ -2469,6 +2478,7 @@ def test_fresh_canonical_terminal_a_authorizes_exactly_one_b_and_pause_blocks_c(
     config = _refill_config(tmp_path, ppe=ppe, feed=_feed_repo(tmp_path / "feed-work"))
     _write_host_status(config)
     job_a = _submit_tracked_attempt(config)
+    _mark_post_recorder_generation(config)
     _emit_successful_canonical_a(config, job_a)
 
     first = reconcile_refill(config)
@@ -2494,11 +2504,234 @@ def test_fresh_canonical_terminal_a_authorizes_exactly_one_b_and_pause_blocks_c(
     ) == 1
     prepared_basis = generation["attempt_sequence"][-1].get("decision_basis")
     assert prepared_basis is not None
-    assert prepared_basis["source_job_id"] == job_a
+    assert prepared_basis["decision_basis_schema_version"] == "decision_basis.v1"
+    assert prepared_basis["action_type"] == "exclude_and_dispatch_next"
+    assert prepared_basis["prior_canonical_identity"]["job_id"] == job_a
+    assert (
+        prepared_basis["new_action_identity"]["job_id"]
+        == generation["current_attempt"]["job_id"]
+    )
     basis = generation["last_refill_action_basis"]
-    assert basis["source_job_id"] == job_a
-    assert basis["source_work_item_id"] == A_WORK_ITEM
-    assert basis["source_attempt_identity"]["job_id"] == job_a
+    assert basis["prior_canonical_identity"]["job_id"] == job_a
+    assert basis["prior_canonical_identity"]["work_item_id"] == A_WORK_ITEM
+    assert basis["new_action_identity"] == prepared_basis["new_action_identity"]
+
+
+def test_fresh_canonical_dispatch_only_waits_for_recorder_snapshot(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
+    config = _refill_config(tmp_path, ppe=ppe, feed=_feed_repo(tmp_path / "feed-work"))
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _mark_post_recorder_generation(config)
+
+    classification = canonical_refill_classification(
+        config.build_next.host_root,
+        job_id=job_id,
+        generation_id=load_refill_generation(config)["generation_id"],
+    )
+
+    assert classification is not None
+    assert classification["category"] == "unknown"
+    assert classification["stage"] == "canonical_lifecycle_missing"
+    assert classification["evidence"]["reason"] == "canonical_snapshot_missing"
+
+
+def test_fresh_canonical_host_evidence_before_recorder_catchup_blocks(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
+    config = _refill_config(tmp_path, ppe=ppe, feed=_feed_repo(tmp_path / "feed-work"))
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _mark_post_recorder_generation(config)
+    identity = attempt_identity_from_job_yaml(_feed_job_path(config, job_id))
+    assert identity is not None
+    _archive_job_yaml_from_feed(config, job_id)
+    emit_lifecycle_evidence(
+        config.build_next.host_root,
+        evidence_kind="host.execution",
+        identity=identity,
+        source_path=_host_source(config, f"queue/completed/{job_id}/host.json", {"job_id": job_id}),
+        payload={
+            "execution_outcome": "completed",
+            "host_archive_path": f"queue/completed/{job_id}",
+            "error_class": None,
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:00:00Z",
+    )
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    assert report.build_next_receipt is None
+    assert report.decision_evidence["reason"] == "canonical_snapshot_missing"
+
+
+def test_genuine_historical_attempt_without_canonical_heads_uses_legacy_fallback(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _mark_post_recorder_generation(config)
+    assert config.build_next.host_root is not None
+    for root in (
+        config.build_next.host_root / "state" / "refill-evidence",
+        config.build_next.host_root / "state" / "attempt-lifecycle",
+    ):
+        if root.exists():
+            import shutil
+
+            shutil.rmtree(root)
+    _archive_attempt(config, job_id, failed=True, message="Codex quota exhausted")
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BACKPRESSURE"
+    assert report.decision_evidence["reason"] == "provider_backpressure"
+
+
+def test_fresh_canonical_crash_before_submission_replays_same_b(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
+    config = _refill_config(tmp_path, ppe=ppe, feed=_feed_repo(tmp_path / "feed-work"))
+    _write_host_status(config)
+    job_a = _submit_tracked_attempt(config)
+    _mark_post_recorder_generation(config)
+    _emit_successful_canonical_a(config, job_a)
+    real_build_next = refill_controller.build_next
+
+    def crash_before_submit(build_config: object) -> object:
+        if getattr(build_config, "submit", True):
+            raise RuntimeError("canonical submit crash")
+        return real_build_next(build_config)
+
+    monkeypatch.setattr(refill_controller, "build_next", crash_before_submit)
+    with pytest.raises(RuntimeError, match="canonical submit crash"):
+        reconcile_refill(config)
+    prepared = load_refill_generation(config)["prepared_dispatch"]
+
+    monkeypatch.setattr(refill_controller, "build_next", real_build_next)
+    replayed = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert replayed.status == "QUEUED"
+    assert replayed.build_next_receipt.job_id == prepared["job_id"]
+    assert generation["current_attempt"]["job_id"] == prepared["job_id"]
+    assert generation["current_attempt"]["decision_basis"] == prepared["decision_basis"]
+
+
+def test_fresh_canonical_replay_after_remote_side_effect_reuses_prepared_b(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
+    config = _refill_config(tmp_path, ppe=ppe, feed=_feed_repo(tmp_path / "feed-work"))
+    _write_host_status(config)
+    job_a = _submit_tracked_attempt(config)
+    _mark_post_recorder_generation(config)
+    _emit_successful_canonical_a(config, job_a)
+    real_build_next = refill_controller.build_next
+
+    def crash_after_submit(build_config: object) -> object:
+        receipt = real_build_next(build_config)
+        if getattr(build_config, "submit", True):
+            raise RuntimeError("canonical post-submit crash")
+        return receipt
+
+    monkeypatch.setattr(refill_controller, "build_next", crash_after_submit)
+    with pytest.raises(RuntimeError, match="canonical post-submit crash"):
+        reconcile_refill(config)
+    prepared = load_refill_generation(config)["prepared_dispatch"]
+
+    def fail_if_remote_submit_retried(build_config: object) -> object:
+        if getattr(build_config, "submit", True):
+            raise AssertionError("remote submit must not be retried")
+        return real_build_next(build_config)
+
+    monkeypatch.setattr(refill_controller, "build_next", fail_if_remote_submit_retried)
+    replayed = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert replayed.status == "QUEUED"
+    assert replayed.build_next_receipt is None
+    assert generation["current_attempt"]["job_id"] == prepared["job_id"]
+
+
+def test_fresh_canonical_prepared_basis_mismatch_blocks_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
+    config = _refill_config(tmp_path, ppe=ppe, feed=_feed_repo(tmp_path / "feed-work"))
+    _write_host_status(config)
+    job_a = _submit_tracked_attempt(config)
+    _mark_post_recorder_generation(config)
+    _emit_successful_canonical_a(config, job_a)
+    real_build_next = refill_controller.build_next
+
+    def crash_before_submit(build_config: object) -> object:
+        if getattr(build_config, "submit", True):
+            raise RuntimeError("canonical submit crash")
+        return real_build_next(build_config)
+
+    monkeypatch.setattr(refill_controller, "build_next", crash_before_submit)
+    with pytest.raises(RuntimeError):
+        reconcile_refill(config)
+    generation = load_refill_generation(config)
+    generation["prepared_dispatch"]["decision_basis"]["new_action_identity"]["job_id"] = "other"
+    save_refill_generation(config, generation)
+    monkeypatch.setattr(refill_controller, "build_next", real_build_next)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    assert report.decision_evidence["reason"] == "prepared_dispatch_action_identity_mismatch"
+
+
+def test_fresh_canonical_prepared_stale_snapshot_blocks_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
+    config = _refill_config(tmp_path, ppe=ppe, feed=_feed_repo(tmp_path / "feed-work"))
+    _write_host_status(config)
+    job_a = _submit_tracked_attempt(config)
+    _mark_post_recorder_generation(config)
+    _emit_successful_canonical_a(config, job_a)
+    real_build_next = refill_controller.build_next
+
+    def crash_before_submit(build_config: object) -> object:
+        if getattr(build_config, "submit", True):
+            raise RuntimeError("canonical submit crash")
+        return real_build_next(build_config)
+
+    monkeypatch.setattr(refill_controller, "build_next", crash_before_submit)
+    with pytest.raises(RuntimeError):
+        reconcile_refill(config)
+    assert config.build_next.host_root is not None
+    identity = attempt_identity_from_job_yaml(_feed_job_path(config, job_a))
+    assert identity is not None
+    digest = identity_digest(identity)
+    head_path = (
+        config.build_next.host_root
+        / "state"
+        / "host-evidence"
+        / "heads"
+        / "execution"
+        / f"{digest}.json"
+    )
+    head = json.loads(head_path.read_text(encoding="utf-8"))
+    head["envelope_sha256"] = "0" * 64
+    head_path.write_text(json.dumps(head, sort_keys=True) + "\n", encoding="utf-8")
+    monkeypatch.setattr(refill_controller, "build_next", real_build_next)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    assert report.decision_evidence["reason"] == "prepared_dispatch_basis_canonical_unfresh"
 
 
 def test_fresh_canonical_permission_error_blocks_operator_required_without_ambiguity(

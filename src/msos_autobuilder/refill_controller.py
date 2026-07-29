@@ -1804,6 +1804,85 @@ def _prepared_matches_candidate(
     )
 
 
+def _prepared_action_identity(prepared: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": "refill_action_identity.v1",
+        "generation_id": prepared.get("generation_id"),
+        "attempt_ordinal": prepared.get("attempt_ordinal"),
+        "retry_ordinal": prepared.get("retry_ordinal"),
+        "reason": prepared.get("reason"),
+        "selected_work_item_id": prepared.get("selected_work_item_id"),
+        "pipeline_id": prepared.get("pipeline_id"),
+        "source_commit": prepared.get("source_commit"),
+        "job_id": prepared.get("job_id"),
+        "feed_path": prepared.get("feed_path"),
+    }
+
+
+def _bind_decision_basis_v1(
+    basis: Mapping[str, Any] | None,
+    prepared: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    if basis is None:
+        return None
+    bound = dict(basis)
+    if bound.get("decision_basis_schema_version") == "decision_basis.v1":
+        bound["new_action_identity"] = _prepared_action_identity(prepared)
+    return bound
+
+
+def _prepared_decision_basis_error(
+    config: RefillConfig,
+    prepared: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    basis = prepared.get("decision_basis")
+    if not isinstance(basis, Mapping):
+        return None
+    if basis.get("decision_basis_schema_version") != "decision_basis.v1":
+        return {"reason": "prepared_dispatch_basis_schema_mismatch", "basis": dict(basis)}
+    expected_identity = _prepared_action_identity(prepared)
+    if basis.get("new_action_identity") != expected_identity:
+        return {
+            "reason": "prepared_dispatch_action_identity_mismatch",
+            "basis": dict(basis),
+            "expected_action_identity": expected_identity,
+        }
+    prior = basis.get("prior_canonical_identity")
+    if not isinstance(prior, Mapping):
+        return {"reason": "prepared_dispatch_basis_missing_prior_identity", "basis": dict(basis)}
+    host_root = config.build_next.host_root
+    if host_root is None:
+        return None
+    try:
+        canonical = canonical_refill_classification(
+            host_root,
+            job_id=str(prior.get("job_id") or ""),
+            generation_id=str(prior.get("generation_id") or "") or None,
+        )
+    except LifecycleEvidenceError as exc:
+        return {
+            "reason": "prepared_dispatch_basis_canonical_unfresh",
+            "error": str(exc),
+            "basis": dict(basis),
+        }
+    evidence = canonical.get("evidence") if isinstance(canonical, Mapping) else None
+    if not isinstance(evidence, Mapping):
+        return {"reason": "prepared_dispatch_basis_canonical_missing", "basis": dict(basis)}
+    if (
+        canonical.get("category") != "item_terminal"
+        or basis.get("prior_snapshot_sha256") != evidence.get("snapshot_sha256")
+        or basis.get("prior_latest_evidence_set_sha256")
+        != evidence.get("latest_evidence_set_sha256")
+        or basis.get("prior_refill_action") != evidence.get("refill_action")
+    ):
+        return {
+            "reason": "prepared_dispatch_basis_canonical_mismatch",
+            "basis": dict(basis),
+            "canonical": dict(canonical),
+        }
+    return None
+
+
 def _candidate_from_prepared_job(
     generation: Mapping[str, Any],
     prepared: Mapping[str, Any],
@@ -1920,8 +1999,11 @@ def _prepare_dispatch(
         "prepared_at": _utc_now(),
         "feed_path": receipt.feed_path,
         "feed_commit": receipt.feed_commit,
-        **({"decision_basis": dict(decision_basis)} if decision_basis is not None else {}),
     }
+    bound_basis = _bind_decision_basis_v1(decision_basis, prepared)
+    if bound_basis is not None:
+        prepared["decision_basis"] = bound_basis
+        generation["last_refill_action_basis"] = bound_basis
     generation["prepared_dispatch"] = prepared
     generation["state"] = "DISPATCHING"
     if consume_provider_retry:
@@ -2044,6 +2126,12 @@ def _recover_or_replay_prepared_dispatch(
     prepared = generation.get("prepared_dispatch")
     if not isinstance(prepared, dict):
         return None
+    basis_error = _prepared_decision_basis_error(config, prepared)
+    if basis_error is not None:
+        generation["state"] = "BLOCKED"
+        generation["dispatch_error"] = basis_error
+        save_refill_generation(config, generation)
+        return generation["dispatch_error"]
     matches = _matching_prepared_side_effects(config, paths, generation, prepared)
     if matches and matches[0].get("conflict") is True:
         generation["state"] = "BLOCKED"
@@ -2984,16 +3072,17 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
             evidence = classification.get("evidence")
             if isinstance(evidence, Mapping):
                 decision_basis = {
-                    "schema_version": "canonical_refill_action_basis.v1",
-                    "action": evidence.get("refill_action"),
-                    "source_job_id": current.get("job_id"),
-                    "source_work_item_id": current.get("work_item_id"),
-                    "source_attempt_identity": evidence.get("attempt_identity"),
-                    "source_snapshot_sha256": evidence.get("snapshot_sha256"),
-                    "source_latest_evidence_set_sha256": evidence.get(
+                    "decision_basis_schema_version": "decision_basis.v1",
+                    "basis_kind": "prior_work_item",
+                    "prior_canonical_identity": evidence.get("attempt_identity"),
+                    "prior_snapshot_sha256": evidence.get("snapshot_sha256"),
+                    "prior_latest_evidence_set_sha256": evidence.get(
                         "latest_evidence_set_sha256"
                     ),
-                    "source_reduced_through": evidence.get("reduced_through"),
+                    "prior_item_disposition": evidence.get("reason"),
+                    "prior_refill_action": evidence.get("refill_action"),
+                    "action_type": "exclude_and_dispatch_next",
+                    "new_action_identity": None,
                 }
             exclusions = list(generation.get("item_scoped_terminal_exclusions") or [])
             work_item_id = str(current.get("work_item_id") or "")
@@ -3011,7 +3100,7 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
             classification_evidence = classification.get("evidence")
             block_reason = "ambiguous_attempt"
             if (
-                classification.get("stage") == "canonical_lifecycle"
+                str(classification.get("stage") or "").startswith("canonical_lifecycle")
                 and isinstance(classification_evidence, Mapping)
                 and classification_evidence.get("reason")
             ):
@@ -3109,12 +3198,18 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
     status = receipt.status
     message = receipt.message
     if status == "QUEUED" and generation.get("state") != "BLOCKED":
+        queued_decision_basis = (
+            prepared.get("decision_basis")
+            if isinstance(prepared, Mapping)
+            and isinstance(prepared.get("decision_basis"), Mapping)
+            else decision_basis or generation.get("last_refill_action_basis")
+        )
         attempt = _attempt_from_receipt(
             receipt,
             attempt_ordinal=attempt_ordinal,
             retry_ordinal=retry_ordinal,
             reason=retry_reason,
-            decision_basis=decision_basis or generation.get("last_refill_action_basis"),
+            decision_basis=queued_decision_basis,
         )
         _record_attempt(generation, attempt)
         generation.pop("prepared_dispatch", None)

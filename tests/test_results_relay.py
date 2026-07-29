@@ -8,7 +8,11 @@ from pathlib import Path
 import pytest
 import yaml
 
-from msos_autobuilder.lifecycle_evidence import attempt_identity_from_job, identity_digest
+from msos_autobuilder.lifecycle_evidence import (
+    attempt_identity_from_job,
+    emit_lifecycle_evidence,
+    identity_digest,
+)
 from msos_autobuilder.results_relay import (
     ResultsRelay,
     ResultsRelayConfig,
@@ -421,6 +425,146 @@ def test_results_relay_emits_not_applicable_for_host_failure(tmp_path: Path) -> 
     assert envelope["source_sha256"] == hashlib.sha256(
         (failed_dir / "error.json").read_bytes()
     ).hexdigest()
+
+
+def test_results_relay_contains_malformed_recorder_head_and_reduces_healthy_identity(
+    tmp_path: Path,
+) -> None:
+    host_root = tmp_path / "host"
+    workspace_root = tmp_path / "workspaces"
+    _write_host_config(host_root, workspace_root)
+    remote = _create_results_remote(tmp_path)
+    healthy_identity = attempt_identity_from_job(_job_identity("healthy-job"))
+    assert healthy_identity is not None
+    source = host_root / "state" / "fixture-source.json"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text('{"ok": true}\n', encoding="utf-8")
+    emit_lifecycle_evidence(
+        host_root,
+        evidence_kind="dispatch.prepared",
+        identity=healthy_identity,
+        source_path=source,
+        payload={
+            "selected_work_item": {
+                "pipeline_id": healthy_identity["pipeline_id"],
+                "work_item_id": healthy_identity["work_item_id"],
+                "work_item_source_sha256_v1": healthy_identity["work_item_digest"],
+            },
+            "generation_id": healthy_identity["generation_id"],
+            "dispatch_intent_sha256": "1" * 64,
+            "capacity_slot": {
+                "slot_id": "capacity-one",
+                "desired_capacity": 1,
+                "active_running": 0,
+                "active_queued": 0,
+            },
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:00:00Z",
+    )
+    bad_head = (
+        host_root
+        / "state"
+        / "host-evidence"
+        / "heads"
+        / "execution"
+        / ("f" * 64 + ".json")
+    )
+    bad_head.parent.mkdir(parents=True, exist_ok=True)
+    bad_head.write_text("{not-json", encoding="utf-8")
+
+    relayed = ResultsRelay(
+        ResultsRelayConfig(
+            host_root=host_root,
+            repo_url=str(remote),
+            branch="results",
+            machine_id="test-host",
+            poll_seconds=1,
+        )
+    ).run_once()
+
+    assert relayed == ()
+    digest = identity_digest(healthy_identity)
+    assert (host_root / "state" / "attempt-lifecycle" / "attempts" / f"{digest}.json").exists()
+    diagnostics = list(
+        (host_root / "state" / "producer-evidence-errors" / "attempt_lifecycle_recorder").glob(
+            "*.json"
+        )
+    )
+    assert len(diagnostics) == 1
+    diagnostic = json.loads(diagnostics[0].read_text(encoding="utf-8"))
+    assert diagnostic["primary_outcome_preserved"] is False
+    assert diagnostic["primary_outcome"]["head_path"].endswith(bad_head.name)
+
+
+def test_results_relay_contains_conflicting_recorder_envelope_without_blocking_relay(
+    tmp_path: Path,
+) -> None:
+    host_root = tmp_path / "host"
+    workspace_root = tmp_path / "workspaces"
+    _write_host_config(host_root, workspace_root)
+    remote = _create_results_remote(tmp_path)
+    identity = attempt_identity_from_job(_job_identity("conflict-job"))
+    assert identity is not None
+    source = host_root / "state" / "fixture-source.json"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text('{"ok": true}\n', encoding="utf-8")
+    result = emit_lifecycle_evidence(
+        host_root,
+        evidence_kind="dispatch.prepared",
+        identity=identity,
+        source_path=source,
+        payload={
+            "selected_work_item": {
+                "pipeline_id": identity["pipeline_id"],
+                "work_item_id": identity["work_item_id"],
+                "work_item_source_sha256_v1": identity["work_item_digest"],
+            },
+            "generation_id": identity["generation_id"],
+            "dispatch_intent_sha256": "1" * 64,
+            "capacity_slot": {
+                "slot_id": "capacity-one",
+                "desired_capacity": 1,
+                "active_running": 0,
+                "active_queued": 0,
+            },
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:00:00Z",
+    )
+    envelope = json.loads(result.envelope_path.read_text(encoding="utf-8"))
+    envelope["payload"]["dispatch_intent_sha256"] = "2" * 64
+    result.envelope_path.write_text(json.dumps(envelope, sort_keys=True) + "\n", encoding="utf-8")
+
+    relayed = ResultsRelay(
+        ResultsRelayConfig(
+            host_root=host_root,
+            repo_url=str(remote),
+            branch="results",
+            machine_id="test-host",
+            poll_seconds=1,
+        )
+    ).run_once()
+
+    assert relayed == ()
+    assert not (
+        host_root
+        / "state"
+        / "attempt-lifecycle"
+        / "attempts"
+        / f"{identity_digest(identity)}.json"
+    ).exists()
+    diagnostics = list(
+        (host_root / "state" / "producer-evidence-errors" / "attempt_lifecycle_recorder").glob(
+            "*.json"
+        )
+    )
+    assert len(diagnostics) == 1
+    diagnostic = json.loads(diagnostics[0].read_text(encoding="utf-8"))
+    assert diagnostic["primary_outcome_preserved"] is False
+    assert diagnostic["identity_digest"] == identity_digest(identity)
 
 
 def test_results_relay_rejects_workspace_drift(tmp_path: Path) -> None:

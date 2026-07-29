@@ -252,6 +252,7 @@ def record_producer_evidence_error(
     error: BaseException,
     identity: Mapping[str, Any] | None = None,
     primary_outcome: Mapping[str, Any] | None = None,
+    primary_outcome_preserved: bool = True,
 ) -> Path | None:
     try:
         state = host_root / "state" / "producer-evidence-errors" / producer
@@ -272,7 +273,7 @@ def record_producer_evidence_error(
             "identity_digest": digest,
             "error_type": type(error).__name__,
             "message": str(error),
-            "primary_outcome_preserved": True,
+            "primary_outcome_preserved": primary_outcome_preserved,
             "primary_outcome": dict(primary_outcome or {}),
         }
         suffix = sha256_bytes(canonical_json_bytes(payload))[:16]
@@ -688,24 +689,55 @@ def reduce_attempt_lifecycle(host_root: Path) -> dict[str, Any]:
     """Reduce producer heads into canonical attempt/work-item snapshots."""
     with EvidenceHeadsLock(host_root):
         with AttemptLifecycleLock(host_root):
-            groups = _load_current_producer_heads(host_root)
+            _recover_lifecycle_materialized_state(host_root)
+            groups = _load_current_producer_heads_contained(host_root)
             reduced: list[dict[str, Any]] = []
+            blocked: list[dict[str, Any]] = []
             for digest, heads in sorted(groups.items()):
-                snapshot = _reduce_identity_heads(host_root, heads)
-                _publish_lifecycle_snapshot(host_root, digest, snapshot)
-                reduced.append(
-                    {
-                        "identity_digest": digest,
-                        "lifecycle_phase": snapshot["lifecycle_phase"],
-                        "item_disposition": snapshot["item_disposition"],
-                        "refill_action": snapshot["refill_action"],
-                    }
-                )
+                try:
+                    snapshot = _reduce_identity_heads(host_root, heads)
+                    _publish_lifecycle_snapshot(host_root, digest, snapshot)
+                    reduced.append(
+                        {
+                            "identity_digest": digest,
+                            "lifecycle_phase": snapshot["lifecycle_phase"],
+                            "item_disposition": snapshot["item_disposition"],
+                            "refill_action": snapshot["refill_action"],
+                        }
+                    )
+                except Exception as exc:
+                    identity = None
+                    if heads:
+                        candidate = heads[0].get("attempt_identity")
+                        identity = candidate if isinstance(candidate, Mapping) else None
+                    record_producer_evidence_error(
+                        host_root,
+                        producer="attempt_lifecycle_recorder",
+                        evidence_kind="canonical.reduce",
+                        error=exc,
+                        identity=identity,
+                        primary_outcome={
+                            "identity_digest": digest,
+                            "head_count": len(heads),
+                            "head_paths": [
+                                str(head.get("envelope_path") or "") for head in heads
+                            ],
+                        },
+                        primary_outcome_preserved=False,
+                    )
+                    blocked.append(
+                        {
+                            "identity_digest": digest,
+                            "error_type": type(exc).__name__,
+                            "message": str(exc),
+                        }
+                    )
             report = {
                 "schema_version": "attempt_lifecycle_reduce_report.v1",
                 "reduced_at": datetime.now().astimezone().isoformat(),
                 "identity_count": len(reduced),
                 "reduced": reduced,
+                "blocked": blocked,
             }
             _atomic_json(host_root / "state" / "attempt-lifecycle" / "last-reduce.json", report)
             return report
@@ -719,6 +751,8 @@ def canonical_refill_classification(
 ) -> dict[str, Any] | None:
     """Return a freshness-verified canonical refill classification for a job if one exists."""
     with EvidenceHeadsLock(host_root):
+        with AttemptLifecycleLock(host_root):
+            _recover_lifecycle_materialized_state(host_root)
         snapshot_path = _find_attempt_snapshot(
             host_root,
             job_id=job_id,
@@ -726,7 +760,9 @@ def canonical_refill_classification(
         )
         if snapshot_path is None:
             kinds = _head_kinds_for_job(host_root, job_id=job_id, generation_id=generation_id)
-            if not kinds or kinds <= {"dispatch.prepared", "dispatch.submitted"}:
+            if not kinds:
+                return None
+            if not _generation_requires_canonical(host_root, generation_id):
                 return None
             return {
                 "category": "unknown",
@@ -754,7 +790,7 @@ def canonical_refill_classification(
                 "reason": str(snapshot.get("item_disposition") or "canonical_disposition"),
                 "refill_action": refill_action,
                 "snapshot_path": _host_relative_path(host_root, snapshot_path),
-                "snapshot_sha256": sha256_bytes(canonical_json_bytes(snapshot)),
+                "snapshot_sha256": _snapshot_sha256(snapshot),
                 "latest_evidence_set_sha256": snapshot.get("latest_evidence_set_sha256"),
                 "reduced_through": snapshot.get("reduced_through"),
                 "lifecycle_phase": snapshot.get("lifecycle_phase"),
@@ -778,6 +814,40 @@ def _load_current_producer_heads(host_root: Path) -> dict[str, list[dict[str, An
             validate_producer_head(head, host_root=host_root)
             digest = str(head["identity_digest"])
             groups.setdefault(digest, []).append(dict(head))
+    return groups
+
+
+def _load_current_producer_heads_contained(host_root: Path) -> dict[str, list[dict[str, Any]]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for parts in HEAD_PATH_PARTS.values():
+        root = host_root.joinpath(*parts)
+        if not root.exists():
+            continue
+        for path in sorted(root.glob("*.json")):
+            try:
+                head = _read_json_mapping(path)
+                validate_producer_head(head, host_root=host_root)
+                digest = str(head["identity_digest"])
+                groups.setdefault(digest, []).append(dict(head))
+            except Exception as exc:
+                identity = None
+                try:
+                    raw = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(raw, Mapping) and isinstance(
+                        raw.get("attempt_identity"), Mapping
+                    ):
+                        identity = raw["attempt_identity"]
+                except Exception:
+                    identity = None
+                record_producer_evidence_error(
+                    host_root,
+                    producer="attempt_lifecycle_recorder",
+                    evidence_kind="canonical.head",
+                    error=exc,
+                    identity=identity,
+                    primary_outcome={"head_path": _host_relative_path(host_root, path)},
+                    primary_outcome_preserved=False,
+                )
     return groups
 
 
@@ -964,20 +1034,34 @@ def _load_envelope_for_head(host_root: Path, head: Mapping[str, Any]) -> dict[st
 
 def _publish_lifecycle_snapshot(host_root: Path, digest: str, snapshot: Mapping[str, Any]) -> None:
     root = host_root / "state" / "attempt-lifecycle"
+    previous_snapshot = _read_existing_snapshot(host_root, digest)
+    previous_snapshot_sha = (
+        _snapshot_sha256(previous_snapshot) if previous_snapshot is not None else None
+    )
     snapshot_payload = dict(snapshot)
-    snapshot_sha = sha256_bytes(canonical_json_bytes(snapshot_payload))
+    snapshot_sha = _snapshot_sha256(snapshot_payload)
+    snapshot_payload["snapshot_sha256"] = snapshot_sha
+    sequence, previous_transition_sha = _next_transition_identity(root, digest)
     transition = {
         "schema_version": "attempt_lifecycle_transition.v1",
+        "sequence": sequence,
         "identity_digest": digest,
-        "snapshot_sha256": snapshot_sha,
+        "previous_transition_sha256": previous_transition_sha,
+        "from_snapshot_sha256": previous_snapshot_sha,
+        "to_snapshot_sha256": snapshot_sha,
+        "snapshot": snapshot_payload,
         "latest_evidence_set_sha256": snapshot_payload["latest_evidence_set_sha256"],
         "lifecycle_phase": snapshot_payload["lifecycle_phase"],
         "item_disposition": snapshot_payload["item_disposition"],
         "refill_action": snapshot_payload["refill_action"],
+        "source_evidence": list(snapshot_payload["latest_evidence_set"]),
+        "recorded_at": datetime.now().astimezone().isoformat(),
+        "reducer_version": "attempt_lifecycle_reducer.v1",
     }
     transition_sha = sha256_bytes(canonical_json_bytes(transition))
-    journal_path = root / "journal" / digest / f"{transition_sha}.json"
-    _write_immutable(journal_path, canonical_json_bytes(transition) + b"\n")
+    transition_with_hash = {**transition, "transition_sha256": transition_sha}
+    journal_path = root / "transitions" / digest / f"{sequence:020d}.json"
+    _write_immutable(journal_path, canonical_json_bytes(transition_with_hash) + b"\n")
     _atomic_json(root / "attempts" / f"{digest}.json", snapshot_payload)
     _atomic_json(root / "work-items" / f"{digest}.json", snapshot_payload)
     generation_id = _safe_path_segment(str(snapshot_payload["attempt_identity"]["generation_id"]))
@@ -986,8 +1070,128 @@ def _publish_lifecycle_snapshot(host_root: Path, digest: str, snapshot: Mapping[
         **dict(_mapping(snapshot_payload["reduced_through"], "reduced_through")),
         "attempt_snapshot_sha256": snapshot_sha,
         "journal_transition_sha256": transition_sha,
+        "journal_sequence": sequence,
     }
     _atomic_json(root / "reduced-through" / f"{digest}.json", watermark)
+
+
+def _snapshot_sha256(snapshot: Mapping[str, Any]) -> str:
+    payload = dict(snapshot)
+    payload.pop("snapshot_sha256", None)
+    return sha256_bytes(canonical_json_bytes(payload))
+
+
+def _read_existing_snapshot(host_root: Path, digest: str) -> dict[str, Any] | None:
+    path = host_root / "state" / "attempt-lifecycle" / "attempts" / f"{digest}.json"
+    if not path.exists():
+        return None
+    return _read_json_mapping(path)
+
+
+def _next_transition_identity(root: Path, digest: str) -> tuple[int, str | None]:
+    transition_root = root / "transitions" / digest
+    if not transition_root.exists():
+        return 1, None
+    existing = sorted(transition_root.glob("*.json"))
+    if not existing:
+        return 1, None
+    previous_sha: str | None = None
+    last: dict[str, Any] | None = None
+    for path in existing:
+        last = _read_json_mapping(path)
+        _validate_transition_record(last, previous_sha=previous_sha)
+        previous_sha = str(last["transition_sha256"])
+    assert last is not None
+    sequence = last.get("sequence")
+    if not isinstance(sequence, int) or sequence < 1:
+        raise LifecycleEvidenceError("lifecycle transition sequence is malformed")
+    return sequence + 1, str(last["transition_sha256"])
+
+
+def _validate_transition_record(
+    transition: Mapping[str, Any],
+    *,
+    previous_sha: str | None,
+) -> None:
+    required = {
+        "schema_version",
+        "sequence",
+        "identity_digest",
+        "previous_transition_sha256",
+        "from_snapshot_sha256",
+        "to_snapshot_sha256",
+        "snapshot",
+        "latest_evidence_set_sha256",
+        "lifecycle_phase",
+        "item_disposition",
+        "refill_action",
+        "source_evidence",
+        "recorded_at",
+        "reducer_version",
+        "transition_sha256",
+    }
+    if set(transition) != required:
+        raise LifecycleEvidenceError("lifecycle transition has unexpected fields")
+    if transition.get("schema_version") != "attempt_lifecycle_transition.v1":
+        raise LifecycleEvidenceError("unsupported lifecycle transition schema")
+    if transition.get("previous_transition_sha256") != previous_sha:
+        raise LifecycleEvidenceError("lifecycle transition hash chain mismatch")
+    snapshot = _mapping(transition.get("snapshot"), "snapshot")
+    snapshot_sha = _snapshot_sha256(snapshot)
+    if transition.get("to_snapshot_sha256") != snapshot_sha:
+        raise LifecycleEvidenceError("lifecycle transition snapshot hash mismatch")
+    transition_payload = dict(transition)
+    transition_sha = str(transition_payload.pop("transition_sha256"))
+    if sha256_bytes(canonical_json_bytes(transition_payload)) != transition_sha:
+        raise LifecycleEvidenceError("lifecycle transition SHA mismatch")
+
+
+def _recover_lifecycle_materialized_state(host_root: Path) -> None:
+    root = host_root / "state" / "attempt-lifecycle"
+    transitions_root = root / "transitions"
+    if not transitions_root.exists():
+        return
+    recovered: list[dict[str, Any]] = []
+    for identity_root in sorted(path for path in transitions_root.iterdir() if path.is_dir()):
+        previous_sha: str | None = None
+        last_transition: dict[str, Any] | None = None
+        for path in sorted(identity_root.glob("*.json")):
+            transition = _read_json_mapping(path)
+            _validate_transition_record(transition, previous_sha=previous_sha)
+            previous_sha = str(transition["transition_sha256"])
+            last_transition = transition
+        if last_transition is None:
+            continue
+        snapshot = dict(_mapping(last_transition.get("snapshot"), "snapshot"))
+        digest = str(last_transition["identity_digest"])
+        snapshot_sha = _snapshot_sha256(snapshot)
+        snapshot["snapshot_sha256"] = snapshot_sha
+        _atomic_json(root / "attempts" / f"{digest}.json", snapshot)
+        _atomic_json(root / "work-items" / f"{digest}.json", snapshot)
+        generation_id = _safe_path_segment(str(snapshot["attempt_identity"]["generation_id"]))
+        _atomic_json(root / "generations" / generation_id / f"{digest}.json", snapshot)
+        watermark = {
+            **dict(_mapping(snapshot["reduced_through"], "reduced_through")),
+            "attempt_snapshot_sha256": snapshot_sha,
+            "journal_transition_sha256": last_transition["transition_sha256"],
+            "journal_sequence": last_transition["sequence"],
+        }
+        _atomic_json(root / "reduced-through" / f"{digest}.json", watermark)
+        recovered.append(
+            {
+                "identity_digest": digest,
+                "journal_sequence": last_transition["sequence"],
+                "transition_sha256": last_transition["transition_sha256"],
+            }
+        )
+    _atomic_json(
+        root / "recovery-ledger.json",
+        {
+            "schema_version": "attempt_lifecycle_recovery_ledger.v1",
+            "recovered_at": datetime.now().astimezone().isoformat(),
+            "recovered": recovered,
+        },
+    )
 
 
 def _find_attempt_snapshot(
@@ -1041,6 +1245,22 @@ def _head_kinds_for_job(
     return kinds
 
 
+def _generation_requires_canonical(host_root: Path, generation_id: str | None) -> bool:
+    if not generation_id:
+        return False
+    path = host_root / "state" / "refill-generation.json"
+    if not path.exists():
+        return False
+    try:
+        generation = _read_json_mapping(path)
+    except LifecycleEvidenceError:
+        return False
+    return (
+        generation.get("generation_id") == generation_id
+        and generation.get("canonical_lifecycle_boundary") == "post_recorder"
+    )
+
+
 def _verify_snapshot_freshness(host_root: Path, snapshot: Mapping[str, Any]) -> None:
     identity = _mapping(snapshot.get("attempt_identity"), "attempt_identity")
     digest = identity_digest(identity)
@@ -1053,8 +1273,10 @@ def _verify_snapshot_freshness(host_root: Path, snapshot: Mapping[str, Any]) -> 
     )
     if watermark.get("latest_evidence_set_sha256") != latest_digest:
         raise LifecycleEvidenceError("canonical lifecycle watermark is stale")
-    if watermark.get("attempt_snapshot_sha256") != sha256_bytes(canonical_json_bytes(snapshot)):
+    if watermark.get("attempt_snapshot_sha256") != _snapshot_sha256(snapshot):
         raise LifecycleEvidenceError("canonical lifecycle snapshot hash mismatch")
+    if snapshot.get("snapshot_sha256") not in {None, _snapshot_sha256(snapshot)}:
+        raise LifecycleEvidenceError("canonical lifecycle embedded snapshot hash mismatch")
 
 
 def _read_json_mapping(path: Path) -> dict[str, Any]:

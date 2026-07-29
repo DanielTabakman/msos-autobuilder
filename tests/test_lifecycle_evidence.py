@@ -1039,3 +1039,128 @@ def test_canonical_semantic_payload_validation_rejects_impossible_combinations(
                 closed_status=closed_status,
                 observed_at=f"2026-07-28T00:00:{index:02d}Z",
             )
+
+
+def _emit_prepared_and_submitted(tmp_path: Path, identity: dict[str, object]) -> None:
+    source = _source(tmp_path, "dispatch\n")
+    emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind="dispatch.prepared",
+        identity=identity,
+        source_path=source,
+        payload={
+            "selected_work_item": {
+                "pipeline_id": identity["pipeline_id"],
+                "work_item_id": identity["work_item_id"],
+                "work_item_source_sha256_v1": identity["work_item_digest"],
+            },
+            "generation_id": identity["generation_id"],
+            "dispatch_intent_sha256": "1" * 64,
+            "capacity_slot": {
+                "slot_id": "capacity-one",
+                "desired_capacity": 1,
+                "active_running": 0,
+                "active_queued": 0,
+            },
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:00:00Z",
+    )
+    emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind="dispatch.submitted",
+        identity=identity,
+        source_ref=SourceRef(
+            repository="git@example.invalid/repo.git",
+            ref="jobs",
+            commit="a" * 40,
+            path="jobs/approved/job.yaml",
+            sha256="b" * 64,
+        ),
+        payload={
+            "feed_commit": "a" * 40,
+            "feed_path": "jobs/approved/job.yaml",
+            "submitted_job_sha256": "b" * 64,
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:01:00Z",
+    )
+
+
+def test_lifecycle_transition_journal_is_ordered_hash_linked_and_replayable(
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    digest = identity_digest(identity)
+    _emit_prepared_and_submitted(tmp_path, identity)
+    first = lifecycle.reduce_attempt_lifecycle(tmp_path)
+    emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind="host.execution",
+        identity=identity,
+        source_path=_source(tmp_path, "host\n"),
+        payload={"execution_outcome": "running"},
+        final=False,
+        closed_status="open",
+        observed_at="2026-07-29T12:02:00Z",
+    )
+    second = lifecycle.reduce_attempt_lifecycle(tmp_path)
+
+    transitions = sorted(
+        (tmp_path / "state" / "attempt-lifecycle" / "transitions" / digest).glob("*.json")
+    )
+    assert [path.name for path in transitions] == [
+        "00000000000000000001.json",
+        "00000000000000000002.json",
+    ]
+    first_transition = json.loads(transitions[0].read_text(encoding="utf-8"))
+    second_transition = json.loads(transitions[1].read_text(encoding="utf-8"))
+    assert first_transition["previous_transition_sha256"] is None
+    assert second_transition["previous_transition_sha256"] == first_transition[
+        "transition_sha256"
+    ]
+    assert first["reduced"][0]["lifecycle_phase"] == "host_awaiting_import"
+    assert second["reduced"][0]["lifecycle_phase"] == "host_running"
+
+    snapshot_path = tmp_path / "state" / "attempt-lifecycle" / "attempts" / f"{digest}.json"
+    watermark_path = tmp_path / "state" / "attempt-lifecycle" / "reduced-through" / f"{digest}.json"
+    snapshot_path.unlink()
+    watermark_path.unlink()
+    classification = lifecycle.canonical_refill_classification(
+        tmp_path,
+        job_id=str(identity["job_id"]),
+        generation_id=str(identity["generation_id"]),
+    )
+
+    assert classification is not None
+    assert classification["category"] == "in_flight"
+    assert snapshot_path.exists()
+    assert watermark_path.exists()
+
+
+def test_lifecycle_replay_rejects_transition_digest_mismatch(tmp_path: Path) -> None:
+    identity = _identity()
+    digest = identity_digest(identity)
+    _emit_prepared_and_submitted(tmp_path, identity)
+    lifecycle.reduce_attempt_lifecycle(tmp_path)
+    transition_path = (
+        tmp_path
+        / "state"
+        / "attempt-lifecycle"
+        / "transitions"
+        / digest
+        / "00000000000000000001.json"
+    )
+    transition = json.loads(transition_path.read_text(encoding="utf-8"))
+    transition["snapshot"]["item_disposition"] = "corrupted"
+    transition_path.write_text(json.dumps(transition, sort_keys=True) + "\n", encoding="utf-8")
+    (tmp_path / "state" / "attempt-lifecycle" / "attempts" / f"{digest}.json").unlink()
+
+    with pytest.raises(LifecycleEvidenceError, match="snapshot hash mismatch"):
+        lifecycle.canonical_refill_classification(
+            tmp_path,
+            job_id=str(identity["job_id"]),
+            generation_id=str(identity["generation_id"]),
+        )

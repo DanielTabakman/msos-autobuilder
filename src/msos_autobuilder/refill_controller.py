@@ -83,6 +83,31 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+def _immutable_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    data = json.dumps(dict(payload), indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        if path.read_bytes() != data:
+            raise RefillControllerError(f"immutable receipt conflict: {path}")
+        return
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+        temporary = Path(handle.name)
+    try:
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
 def _atomic_write_bytes(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -1875,30 +1900,31 @@ def _prepare_dispatch(
     if receipt.evidence.get("source"):
         generation["source_ppe_identity"] = receipt.evidence["source"]
     save_refill_generation(config, generation)
-    source_receipt = _prepared_dispatch_receipt_path(config, prepared)
-    _atomic_write_json(
-        source_receipt,
-        {
-            "version": 1,
-            "receipt_type": "dispatch.prepared.source",
-            "prepared_dispatch": prepared,
-            "generation_id": generation.get("generation_id"),
-            "job_id": receipt.job_id,
-            "recorded_at": prepared["prepared_at"],
-        },
-    )
+    identity = None
     work_item_digest = receipt.evidence.get("work_item_source_sha256_v1")
     if isinstance(work_item_digest, str) and config.build_next.host_root is not None:
-        identity = attempt_identity(
-            pipeline_id=str(receipt.pipeline_id or ""),
-            work_item_id=str(receipt.work_item_id or ""),
-            work_item_digest=work_item_digest,
-            generation_id=str(generation.get("generation_id") or ""),
-            job_id=str(receipt.job_id or ""),
-            attempt_ordinal=attempt_ordinal,
-            retry_ordinal=retry_ordinal,
-        )
         try:
+            source_receipt = _prepared_dispatch_receipt_path(config, prepared)
+            _immutable_write_json(
+                source_receipt,
+                {
+                    "version": 1,
+                    "receipt_type": "dispatch.prepared.source",
+                    "prepared_dispatch": prepared,
+                    "generation_id": generation.get("generation_id"),
+                    "job_id": receipt.job_id,
+                    "recorded_at": prepared["prepared_at"],
+                },
+            )
+            identity = attempt_identity(
+                pipeline_id=str(receipt.pipeline_id or ""),
+                work_item_id=str(receipt.work_item_id or ""),
+                work_item_digest=work_item_digest,
+                generation_id=str(generation.get("generation_id") or ""),
+                job_id=str(receipt.job_id or ""),
+                attempt_ordinal=attempt_ordinal,
+                retry_ordinal=retry_ordinal,
+            )
             dispatch_intent_sha256 = hashlib.sha256(
                 json.dumps(prepared, sort_keys=True, separators=(",", ":")).encode("utf-8")
             ).hexdigest()
@@ -1927,14 +1953,17 @@ def _prepare_dispatch(
                 observed_at=str(prepared["prepared_at"]),
             )
         except Exception as exc:
-            record_producer_evidence_error(
-                config.build_next.host_root,
-                producer="refill_controller",
-                evidence_kind="dispatch.prepared",
-                error=exc,
-                identity=identity,
-                primary_outcome={"state": "DISPATCHING", "job_id": receipt.job_id},
-            )
+            try:
+                record_producer_evidence_error(
+                    config.build_next.host_root,
+                    producer="refill_controller",
+                    evidence_kind="dispatch.prepared",
+                    error=exc,
+                    identity=identity,
+                    primary_outcome={"state": "DISPATCHING", "job_id": receipt.job_id},
+                )
+            except Exception:
+                pass
     return prepared, receipt
 
 

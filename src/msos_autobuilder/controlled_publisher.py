@@ -240,6 +240,50 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _immutable_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps(dict(payload), indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    if path.exists():
+        if path.read_bytes() != data:
+            raise PublisherError(f"immutable publisher evidence receipt conflict: {path}")
+        return
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+        temporary = Path(handle.name)
+    try:
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _publisher_not_applicable_receipt_path(
+    host_root: Path,
+    *,
+    machine_id: str,
+    job_id: str,
+    gate_sha: str,
+) -> Path:
+    safe_job_id = _safe_segment(job_id, fallback="job")
+    return (
+        host_root
+        / "state"
+        / "publisher-evidence"
+        / "sources"
+        / "not-applicable"
+        / machine_id
+        / f"{safe_job_id}.{gate_sha}.json"
+    )
+
+
 def _canonical_patch_bytes(path: Path) -> bytes:
     return path.read_bytes().replace(b"\r\n", b"\n")
 
@@ -1008,20 +1052,34 @@ class ControlledPublisher:
                         or gate_report_for_disposition.get("started_at")
                         or ""
                     )
-                    ledger[job_id] = {
-                        "gate_report_sha256": gate_sha,
-                        "status": "not_applicable",
-                        "published_at": observed_at,
-                    }
-                    self._save_ledger(ledger)
+                    identity = None
                     try:
+                        source_receipt = _publisher_not_applicable_receipt_path(
+                            self.host_root,
+                            machine_id=self.config.machine_id,
+                            job_id=job_id,
+                            gate_sha=gate_sha,
+                        )
+                        _immutable_write_json(
+                            source_receipt,
+                            {
+                                "version": 1,
+                                "receipt_type": (
+                                    "publication_review.disposition.not_applicable.source"
+                                ),
+                                "machine_id": self.config.machine_id,
+                                "source_job_id": job_id,
+                                "gate_report_sha256": gate_sha,
+                                "recorded_at": observed_at,
+                            },
+                        )
                         identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
                         if identity is not None:
                             emit_lifecycle_evidence(
                                 self.host_root,
                                 evidence_kind="publication_review.disposition",
                                 identity=identity,
-                                source_path=gate_path,
+                                source_path=source_receipt,
                                 payload={
                                     "publication_review_disposition": "not_applicable",
                                     "results_commit": None,
@@ -1039,7 +1097,7 @@ class ControlledPublisher:
                             producer="controlled_publisher",
                             evidence_kind="publication_review.disposition",
                             error=exc,
-                            identity=locals().get("identity"),
+                            identity=identity,
                             primary_outcome={
                                 "job_id": job_id,
                                 "publication_review_disposition": "not_applicable",

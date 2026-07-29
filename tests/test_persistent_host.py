@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import Any
 import pytest
 import yaml
 
+import msos_autobuilder.persistent_host as persistent_host_module
 from msos_autobuilder.codex_shadow import CodexShadowReport
 from msos_autobuilder.persistent_host import (
     HostJobError,
@@ -64,6 +66,21 @@ def _manifest(*, allow_changes: bool = False) -> dict[str, Any]:
                 "allow_changes": allow_changes,
             }
         ],
+    }
+
+
+def _job_identity() -> dict[str, Any]:
+    return {
+        "founder_build_next": {
+            "pipeline_id": "ppe",
+            "work_item_id": "fixture-work",
+            "work_item_source_sha256_v1": "a" * 64,
+            "refill_attempt": {
+                "generation_id": "refill-12345678",
+                "attempt_ordinal": 1,
+                "retry_ordinal": 0,
+            },
+        }
     }
 
 
@@ -297,6 +314,58 @@ def test_feed_imports_approved_job_once(tmp_path: Path) -> None:
     assert sync_git_job_feed(config, paths) == ("remote-1",)
     assert sync_git_job_feed(config, paths) == ()
     assert (paths.pending / "remote-1.yaml").exists()
+
+
+def test_running_transition_receipt_replay_uses_stored_timestamp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, _ = _write_configs(tmp_path)
+    paths = HostPaths.from_root(config.host_root)
+    paths.ensure()
+    payload = {
+        "version": 1,
+        "job_id": "running-replay",
+        "approved": True,
+        "publication_enabled": False,
+        **_job_identity(),
+        "manifest": _manifest(),
+    }
+    job_text = yaml.safe_dump(payload, sort_keys=False)
+    pending_path = paths.pending / "running-replay.yaml"
+    pending_path.write_text(job_text, encoding="utf-8")
+    host = PersistentHost(config, runner=_fake_runner)
+    timestamps = iter(("2026-07-29T00:00:01+00:00", "2026-07-29T00:00:59+00:00"))
+    monkeypatch.setattr(persistent_host_module, "_timestamp", lambda value=None: next(timestamps))
+
+    first = host._claim_next_job()
+    assert first is not None
+    running_path, _job = first
+    receipts = list(
+        (paths.state / "host-evidence" / "sources" / "execution" / "running").glob("*.json")
+    )
+    assert len(receipts) == 1
+    receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
+    assert receipt["job_source_utf8"] == job_text
+    assert receipt["job_source_sha256"] == hashlib.sha256(job_text.encode("utf-8")).hexdigest()
+    assert receipt["observed_at"]
+
+    heads = list((paths.state / "host-evidence" / "heads" / "execution").glob("*.json"))
+    assert len(heads) == 1
+    head = json.loads(heads[0].read_text(encoding="utf-8"))
+    envelope_path = config.host_root / head["envelope_path"]
+    first_envelope = envelope_path.read_bytes()
+    envelope = json.loads(first_envelope.decode("utf-8"))
+    assert envelope["observed_at"] == receipt["observed_at"]
+    assert envelope["payload"] == {"execution_outcome": "running"}
+
+    running_path.replace(pending_path)
+    second = host._claim_next_job()
+    assert second is not None
+    assert envelope_path.read_bytes() == first_envelope
+    assert json.loads(receipts[0].read_text(encoding="utf-8"))["observed_at"] == receipt[
+        "observed_at"
+    ]
 
 
 def test_unapproved_feed_job_is_not_imported(tmp_path: Path) -> None:

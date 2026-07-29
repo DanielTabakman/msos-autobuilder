@@ -248,7 +248,7 @@ def _host_transition_receipt_path(
         / "sources"
         / "execution"
         / outcome
-        / f"{safe_job_id}.{content_sha256}.yaml"
+        / f"{safe_job_id}.{content_sha256}.json"
     )
 
 
@@ -258,7 +258,8 @@ def _write_host_transition_receipt(
     outcome: str,
     job_id: str,
     text: str,
-) -> Path:
+    observed_at: str,
+) -> tuple[Path, str]:
     content_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
     path = _host_transition_receipt_path(
         paths,
@@ -266,12 +267,30 @@ def _write_host_transition_receipt(
         job_id=job_id,
         content_sha256=content_sha256,
     )
+    payload = {
+        "version": 1,
+        "receipt_type": "host.execution.transition.source",
+        "execution_outcome": outcome,
+        "job_id": job_id,
+        "job_source_sha256": content_sha256,
+        "job_source_utf8": text,
+        "observed_at": observed_at,
+    }
+    data = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8") + b"\n"
     if path.exists():
-        if path.read_text(encoding="utf-8") != text:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(existing, dict)
+            or existing.get("job_source_utf8") != text
+            or existing.get("job_source_sha256") != content_sha256
+            or existing.get("execution_outcome") != outcome
+            or existing.get("job_id") != job_id
+            or not isinstance(existing.get("observed_at"), str)
+        ):
             raise HostJobError(f"host evidence receipt conflicts for {job_id}")
-        return path
-    _atomic_write_text(path, text)
-    return path
+        return path, str(existing["observed_at"])
+    _atomic_write_text(path, data.decode("utf-8"))
+    return path, observed_at
 
 
 def _emit_host_evidence(
@@ -628,11 +647,12 @@ def sync_git_job_feed(config: PersistentHostConfig, paths: HostPaths) -> tuple[s
                 primary_outcome={"outcome": "imported", "job_id": job.job_id},
             )
             try:
-                pending_receipt = _write_host_transition_receipt(
+                pending_receipt, pending_observed_at = _write_host_transition_receipt(
                     paths,
                     outcome="pending",
                     job_id=job.job_id,
                     text=text,
+                    observed_at=feed_recorded_at,
                 )
                 _emit_host_evidence(
                     config.host_root,
@@ -642,7 +662,7 @@ def sync_git_job_feed(config: PersistentHostConfig, paths: HostPaths) -> tuple[s
                     producer_sequence=2,
                     final=False,
                     closed_status="open",
-                    observed_at=feed_recorded_at,
+                    observed_at=pending_observed_at,
                     primary_outcome={"outcome": "pending", "job_id": job.job_id},
                 )
             except Exception as exc:
@@ -938,11 +958,13 @@ class PersistentHost:
             identity = attempt_identity_from_job_yaml(running_path)
             if identity is not None:
                 try:
-                    running_receipt = _write_host_transition_receipt(
+                    running_observed_at = _timestamp()
+                    running_receipt, stored_observed_at = _write_host_transition_receipt(
                         self.paths,
                         outcome="running",
                         job_id=job.job_id,
                         text=running_path.read_text(encoding="utf-8"),
+                        observed_at=running_observed_at,
                     )
                     _emit_host_evidence(
                         self.config.host_root,
@@ -952,7 +974,7 @@ class PersistentHost:
                         producer_sequence=3,
                         final=False,
                         closed_status="open",
-                        observed_at=_timestamp(),
+                        observed_at=stored_observed_at,
                         primary_outcome={"outcome": "running", "job_id": job.job_id},
                     )
                 except Exception as exc:

@@ -105,6 +105,31 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+def _immutable_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps(dict(payload), indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    if path.exists():
+        if path.read_bytes() != data:
+            raise RevisionLoopError(f"immutable revision evidence receipt conflict: {path}")
+        return
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+        temporary = Path(handle.name)
+    try:
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
 def _run_git(
     repo: Path | None,
     *args: str,
@@ -135,6 +160,24 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _revision_not_applicable_receipt_path(
+    host_root: Path,
+    *,
+    machine_id: str,
+    job_id: str,
+    gate_sha: str,
+) -> Path:
+    return (
+        host_root
+        / "state"
+        / "revision-evidence"
+        / "sources"
+        / "not-applicable"
+        / machine_id
+        / f"{_safe_segment(job_id, fallback='job')}.{gate_sha}.json"
+    )
 
 
 def _bounded(value: Any, limit: int = 12_000) -> str:
@@ -494,23 +537,32 @@ class RevisionLoop:
                     continue
                 gate_sha = _sha256_file(gate_path)
                 observed_at = str(gate_report.get("finished_at") or gate_report.get("started_at") or "")
-                ledger[ledger_key] = {
-                    "gate_report_sha256": gate_sha,
-                    "revision_job_id": "",
-                    "jobs_commit": "",
-                    "queued_at": observed_at,
-                    "source_job_id": job_id,
-                    "disposition": "not_applicable",
-                }
-                self._save_ledger(ledger)
+                identity = None
                 try:
+                    source_receipt = _revision_not_applicable_receipt_path(
+                        self.host_root,
+                        machine_id=self.config.machine_id,
+                        job_id=job_id,
+                        gate_sha=gate_sha,
+                    )
+                    _immutable_write_json(
+                        source_receipt,
+                        {
+                            "version": 1,
+                            "receipt_type": "revision.disposition.not_applicable.source",
+                            "machine_id": self.config.machine_id,
+                            "source_job_id": job_id,
+                            "gate_report_sha256": gate_sha,
+                            "recorded_at": observed_at,
+                        },
+                    )
                     identity = attempt_identity_from_job_yaml(job_path)
                     if identity is not None:
                         emit_lifecycle_evidence(
                             self.host_root,
                             evidence_kind="revision.disposition",
                             identity=identity,
-                            source_path=gate_path,
+                            source_path=source_receipt,
                             payload={
                                 "revision_disposition": "not_applicable",
                                 "gate_report_sha256": gate_sha,
@@ -527,7 +579,7 @@ class RevisionLoop:
                         producer="revision_loop",
                         evidence_kind="revision.disposition",
                         error=exc,
-                        identity=locals().get("identity"),
+                        identity=identity,
                         primary_outcome={
                             "source_job_id": job_id,
                             "revision_disposition": "not_applicable",

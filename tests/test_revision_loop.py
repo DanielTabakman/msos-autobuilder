@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -91,6 +92,16 @@ def _job_yaml() -> dict[str, object]:
         "approved": True,
         "publication_enabled": False,
         "expected_source_head": SOURCE_HEAD,
+        "founder_build_next": {
+            "pipeline_id": "ppe",
+            "work_item_id": "fixture-work",
+            "work_item_source_sha256_v1": "a" * 64,
+            "refill_attempt": {
+                "generation_id": "refill-12345678",
+                "attempt_ordinal": 1,
+                "retry_ordinal": 0,
+            },
+        },
         "manifest": {
             "version": 1,
             "publication_enabled": False,
@@ -236,6 +247,71 @@ def test_revision_loop_writes_only_jobs_branch_and_is_repeat_safe(tmp_path: Path
     results_review = tmp_path / "results-review"
     _git(None, "clone", "-q", "--branch", "results", str(remote), str(results_review))
     assert not list(results_review.rglob(f"{TARGET_TASK_ID}-revision-1.yaml"))
+
+
+def test_passed_gate_revision_not_applicable_uses_source_receipt_not_legacy_ledger(
+    tmp_path: Path,
+) -> None:
+    remote = _create_remote(tmp_path)
+    editor = tmp_path / "editor"
+    _git(None, "clone", "-q", "--branch", "results", str(remote), str(editor))
+    _git(editor, "config", "user.email", "test@example.com")
+    _git(editor, "config", "user.name", "Test")
+    gate_path = editor / "results" / "test-host" / ROOT_JOB_ID / "gate-report.json"
+    gate = _gate_report()
+    gate["status"] = "passed"
+    gate["checks"][0]["passed"] = True
+    gate["checks"][0]["returncode"] = 0
+    gate["policy_blocks"] = []
+    write = json.dumps(gate, indent=2, sort_keys=True) + "\n"
+    gate_path.write_text(write, encoding="utf-8")
+    _git(editor, "add", ".")
+    _git(editor, "commit", "-qm", "mark gate passed")
+    _git(editor, "push", "-q", "origin", "results")
+
+    config = RevisionLoopConfig(
+        host_root=tmp_path / "host",
+        repo_url=str(remote),
+        results_branch="results",
+        jobs_branch="jobs",
+        machine_id="test-host",
+        poll_seconds=1,
+        max_revision_depth=3,
+        plans={ROOT_JOB_ID: _plan()},
+    )
+    loop = RevisionLoop(config)
+
+    assert loop.run_once() == ()
+    assert not (config.host_root / "state" / "revision-loop-seen.json").exists()
+
+    receipts = list(
+        (config.host_root / "state" / "revision-evidence" / "sources" / "not-applicable").rglob(
+            "*.json"
+        )
+    )
+    assert len(receipts) == 1
+    receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
+    assert receipt["receipt_type"] == "revision.disposition.not_applicable.source"
+    assert receipt["source_job_id"] == ROOT_JOB_ID
+    assert receipt["gate_report_sha256"] == hashlib.sha256(gate_path.read_bytes()).hexdigest()
+
+    heads = list(
+        (config.host_root / "state" / "revision-evidence" / "heads" / "disposition").rglob(
+            "*.json"
+        )
+    )
+    assert len(heads) == 1
+    head = json.loads(heads[0].read_text(encoding="utf-8"))
+    assert head["evidence_kind"] == "revision.disposition"
+    assert head["closed_status"] == "not_applicable"
+    envelope = json.loads((config.host_root / head["envelope_path"]).read_text(encoding="utf-8"))
+    assert envelope["payload"]["revision_disposition"] == "not_applicable"
+    assert envelope["source"]["path"] == receipts[0].relative_to(config.host_root).as_posix()
+
+    first_envelope_bytes = (config.host_root / head["envelope_path"]).read_bytes()
+    assert loop.run_once() == ()
+    assert (config.host_root / head["envelope_path"]).read_bytes() == first_envelope_bytes
+    assert not (config.host_root / "state" / "revision-loop-seen.json").exists()
 
 
 def test_revision_loop_job_yaml_parse_failure_records_source_identity(tmp_path: Path) -> None:

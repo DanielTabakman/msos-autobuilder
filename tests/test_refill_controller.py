@@ -876,26 +876,41 @@ def test_restart_with_proven_later_terminal_disposition_is_nonblocking(tmp_path:
 def _write_legacy_publisher_recovery_case(
     config: RefillConfig,
     *,
+    marker_release: str = "6" * 40,
+    marker_started: str = "2026-07-21T09:57:31.000000+00:00",
+    marker_pid: int = 321,
+    current_release: str = EXACT_RELEASE,
+    current_started: str = "2999-01-01T00:00:00+00:00",
+    current_pid: int = 123,
+    marker_recorded: str = "2026-07-21T09:58:31.613177+00:00",
+    success_finished: str = "2999-01-01T00:00:02+00:00",
     marker_overrides: dict[str, object] | None = None,
     ledger_overrides: dict[str, object] | None = None,
     ledger_remove_keys: tuple[str, ...] = (),
     success_overrides: dict[str, object] | None = None,
     write_success: bool = True,
 ) -> Path:
-    old_release = "6" * 40
-    old_started = "2026-07-21T09:57:31.000000+00:00"
-    old_pid = 321
+    _write_exact_release_witnesses(
+        config,
+        release_commit=current_release,
+        started_at=current_started,
+    )
+    supervisor = config.build_next.host_root.parent / ".msos-autobuilder-supervisor"
+    witness = supervisor / "state" / "service-witnesses" / "publisher.json"
+    payload = json.loads(witness.read_text(encoding="utf-8"))
+    payload["child_pid"] = current_pid
+    witness.write_text(json.dumps(payload) + "\n", encoding="utf-8")
     marker = {
         "service": "publisher",
-        "release_commit": old_release,
-        "witness_started_at": old_started,
-        "witness_pid": old_pid,
+        "release_commit": marker_release,
+        "witness_started_at": marker_started,
+        "witness_pid": marker_pid,
         "generation_id": _generation_id(
-            release_commit=old_release,
-            started_at=old_started,
-            pid=old_pid,
+            release_commit=marker_release,
+            started_at=marker_started,
+            pid=marker_pid,
         ),
-        "recorded_at": "2026-07-21T09:58:31.613177+00:00",
+        "recorded_at": marker_recorded,
         "associated": {
             "job_id": "ppe-frozen-evaluation-contract-v1-revision-1",
             "repository": SOURCE_REPO,
@@ -934,13 +949,17 @@ def _write_legacy_publisher_recovery_case(
         success = {
             "version": 1,
             "service": "publisher",
-            "release_commit": EXACT_RELEASE,
-            "witness_started_at": "2999-01-01T00:00:00+00:00",
-            "witness_pid": 123,
-            "generation_id": _generation_id(),
-            "recorded_at": "2999-01-01T00:00:02+00:00",
-            "cycle_started_at": "2999-01-01T00:00:01+00:00",
-            "finished_at": "2999-01-01T00:00:02+00:00",
+            "release_commit": current_release,
+            "witness_started_at": current_started,
+            "witness_pid": current_pid,
+            "generation_id": _generation_id(
+                release_commit=current_release,
+                started_at=current_started,
+                pid=current_pid,
+            ),
+            "recorded_at": success_finished,
+            "cycle_started_at": current_started,
+            "finished_at": success_finished,
             "result": "success",
             "associated_jobs": ["ppe-frozen-evaluation-contract-v1-revision-1"],
             "terminal_evidence": {
@@ -979,6 +998,115 @@ def test_legacy_publisher_marker_without_published_at_superseded_by_current_succ
     assert publisher["ok"] is True
     assert publisher["marker_sha256"] == before_sha
     assert publisher["superseded_by"] == "legacy_publisher_success_and_coherent_publication"
+
+
+def test_issue_50_same_release_older_publisher_generation_recovery(
+    tmp_path: Path,
+) -> None:
+    release = "20d397dc1a7c1bcc54fd93212052507b218509ef"
+    current_started = "2026-07-30T06:43:23.4501711+00:00"
+    marker_started = "2026-07-29T11:24:57.539063+00:00"
+    job_id = "ppe-frozen-evaluation-contract-v1-revision-1"
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    marker_path = _write_legacy_publisher_recovery_case(
+        config,
+        marker_release=release,
+        marker_started=marker_started,
+        marker_pid=18420,
+        current_release=release,
+        current_started=current_started,
+        current_pid=35144,
+        marker_recorded="2026-07-29T11:25:57.539063+00:00",
+        success_finished="2026-07-30T06:44:43.187925+00:00",
+        marker_overrides={
+            "associated": {
+                "job_id": job_id,
+                "repository": SOURCE_REPO,
+                "branch": f"autobuilder/{job_id}",
+                "commit_sha": "4" * 40,
+                "pr_number": 5351,
+                "pr_url": "https://example.invalid/pull/5351",
+                "gate_report_sha256": "d" * 64,
+                "source_report_sha256": "e" * 64,
+                "results_commit": "5" * 40,
+            }
+        },
+    )
+    before = marker_path.read_bytes()
+    before_sha = hashlib.sha256(before).hexdigest()
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "QUEUED"
+    assert marker_path.read_bytes() == before
+    publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
+    assert publisher["ok"] is True
+    assert publisher["marker_sha256"] == before_sha
+    assert publisher["current_release_commit"] == release
+    assert publisher["current_witness_started_at"] == current_started
+    assert publisher["superseded_by"] == "legacy_publisher_success_and_coherent_publication"
+
+
+def test_same_release_older_publisher_generation_without_verified_job_proof_blocks(
+    tmp_path: Path,
+) -> None:
+    release = "20d397dc1a7c1bcc54fd93212052507b218509ef"
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    _write_legacy_publisher_recovery_case(
+        config,
+        marker_release=release,
+        marker_started="2026-07-29T11:24:57.539063+00:00",
+        marker_pid=18420,
+        current_release=release,
+        current_started="2026-07-30T06:43:23.4501711+00:00",
+        current_pid=35144,
+        marker_recorded="2026-07-29T11:25:57.539063+00:00",
+        success_finished="2026-07-30T06:44:43.187925+00:00",
+        success_overrides={
+            "terminal_evidence": {
+                "processed_jobs": [],
+                "verified_jobs": ["other-job"],
+            }
+        },
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
+    assert publisher["ok"] is False
+    assert "verified_jobs does not identify" in publisher["error"]
+
+
+def test_same_release_publisher_marker_without_strict_older_generation_blocks(
+    tmp_path: Path,
+) -> None:
+    release = "20d397dc1a7c1bcc54fd93212052507b218509ef"
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    _write_legacy_publisher_recovery_case(
+        config,
+        marker_release=release,
+        marker_started="2026-07-30T06:43:23.4501711+00:00",
+        marker_pid=18420,
+        current_release=release,
+        current_started="2026-07-30T06:43:23.4501711+00:00",
+        current_pid=35144,
+        marker_recorded="2026-07-30T06:43:24.000000+00:00",
+        success_finished="2026-07-30T06:44:43.187925+00:00",
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "BLOCKED"
+    publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
+    assert publisher["ok"] is False
+    assert "not older than current generation" in publisher["error"]
 
 
 @pytest.mark.parametrize(
@@ -1161,15 +1289,15 @@ def test_legacy_publisher_marker_recovery_requires_current_generation_id(
 ) -> None:
     config = _refill_config(tmp_path)
     _write_host_status(config)
+    _write_legacy_publisher_recovery_case(
+        config,
+        success_overrides={"generation_id": None},
+    )
     supervisor = config.build_next.host_root.parent / ".msos-autobuilder-supervisor"
     witness = supervisor / "state" / "service-witnesses" / "publisher.json"
     payload = json.loads(witness.read_text(encoding="utf-8"))
     payload.pop("child_pid")
     witness.write_text(json.dumps(payload) + "\n", encoding="utf-8")
-    _write_legacy_publisher_recovery_case(
-        config,
-        success_overrides={"generation_id": None},
-    )
     keep_one_running(config)
 
     report = reconcile_refill(config)
@@ -1381,7 +1509,7 @@ def test_other_release_marker_cannot_clear_current_error(tmp_path: Path) -> None
     assert "release contradicts" in publisher["error"]
 
 
-def test_contradictory_witness_generation_metadata_blocks(tmp_path: Path) -> None:
+def test_internally_contradictory_marker_generation_metadata_blocks(tmp_path: Path) -> None:
     config = _refill_config(tmp_path)
     _write_host_status(config)
     _write_error_marker(
@@ -1392,6 +1520,7 @@ def test_contradictory_witness_generation_metadata_blocks(tmp_path: Path) -> Non
             "release_commit": EXACT_RELEASE,
             "witness_started_at": "2999-01-01T00:00:00+00:00",
             "witness_pid": 999,
+            "generation_id": _generation_id(),
             "recorded_at": "2999-01-01T00:00:01+00:00",
             "error_type": "PublisherError",
             "message": "contradictory generation",
@@ -1407,7 +1536,7 @@ def test_contradictory_witness_generation_metadata_blocks(tmp_path: Path) -> Non
     assert report.status == "BLOCKED"
     publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
     assert publisher["ok"] is False
-    assert "generation metadata contradicts" in publisher["error"]
+    assert "generation_id is malformed or contradictory" in publisher["error"]
 
 
 def test_stale_marker_restart_recovery_is_deterministic(tmp_path: Path) -> None:

@@ -407,7 +407,7 @@ def _publisher_legacy_recovery_supersedes(
     marker_generation = marker.get("generation_id")
     if marker_release is None or marker_started is None or marker_generation is None:
         return False, "legacy publisher recovery requires complete historical generation metadata"
-    if marker_release == current_release:
+    if marker_release == current_release and marker_generation == current_generation_id:
         return False, "current-generation publisher marker remains unresolved"
     witness_started = _parse_utc(witness.get("started_at"))
     if witness_started is None or marker_started >= witness_started:
@@ -530,8 +530,6 @@ def _validate_marker_generation(
     *,
     raw: Mapping[str, Any],
     spec: ServiceErrorSpec,
-    witness: Mapping[str, Any],
-    current_generation_id: str | None,
 ) -> str | None:
     marker_service = raw.get("service")
     if marker_service is not None and marker_service != spec.service:
@@ -545,12 +543,6 @@ def _validate_marker_generation(
     marker_pid = raw.get("witness_pid")
     if marker_pid is not None and not isinstance(marker_pid, int):
         return "error marker witness_pid is malformed"
-    if marker_release == witness.get("release_commit"):
-        if marker_started is not None and marker_started != witness.get("started_at"):
-            return "error marker generation metadata contradicts current witness"
-        current_pid = witness.get("pid")
-        if marker_pid is not None and marker_pid != current_pid:
-            return "error marker generation metadata contradicts current witness"
     marker_generation = raw.get("generation_id")
     if marker_generation is not None:
         expected = _generation_id(
@@ -560,9 +552,6 @@ def _validate_marker_generation(
         )
         if expected is None or marker_generation != expected:
             return "error marker generation_id is malformed or contradictory"
-        if marker_release == witness.get("release_commit") and current_generation_id:
-            if marker_generation != current_generation_id:
-                return "error marker generation metadata contradicts current witness"
     return None
 
 
@@ -627,8 +616,6 @@ def evaluate_service_error_marker(
     generation_error = _validate_marker_generation(
         raw=raw,
         spec=spec,
-        witness=witness,
-        current_generation_id=current_generation,
     )
     if generation_error:
         evidence["error"] = generation_error

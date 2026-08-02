@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from .codex_shadow import (
     render_codex_shadow_json,
     run_codex_shadow,
 )
+from .completion_controller import CompletionController, load_completion_config
 from .inventory import build_inventory, render_json, render_markdown
 from .persistent_host import (
     HostPaths,
@@ -288,6 +290,26 @@ def _refill_service_status_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _completion_run_once_command(args: argparse.Namespace) -> int:
+    controller = CompletionController(load_completion_config(args.config))
+    completed = controller.run_once()
+    _write_or_print(
+        json.dumps(
+            {
+                "status": "completed",
+                "completed_jobs": list(completed),
+                "merge_enabled": True,
+                "exact_head_guard": True,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        args.json_out,
+    )
+    return 0
+
+
 def _workspace_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--source", required=True)
     parser.add_argument("--workspace-root", required=True)
@@ -502,6 +524,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _refill_arguments(refill_service_status)
     refill_service_status.set_defaults(func=_refill_service_status_command)
+
+    completion_run_once = subparsers.add_parser(
+        "completion-run-once",
+        help="guardedly merge one eligible approved product PR and record cleanup evidence",
+    )
+    completion_run_once.add_argument("--config", required=True)
+    completion_run_once.add_argument("--json-out")
+    completion_run_once.set_defaults(func=_completion_run_once_command)
     return parser
 
 

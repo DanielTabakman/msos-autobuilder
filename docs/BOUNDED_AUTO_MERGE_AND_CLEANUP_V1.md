@@ -270,18 +270,35 @@ Issue #33 remains the broader continuous-improvement program, but bounded automa
 
 ## Acceptance for the capability
 
-- [ ] canonical merge authority classes and schema;
-- [ ] immutable merge-eligibility evidence;
-- [ ] exact-head guarded merge implementation;
-- [ ] required-check and mergeability enforcement;
-- [ ] authority/canon/ownership conflict blocking;
-- [ ] post-merge identity and ancestry verification;
-- [ ] bounded branch/workspace/state cleanup;
-- [ ] issue/work-item terminalization;
-- [ ] concise founder digest;
-- [ ] tests for stale head, failed/missing checks, conflict, authority breach, duplicate merge, and cleanup failure;
+- [x] canonical merge authority classes and schema;
+- [x] immutable merge-eligibility evidence;
+- [x] exact-head guarded merge implementation;
+- [x] required-check and mergeability enforcement;
+- [x] authority/canon/ownership conflict blocking;
+- [x] post-merge identity and ancestry verification;
+- [x] bounded branch/workspace/state cleanup;
+- [x] work-item terminalization evidence;
+- [x] concise founder digest;
+- [x] tests for stale head, failed/missing checks, conflict, authority breach, duplicate merge, and cleanup failure;
 - [ ] one real PPE/MSOS `AUTO_MERGE_WHEN_GREEN` witness;
 - [ ] no autonomous Autobuilder installation before issue #32 acceptance.
+
+## Initial implementation
+
+Issue #73 implements the first guarded completion controller as
+`msos-autobuilder completion-run-once`.
+
+The controller is a separate merge-authority component. The controlled publisher remains
+draft-only and continues to own validated PR creation. The completion controller consumes
+publisher evidence, validates immutable authority and exact-head eligibility, requires
+configured GitHub checks, re-reads the PR immediately before merge, merges with the
+repository-approved strategy and exact head, verifies default-branch preservation, records
+`completion-report.json`, writes local terminal work-item evidence, performs bounded cleanup,
+and emits one founder digest.
+
+This implementation is not automatic installation authority. It must not be activated
+against the Issue #50 certification runtime, and the remaining acceptance gap is one real
+isolated PPE/MSOS automatic completion witness after the refill witness boundary permits it.
 
 ## COORDINATION STATUS
 

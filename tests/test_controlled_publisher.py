@@ -15,6 +15,16 @@ from msos_autobuilder.controlled_publisher import (
     PublisherError,
     load_publisher_config,
 )
+from msos_autobuilder.lifecycle_evidence import (
+    SourceRef,
+    attempt_identity_from_job_yaml,
+    emit_lifecycle_evidence,
+)
+from msos_autobuilder.work_admission import (
+    AdmissionRequest,
+    admit_work,
+    objective_identity_from_work,
+)
 
 
 def git(repo: Path | None, *args: str) -> str:
@@ -61,6 +71,9 @@ class FakeGitHubClient(GitHubDraftClient):
 
     def find_pull_requests(self, branch: str) -> list[dict[str, Any]]:
         return [pull for pull in self.pulls if pull["head"]["ref"] == branch]
+
+    def find_related_work(self, **_: Any) -> list[dict[str, Any]]:
+        return []
 
     def create_draft(
         self,
@@ -125,6 +138,7 @@ def make_fixture(tmp_path: Path, *, overlap: bool = False) -> tuple[Path, Path, 
     git(evidence_work, "config", "user.email", "fixture@example.invalid")
     job_id = "candidate-revision-1"
     job_dir = evidence_work / "results" / "MACHINE" / job_id
+    host_root = tmp_path / "host"
     patch_path = job_dir / "patches" / "candidate.patch"
     patch_path.parent.mkdir(parents=True)
     patch_path.write_bytes(patch.encode("utf-8"))
@@ -196,6 +210,27 @@ def make_fixture(tmp_path: Path, *, overlap: bool = False) -> tuple[Path, Path, 
         ],
     }
     write_json(job_dir / "gate-report.json", gate_report)
+    objective = objective_identity_from_work(
+        repository="owner/product",
+        linked_issue=None,
+        work_item_id="fixture-work",
+        stable_parts={
+            "pipeline_id": "ppe",
+            "work_item_id": "fixture-work",
+            "authorized_paths": ["src/viz/value.py"],
+        },
+        acceptance_contract_sha256="1" * 64,
+    )
+    admission = admit_work(
+        AdmissionRequest(
+            objective=objective,
+            writer_id=f"build-next:{job_id}",
+            branch=f"autobuilder/{job_id}",
+            authorized_paths=("src/viz/value.py",),
+            claim_root=host_root / "state",
+        )
+    )
+    assert admission.claim is not None
     (job_dir / "job.yaml").write_text(
         "\n".join(
             [
@@ -207,6 +242,21 @@ def make_fixture(tmp_path: Path, *, overlap: bool = False) -> tuple[Path, Path, 
                 "  pipeline_id: ppe",
                 "  work_item_id: fixture-work",
                 f"  work_item_source_sha256_v1: {'a' * 64}",
+                "  work_admission:",
+                "    status: NEW_WORK_ADMITTED",
+                f"    objective_sha256: {admission.objective_sha256}",
+                f"    claim_generation: {admission.claim.generation}",
+                f"    claim_writer_id: build-next:{job_id}",
+                "    authorized_paths:",
+                "      - src/viz/value.py",
+                "    objective_identity:",
+                "      repository: owner/product",
+                "      linked_issue:",
+                "      work_item_id: fixture-work",
+                f"      stable_key: {objective.stable_key}",
+                f"      acceptance_contract_sha256: '{'1' * 64}'",
+                "      error_signature:",
+                "      release_identity:",
                 "  refill_attempt:",
                 "    generation_id: refill-12345678",
                 "    attempt_ordinal: 1",
@@ -220,6 +270,27 @@ def make_fixture(tmp_path: Path, *, overlap: bool = False) -> tuple[Path, Path, 
         ),
         encoding="utf-8",
     )
+    identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
+    assert identity is not None
+    emit_lifecycle_evidence(
+        host_root,
+        evidence_kind="revision.disposition",
+        identity=identity,
+        source_ref=SourceRef(
+            repository="fixture/evidence",
+            ref="results",
+            commit=source_head,
+            path="results/MACHINE/candidate-revision-1/gate-report.json",
+            sha256=sha256(job_dir / "gate-report.json"),
+        ),
+        payload={
+            "revision_disposition": "not_applicable",
+            "gate_report_sha256": sha256(job_dir / "gate-report.json"),
+        },
+        final=True,
+        closed_status="not_applicable",
+        observed_at="2026-07-13T00:00:01+00:00",
+    )
     git(evidence_work, "add", ".")
     git(evidence_work, "commit", "-m", "evidence")
     evidence_bare = tmp_path / "evidence.git"
@@ -232,7 +303,7 @@ version: 1
 draft_pr_publication_enabled: true
 merge_enabled: false
 main_write_enabled: false
-host_root: {tmp_path.as_posix()}/host
+host_root: {host_root.as_posix()}
 evidence_repo_url: {evidence_bare.as_posix()}
 results_branch: results
 product_repo_url: {product_bare.as_posix()}
@@ -287,6 +358,15 @@ def test_controlled_publisher_creates_one_draft_pr_and_is_repeat_safe(tmp_path: 
     assert publication["status"] == "published-draft"
     assert publication["merge_enabled"] is False
     assert publication["main_write_enabled"] is False
+    active_claims = json.loads(
+        (
+            config.host_root
+            / "state"
+            / "work-admission"
+            / "active-claims.v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert active_claims["active_claims"][0]["state"] == "active"
 
     assert publisher.run_once() == ()
     assert len(client.pulls) == 1

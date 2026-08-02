@@ -35,6 +35,12 @@ TERMINAL_REASON_CODES_V1: dict[str, dict[str, Any]] = {
         "item_terminal": True,
         "refill_action": "exclude_item_and_select_next",
     },
+    "publication_review.merged.verified.v1": {
+        "canonical_outcome": "publication_review_disposition=merged",
+        "item_disposition": "item_terminal_success_merged",
+        "item_terminal": True,
+        "refill_action": "exclude_item_and_select_next",
+    },
     "publication_review.no_publication.not_required.v1": {
         "canonical_outcome": "publication_review_disposition=terminal_no_publication",
         "item_disposition": "item_terminal_no_publication",
@@ -164,8 +170,11 @@ _PAYLOAD_CODES: dict[str, dict[str, set[str]]] = {
         "optional": {
             "reason_code",
             "draft_pr",
+            "merged_pr",
             "product_branch",
             "product_commit",
+            "merge_commit",
+            "default_branch",
             "results_commit",
         },
     },
@@ -206,6 +215,7 @@ _PAYLOAD_ALLOWED_VALUES: dict[str, dict[str, set[str]]] = {
         "publication_review_disposition": {
             "awaiting_review",
             "drafted",
+            "merged",
             "rejected",
             "terminal_no_publication",
             "blocked",
@@ -990,6 +1000,12 @@ def _reduce_identity_heads(host_root: Path, heads: Sequence[Mapping[str, Any]]) 
         return _terminal_item(
             base,
             "item_terminal_success_drafted",
+            str(publication.get("reason_code") or ""),
+        )
+    if disposition == "merged":
+        return _terminal_item(
+            base,
+            "item_terminal_success_merged",
             str(publication.get("reason_code") or ""),
         )
     if disposition == "rejected":
@@ -1938,6 +1954,25 @@ def _validate_publication_review_payload(
             or not _is_git_commit(payload.get("results_commit"))
         ):
             raise LifecycleEvidenceError("drafted publication_review requires publication proof")
+    elif disposition == "merged":
+        _require_finality(
+            "publication_review.disposition",
+            final,
+            closed_status,
+            final_expected=True,
+            status="final",
+        )
+        if payload.get("reason_code") != "publication_review.merged.verified.v1":
+            raise LifecycleEvidenceError("merged publication_review requires verified merge reason")
+        if (
+            not _non_empty_string(payload.get("merged_pr"))
+            or not _non_empty_string(payload.get("product_branch"))
+            or not _non_empty_string(payload.get("default_branch"))
+            or not _is_git_commit(payload.get("product_commit"))
+            or not _is_git_commit(payload.get("merge_commit"))
+            or not _is_git_commit(payload.get("results_commit"))
+        ):
+            raise LifecycleEvidenceError("merged publication_review requires verified merge proof")
     elif disposition in {"rejected", "terminal_no_publication"}:
         _require_finality(
             "publication_review.disposition",

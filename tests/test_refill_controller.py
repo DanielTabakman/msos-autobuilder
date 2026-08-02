@@ -36,6 +36,7 @@ from msos_autobuilder.refill_controller import (
     save_refill_policy,
     supersede_refill_generation,
 )
+from msos_autobuilder.work_admission import AdmissionError, release_claim
 
 SOURCE_REPO = "DanielTabakman/Probability-prediction-engine"
 EXACT_RELEASE = "a" * 40
@@ -2230,6 +2231,7 @@ def _archive_attempt(
             json.dumps(error or {"message": message, "traceback": message}) + "\n",
             encoding="utf-8",
         )
+        _release_claim_for_job(config, job_id, terminal_state="failed")
 
 
 def _submit_tracked_attempt(config: RefillConfig) -> str:
@@ -2252,6 +2254,37 @@ def _submit_tracked_attempt(config: RefillConfig) -> str:
 def _feed_job_path(config: RefillConfig, job_id: str) -> Path:
     assert config.build_next.checkout_root is not None
     return config.build_next.checkout_root / config.build_next.jobs_path / f"{job_id}.yaml"
+
+
+def _release_claim_for_job(
+    config: RefillConfig,
+    job_id: str,
+    *,
+    terminal_state: str = "merged",
+) -> None:
+    assert config.build_next.host_root is not None
+    job_path = _feed_job_path(config, job_id)
+    if not job_path.exists():
+        return
+    job = yaml.safe_load(job_path.read_text(encoding="utf-8"))
+    admission = (
+        job.get("founder_build_next", {}).get("work_admission", {})
+        if isinstance(job, dict)
+        else {}
+    )
+    if not isinstance(admission, dict):
+        return
+    try:
+        release_claim(
+            config.build_next.host_root / "state",
+            str(admission["objective_sha256"]),
+            writer_id=str(admission["claim_writer_id"]),
+            terminal_state=terminal_state,
+            expected_generation=int(admission["claim_generation"]),
+            evidence={"test_terminal_job_id": job_id},
+        )
+    except (AdmissionError, KeyError, TypeError, ValueError):
+        return
 
 
 def _policy_file(config: RefillConfig) -> Path:
@@ -2493,6 +2526,7 @@ def _archive_job_yaml_from_feed(
             json.dumps({"message": "unexpected local crash", "traceback": ""}) + "\n",
             encoding="utf-8",
         )
+        _release_claim_for_job(config, job_id, terminal_state="failed")
 
 
 def _host_source(config: RefillConfig, relative: str, payload: dict[str, object]) -> Path:
@@ -2586,17 +2620,20 @@ def _emit_successful_canonical_a(config: RefillConfig, job_id: str) -> None:
             config, f"state/publisher-fixtures/{job_id}.json", {"job_id": job_id}
         ),
         payload={
-            "publication_review_disposition": "drafted",
-            "reason_code": "publication_review.drafted.v1",
-            "draft_pr": "https://github.example/pull/1",
+            "publication_review_disposition": "merged",
+            "reason_code": "publication_review.merged.verified.v1",
+            "merged_pr": "1",
             "product_branch": "autobuilder/job",
             "product_commit": "d" * 40,
+            "merge_commit": "e" * 40,
+            "default_branch": "main",
             "results_commit": "e" * 40,
         },
         final=True,
         closed_status="final",
         observed_at="2026-07-29T12:04:00Z",
     )
+    _release_claim_for_job(config, job_id)
     reduce_attempt_lifecycle(config.build_next.host_root)
 
 
@@ -3141,6 +3178,7 @@ def test_item_terminal_attempt_excludes_a_and_dispatches_b(tmp_path: Path) -> No
         "controlled-publisher-seen.json",
         {job_id: {"published_at": "2026-07-20T01:00:00+00:00", "status": "published-draft"}},
     )
+    _release_claim_for_job(config, job_id)
 
     report = reconcile_refill(config)
     generation = load_refill_generation(config)
@@ -3749,6 +3787,7 @@ def test_terminal_revision_excludes_a_and_allows_b(tmp_path: Path) -> None:
         "controlled-publisher-seen.json",
         {revision_id: {"status": "published", "published_at": "2026-07-20T02:00:00+00:00"}},
     )
+    _release_claim_for_job(config, job_id, terminal_state="superseded")
 
     report = reconcile_refill(config)
     generation = load_refill_generation(config)
@@ -3907,6 +3946,7 @@ def test_persistent_feed_copy_does_not_prevent_terminal_a_advancing_to_b(tmp_pat
     job_id = _submit_tracked_attempt(config)
     _archive_job_yaml_from_feed(config, job_id)
     _write_state_json(config, "controlled-publisher-seen.json", {job_id: {"status": "published"}})
+    _release_claim_for_job(config, job_id)
 
     report = reconcile_refill(config)
     generation = load_refill_generation(config)

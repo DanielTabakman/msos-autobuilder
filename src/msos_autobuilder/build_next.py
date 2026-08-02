@@ -16,6 +16,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -44,6 +47,15 @@ from .persistent_host import HostPaths, load_persistent_host_config, parse_host_
 from .validation_contract import (
     build_ppe_validation_contract,
     canonical_dependency_source_sha256,
+)
+from .work_admission import (
+    AdmissionRequest,
+    AdmissionStatus,
+    WorkCandidate,
+    admit_work,
+    candidate_from_pr,
+    objective_identity_from_work,
+    release_claim,
 )
 
 
@@ -461,6 +473,151 @@ def _validate_selection_context(
 
 def _normalize_github_repository(url: str) -> str | None:
     return normalize_github_repository(url)
+
+
+def _linked_issue_from_text(text: str) -> int | None:
+    matches = re.findall(r"(?i)(?:fixes|closes|resolves|issue)\s+#(\d+)", text)
+    if not matches:
+        return None
+    return int(matches[0])
+
+
+class GitHubWorkDiscoveryClient:
+    def __init__(self, repo_full_name: str, token: str) -> None:
+        self.repo_full_name = repo_full_name
+        self.token = token
+
+    @classmethod
+    def from_git_credential(cls, repo_full_name: str) -> GitHubWorkDiscoveryClient:
+        credential = _run(
+            ["git", "credential", "fill"],
+            input_text="protocol=https\nhost=github.com\n\n",
+        )
+        values: dict[str, str] = {}
+        for line in credential.splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                values[key] = value
+        token = values.get("password", "")
+        if not token:
+            raise BuildNextError("Git Credential Manager did not return a GitHub token")
+        return cls(repo_full_name, token)
+
+    def _request(self, path: str) -> Any:
+        request = urllib.request.Request(
+            f"https://api.github.com{path}",
+            method="GET",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {self.token}",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "User-Agent": "msos-autobuilder-build-next",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise BuildNextError(f"GitHub API GET {path} failed: {exc.code} {body}") from exc
+        except urllib.error.URLError as exc:
+            raise BuildNextError(f"GitHub API GET {path} failed: {exc}") from exc
+
+    def _paged_list(self, path: str, label: str) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        separator = "&" if "?" in path else "?"
+        for page in range(1, 11):
+            result = self._request(f"{path}{separator}per_page=100&page={page}")
+            if not isinstance(result, list):
+                raise BuildNextError(f"GitHub {label} discovery returned invalid payload")
+            items.extend(item for item in result if isinstance(item, dict))
+            if len(result) < 100:
+                return items
+        raise BuildNextError(f"GitHub {label} discovery exceeded bounded page limit")
+
+    def related_candidates(
+        self,
+        *,
+        objective_sha256: str,
+        acceptance_contract_sha256: str,
+        changed_paths: Sequence[str],
+    ) -> tuple[WorkCandidate, ...]:
+        requested_paths = {path.replace("\\", "/").strip("/") for path in changed_paths}
+        candidates: list[WorkCandidate] = []
+        for issue in self._paged_list(f"/repos/{self.repo_full_name}/issues?state=all", "issue"):
+            if "pull_request" in issue:
+                continue
+            body = str(issue.get("body") or "")
+            title = str(issue.get("title") or "")
+            number = issue.get("number")
+            if not isinstance(number, int):
+                continue
+            same_objective = objective_sha256 in body or objective_sha256 in title
+            same_contract = (
+                acceptance_contract_sha256 in body
+                or acceptance_contract_sha256 in title
+            )
+            path_hits = tuple(sorted(path for path in requested_paths if path in body))
+            if not (same_objective or same_contract or path_hits):
+                continue
+            candidates.append(
+                WorkCandidate(
+                    kind="issue",
+                    number=number,
+                    title=title,
+                    state=str(issue.get("state") or ""),
+                    branch=None,
+                    linked_issue=number,
+                    objective_sha256=objective_sha256 if same_objective else None,
+                    acceptance_contract_sha256=(
+                        acceptance_contract_sha256 if same_contract else None
+                    ),
+                    changed_paths=path_hits,
+                    canonical=False,
+                    merged=False,
+                    url=str(issue.get("html_url") or ""),
+                )
+            )
+        for pull in self._paged_list(f"/repos/{self.repo_full_name}/pulls?state=all", "PR"):
+            number = pull.get("number")
+            if not isinstance(number, int):
+                continue
+            file_items = self._paged_list(
+                f"/repos/{self.repo_full_name}/pulls/{number}/files",
+                "PR file",
+            )
+            pr_paths = tuple(
+                sorted(
+                    str(file.get("filename") or "").replace("\\", "/")
+                    for file in file_items
+                    if file.get("filename")
+                )
+            )
+            body = str(pull.get("body") or "")
+            same_objective = objective_sha256 in body
+            same_contract = acceptance_contract_sha256 in body
+            path_overlap = bool(requested_paths & set(pr_paths))
+            if not (same_objective or same_contract or path_overlap):
+                continue
+            head = pull.get("head") if isinstance(pull.get("head"), dict) else {}
+            candidates.append(
+                candidate_from_pr(
+                    number=number,
+                    title=str(pull.get("title") or ""),
+                    state=str(pull.get("state") or ""),
+                    branch=str(head.get("ref") or ""),
+                    linked_issue=_linked_issue_from_text(body),
+                    objective_sha256=objective_sha256 if same_objective else None,
+                    acceptance_contract_sha256=(
+                        acceptance_contract_sha256 if same_contract else None
+                    ),
+                    changed_paths=pr_paths,
+                    canonical=bool(pull.get("merged_at")),
+                    merged=bool(pull.get("merged_at")),
+                    url=str(pull.get("html_url") or ""),
+                )
+            )
+        return tuple(candidates)
 
 
 def _pipeline(registry: Mapping[str, Any], pipeline_id: str) -> dict[str, Any]:
@@ -1362,7 +1519,137 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             work_item_source_sha256=work_item_source_sha256,
             refill_attempt=refill_attempt,
         )
-        submission = _submit_feed_job(config, job)
+        admission_capability_contract = {
+            "version": 1,
+            "pipeline_id": pipeline_id,
+            "work_item_id": work_item_id,
+            "adapter": "ppe_operator",
+            "target_repository": "DanielTabakman/Probability-prediction-engine",
+            "native_slice_id": native_slice.slice_id,
+            "authorized_paths": list(native_slice.touch_set),
+            "forbidden_paths": list(forbidden_paths),
+            "publication_enabled": False,
+            "merge_enabled": False,
+            "product_main_write_enabled": False,
+        }
+        admission_acceptance_sha256 = _sha256_text(
+            json.dumps(
+                admission_capability_contract,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        admission_objective = objective_identity_from_work(
+            repository="DanielTabakman/Probability-prediction-engine",
+            linked_issue=None,
+            work_item_id=work_item_id,
+            stable_parts={
+                "pipeline_id": pipeline_id,
+                "work_item_id": work_item_id,
+                "acceptance_contract_sha256": admission_acceptance_sha256,
+                "canonical_capability_path_contract": admission_capability_contract,
+            },
+            acceptance_contract_sha256=admission_acceptance_sha256,
+        )
+        related_candidates: tuple[WorkCandidate, ...] = ()
+        if config.submit and not config.allow_test_local_source_remote:
+            related_candidates = GitHubWorkDiscoveryClient.from_git_credential(
+                "DanielTabakman/Probability-prediction-engine"
+            ).related_candidates(
+                objective_sha256=admission_objective.objective_sha256,
+                acceptance_contract_sha256=admission_acceptance_sha256,
+                changed_paths=native_slice.touch_set,
+            )
+        admission = admit_work(
+            AdmissionRequest(
+                objective=admission_objective,
+                writer_id=f"build-next:{job_id}",
+                branch=native_slice.build_branch,
+                authorized_paths=native_slice.touch_set,
+                claim_root=(
+                    config.host_root / "state"
+                    if config.host_root is not None and config.submit
+                    else None
+                ),
+                candidates=related_candidates,
+                evidence={
+                    "admission_phase": "build_next.pre_feed_submission",
+                    "job_id": job_id,
+                    "pipeline_id": pipeline_id,
+                    "work_item_id": work_item_id,
+                    "source_commit": source_identity.commit,
+                    "github_duplicate_discovery": {
+                        "repository": "DanielTabakman/Probability-prediction-engine",
+                        "searched_issues": bool(related_candidates)
+                        or (
+                            config.submit
+                            and not config.allow_test_local_source_remote
+                        ),
+                        "searched_pull_requests": bool(related_candidates)
+                        or (
+                            config.submit
+                            and not config.allow_test_local_source_remote
+                        ),
+                        "candidate_count": len(related_candidates),
+                    },
+                    "claim_lifecycle": (
+                        "active until verified merge, explicit supersession, "
+                        "accepted abandonment, or bounded failure disposition"
+                    ),
+                },
+            )
+        )
+        receipt_evidence_identity = {
+            **receipt_evidence_identity,
+            "work_admission": asdict(admission),
+        }
+        if admission.status != AdmissionStatus.NEW_WORK_ADMITTED:
+            return BuildNextReceipt(
+                status=admission.status.value,
+                pipeline_id=pipeline_id,
+                work_item_id=work_item_id,
+                job_id=job_id,
+                repository="DanielTabakman/Probability-prediction-engine",
+                source_commit=source_identity.commit,
+                feed_path=None,
+                feed_commit=None,
+                message=admission.message,
+                evidence=receipt_evidence_identity,
+                submitted=False,
+            )
+        job["founder_build_next"]["work_admission"] = {
+            "status": admission.status.value,
+            "objective_sha256": admission.objective_sha256,
+            "claim_generation": (
+                admission.claim.generation if admission.claim is not None else None
+            ),
+            "claim_writer_id": (
+                admission.claim.writer_id if admission.claim is not None else None
+            ),
+            "authorized_paths": list(native_slice.touch_set),
+            "objective_identity": asdict(admission_objective),
+            "acceptance_contract": admission_capability_contract,
+            "execution_validation_contract_sha256": job["candidate_validation"][
+                "contract_sha256"
+            ],
+        }
+        try:
+            submission = _submit_feed_job(config, job)
+        except Exception as exc:
+            if config.host_root is not None and admission.claim is not None:
+                release_claim(
+                    config.host_root / "state",
+                    admission.objective_sha256,
+                    writer_id=admission.claim.writer_id,
+                    terminal_state="failed",
+                    expected_generation=admission.claim.generation,
+                    evidence={
+                        "bounded_failure_disposition": "feed_submission_failed",
+                        "job_id": job_id,
+                        "error": str(exc),
+                    },
+                )
+            raise
         if not config.submit:
             return BuildNextReceipt(
                 status="UNFILLED",

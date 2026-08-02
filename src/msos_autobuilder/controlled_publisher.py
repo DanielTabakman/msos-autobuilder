@@ -21,7 +21,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -32,9 +32,22 @@ from .candidate_gate import GateCheck, _atomic_write_json, _bounded, _safe_segme
 from .lifecycle_evidence import (
     attempt_identity_from_job_yaml,
     emit_lifecycle_evidence,
+    producer_head_path,
     record_producer_evidence_error,
+    validate_producer_head,
 )
 from .service_error_lifecycle import record_service_cycle_success, write_service_error_marker
+from .work_admission import (
+    AdmissionRequest,
+    AdmissionStatus,
+    ObjectiveIdentity,
+    WorkCandidate,
+    WorkClassification,
+    WriterClaim,
+    admit_work,
+    candidate_from_pr,
+    claim_release_handoff,
+)
 
 
 class PublisherError(RuntimeError):
@@ -284,12 +297,112 @@ def _publisher_not_applicable_receipt_path(
     )
 
 
+def _linked_issue_from_text(text: str) -> int | None:
+    matches = re.findall(r"(?i)(?:fixes|closes|resolves|issue)\s+#(\d+)", text)
+    if not matches:
+        return None
+    return int(matches[0])
+
+
+def _as_writer_claim(raw: Mapping[str, Any]) -> WriterClaim:
+    return WriterClaim(
+        version=1,
+        objective_sha256=str(raw.get("objective_sha256") or ""),
+        repository=str(raw.get("repository") or ""),
+        linked_issue=int(raw["linked_issue"]) if raw.get("linked_issue") is not None else None,
+        writer_id=str(raw.get("writer_id") or ""),
+        branch=str(raw["branch"]) if raw.get("branch") is not None else None,
+        pr_number=int(raw["pr_number"]) if raw.get("pr_number") is not None else None,
+        authorized_paths=tuple(str(item) for item in raw.get("authorized_paths") or ()),
+        generation=int(raw.get("generation") or 0),
+        state=str(raw.get("state") or ""),
+        evidence=dict(raw.get("evidence") or {}),
+        claimed_at=str(raw.get("claimed_at") or ""),
+        updated_at=str(raw.get("updated_at") or ""),
+    )
+
+
+def _validate_work_admission_readiness(
+    work_admission: Mapping[str, Any],
+    claim_handoff: Mapping[str, Any],
+) -> dict[str, bool]:
+    if work_admission.get("status") != AdmissionStatus.NEW_WORK_ADMITTED.value:
+        raise PublisherError("completion readiness requires admitted work")
+    claim_raw = _mapping(work_admission.get("claim"), "work admission claim")
+    if claim_raw.get("state") != "active":
+        raise PublisherError("completion readiness requires an active work claim")
+    if claim_handoff.get("handoff") != "msos-autobuilder.work_admission.claim_release.v1":
+        raise PublisherError("completion readiness requires canonical claim_release_handoff")
+    for key in ("objective_sha256", "writer_id"):
+        if claim_handoff.get(key) != claim_raw.get(key):
+            raise PublisherError(f"claim_release_handoff {key} conflicts with active claim")
+    if claim_handoff.get("claim_generation") != claim_raw.get("generation"):
+        raise PublisherError("claim_release_handoff generation conflicts with active claim")
+    if sorted(claim_handoff.get("authorized_paths") or []) != sorted(
+        claim_raw.get("authorized_paths") or []
+    ):
+        raise PublisherError("claim_release_handoff paths conflict with active claim")
+    classifications = work_admission.get("classifications")
+    if not isinstance(classifications, Sequence) or isinstance(classifications, (str, bytes)):
+        raise PublisherError("work admission classifications are required")
+    values = {
+        str(item.get("classification") or "")
+        for item in classifications
+        if isinstance(item, dict)
+    }
+    canon_conflict = WorkClassification.CONTINUE.value in values
+    evidence_conflict = bool(
+        values
+        & {
+            WorkClassification.REVIEW_AND_MERGE.value,
+            WorkClassification.REPAIR.value,
+            WorkClassification.SUPERSEDED_DUPLICATE.value,
+            WorkClassification.COMBINE_WITH_RECONCILIATION_PLAN.value,
+        }
+    )
+    founder_decision_required = WorkClassification.FOUNDER_DECISION_REQUIRED.value in values
+    return {
+        "canon_conflict": canon_conflict,
+        "evidence_conflict": evidence_conflict,
+        "ownership_conflict": False,
+        "founder_decision_required": founder_decision_required,
+    }
+
+
+def _validate_revision_evidence(
+    revision_evidence: Mapping[str, Any],
+    *,
+    gate_report_sha256: str,
+) -> dict[str, Any]:
+    if revision_evidence.get("evidence_kind") != "revision.disposition":
+        raise PublisherError("revision-lineage requires revision.disposition evidence")
+    if revision_evidence.get("final") is not True:
+        raise PublisherError("revision-lineage requires final revision evidence")
+    payload = _mapping(revision_evidence.get("payload"), "revision evidence payload")
+    if payload.get("gate_report_sha256") != gate_report_sha256:
+        raise PublisherError("revision evidence gate hash conflicts with publication gate")
+    disposition = str(payload.get("revision_disposition") or "")
+    if disposition != "not_applicable":
+        raise PublisherError("completion publication requires closed revision lineage")
+    if revision_evidence.get("closed_status") != "not_applicable":
+        raise PublisherError("revision evidence closed status conflicts with disposition")
+    return {
+        "revision_disposition": disposition,
+        "not_applicable_evidence": True,
+        "revision_evidence_id": revision_evidence.get("evidence_id"),
+        "revision_evidence_sha256": revision_evidence.get("envelope_sha256"),
+    }
+
+
 def build_completion_sidecar_evidence(
     *,
     job_id: str,
     publication_report: Mapping[str, Any],
     gate_report_sha256: str,
     publication_report_sha256: str,
+    work_admission: Mapping[str, Any],
+    claim_release_handoff: Mapping[str, Any],
+    revision_evidence: Mapping[str, Any],
 ) -> dict[str, dict[str, Any]]:
     """Authoritative publisher-produced inputs consumed by the completion controller."""
 
@@ -299,6 +412,13 @@ def build_completion_sidecar_evidence(
         raise PublisherError("completion sidecar evidence requires product_commit")
     if not isinstance(pr_number, int):
         raise PublisherError("completion sidecar evidence requires integer pr_number")
+    readiness = _validate_work_admission_readiness(work_admission, claim_release_handoff)
+    if any(readiness.values()):
+        raise PublisherError("completion readiness has unresolved admission conflicts")
+    revision = _validate_revision_evidence(
+        revision_evidence,
+        gate_report_sha256=gate_report_sha256,
+    )
     return {
         "completion-readiness.json": {
             "version": 1,
@@ -306,17 +426,16 @@ def build_completion_sidecar_evidence(
             "job_id": job_id,
             "pr_number": pr_number,
             "product_commit": product_commit,
-            "canon_conflict": False,
-            "evidence_conflict": False,
-            "ownership_conflict": False,
-            "founder_decision_required": False,
+            **readiness,
+            "objective_sha256": work_admission.get("objective_sha256"),
+            "claim_writer_id": claim_release_handoff.get("writer_id"),
+            "claim_generation": claim_release_handoff.get("claim_generation"),
         },
         "revision-lineage.json": {
             "version": 1,
             "producer": "controlled_publisher",
             "job_id": job_id,
-            "revision_disposition": "not_applicable",
-            "not_applicable_evidence": True,
+            **revision,
             "product_commit": product_commit,
             "gate_report_sha256": gate_report_sha256,
             "publication_report_sha256": publication_report_sha256,
@@ -456,6 +575,126 @@ class GitHubDraftClient:
         if not isinstance(result, list):
             raise PublisherError("GitHub pull-request query returned an invalid payload")
         return [item for item in result if isinstance(item, dict)]
+
+    def _paged_list(self, path: str, label: str) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        separator = "&" if "?" in path else "?"
+        for page in range(1, 11):
+            result = self._request(
+                "GET",
+                f"{path}{separator}per_page=100&page={page}",
+            )
+            if not isinstance(result, list):
+                raise PublisherError(f"GitHub {label} discovery returned an invalid payload")
+            items.extend(item for item in result if isinstance(item, dict))
+            if len(result) < 100:
+                return items
+        raise PublisherError(f"GitHub {label} discovery exceeded bounded page limit")
+
+    def find_related_work(
+        self,
+        *,
+        linked_issue: int | None,
+        objective_sha256: str,
+        acceptance_contract_sha256: str | None = None,
+        changed_paths: Sequence[str],
+    ) -> list[dict[str, Any]]:
+        """Discover candidate issue/PR overlaps through read-only GitHub APIs."""
+        requested_paths = {path.replace("\\", "/").strip("/") for path in changed_paths}
+        candidates: list[dict[str, Any]] = []
+        issues = self._paged_list(
+            f"/repos/{self.repo_full_name}/issues?state=all",
+            "issue",
+        )
+        for item in issues:
+            if "pull_request" in item:
+                continue
+            number = item.get("number")
+            if not isinstance(number, int):
+                continue
+            body = str(item.get("body") or "")
+            title = str(item.get("title") or "")
+            candidate_issue = number
+            same_issue = linked_issue is not None and candidate_issue == linked_issue
+            same_objective = objective_sha256 in body or objective_sha256 in title
+            same_contract = (
+                acceptance_contract_sha256 is not None
+                and (acceptance_contract_sha256 in body or acceptance_contract_sha256 in title)
+            )
+            mentions_path = any(path and path in body for path in requested_paths)
+            if not (same_issue or same_objective or same_contract or mentions_path):
+                continue
+            candidates.append(
+                {
+                    "kind": "issue",
+                    "number": number,
+                    "title": title,
+                    "state": str(item.get("state") or ""),
+                    "branch": "",
+                    "linked_issue": candidate_issue,
+                    "objective_sha256": objective_sha256 if same_objective else None,
+                    "acceptance_contract_sha256": (
+                        acceptance_contract_sha256 if same_contract else None
+                    ),
+                    "changed_paths": sorted(path for path in requested_paths if path in body),
+                    "canonical": False,
+                    "merged": False,
+                    "unique_required_change": False,
+                    "url": str(item.get("html_url") or ""),
+                }
+            )
+
+        pulls = self._paged_list(
+            f"/repos/{self.repo_full_name}/pulls?state=all",
+            "pull-request",
+        )
+        for item in pulls:
+            number = item.get("number")
+            if not isinstance(number, int):
+                continue
+            file_items = self._paged_list(
+                f"/repos/{self.repo_full_name}/pulls/{number}/files",
+                "pull-request file",
+            )
+            pr_paths = sorted(
+                {
+                    str(file.get("filename") or "").replace("\\", "/")
+                    for file in file_items
+                    if file.get("filename")
+                }
+            )
+            body = str(item.get("body") or "")
+            candidate_issue = _linked_issue_from_text(body)
+            head = item.get("head") if isinstance(item.get("head"), dict) else {}
+            merged = bool(item.get("merged_at"))
+            same_issue = linked_issue is not None and candidate_issue == linked_issue
+            same_objective = objective_sha256 in body
+            same_contract = (
+                acceptance_contract_sha256 is not None
+                and acceptance_contract_sha256 in body
+            )
+            overlaps_path = bool(requested_paths & set(pr_paths))
+            if not (same_issue or same_objective or same_contract or overlaps_path):
+                continue
+            candidates.append(
+                {
+                    "kind": "pull_request",
+                    "number": number,
+                    "title": str(item.get("title") or ""),
+                    "state": str(item.get("state") or ""),
+                    "branch": str(head.get("ref") or ""),
+                    "linked_issue": candidate_issue,
+                    "objective_sha256": objective_sha256 if same_objective else None,
+                    "acceptance_contract_sha256": (
+                        acceptance_contract_sha256 if same_contract else None
+                    ),
+                    "changed_paths": pr_paths,
+                    "canonical": merged,
+                    "merged": merged,
+                    "url": str(item.get("html_url") or ""),
+                }
+            )
+        return candidates
 
     def create_draft(
         self,
@@ -902,6 +1141,162 @@ class ControlledPublisher:
         if pull is None or pull.get("number") != entry.get("pr_number"):
             raise PublisherError("published product PR drifted after publication")
 
+    def _load_revision_evidence(self, job_dir: Path, gate_sha: str) -> dict[str, Any]:
+        identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
+        if identity is None:
+            raise PublisherError("publisher cannot bind revision evidence without job identity")
+        head_path = producer_head_path(
+            self.host_root,
+            evidence_kind="revision.disposition",
+            identity=identity,
+        )
+        if not head_path.exists():
+            raise PublisherError("missing canonical revision.disposition evidence")
+        try:
+            head = json.loads(head_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise PublisherError("revision.disposition producer head is unreadable") from exc
+        validate_producer_head(head, host_root=self.host_root)
+        envelope_path = self.host_root / str(head.get("envelope_path") or "")
+        try:
+            envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise PublisherError("revision.disposition envelope is unreadable") from exc
+        if envelope.get("evidence_id") != head.get("evidence_id"):
+            raise PublisherError("revision.disposition head conflicts with envelope")
+        payload = _mapping(envelope.get("payload"), "revision evidence payload")
+        if payload.get("gate_report_sha256") != gate_sha:
+            raise PublisherError("revision.disposition evidence is for a different gate")
+        return {
+            **envelope,
+            "envelope_sha256": head.get("envelope_sha256"),
+        }
+
+    def _work_admission(
+        self,
+        *,
+        job_id: str,
+        job_dir: Path,
+        job: Mapping[str, Any],
+        expected_paths: tuple[str, ...],
+        plan: PublishPlan,
+    ) -> dict[str, Any]:
+        founder = _mapping(job.get("founder_build_next"), "job founder_build_next")
+        admission_handoff = _mapping(
+            founder.get("work_admission"),
+            "job founder_build_next.work_admission",
+        )
+        objective = ObjectiveIdentity(
+            **_mapping(
+                admission_handoff.get("objective_identity"),
+                "job work_admission objective_identity",
+            )
+        )
+        if admission_handoff.get("objective_sha256") != objective.objective_sha256:
+            raise PublisherError("job work_admission objective identity hash mismatch")
+        expected_generation = admission_handoff.get("claim_generation")
+        if not isinstance(expected_generation, int) or expected_generation < 1:
+            raise PublisherError("job work_admission claim_generation is required")
+        writer_id = str(admission_handoff.get("claim_writer_id") or "")
+        if not writer_id:
+            raise PublisherError("job work_admission claim_writer_id is required")
+        if sorted(admission_handoff.get("authorized_paths") or []) != list(expected_paths):
+            raise PublisherError("job work_admission authorized paths conflict with gate")
+
+        raw_candidates = self._client().find_related_work(
+            linked_issue=objective.linked_issue,
+            objective_sha256=objective.objective_sha256,
+            acceptance_contract_sha256=objective.acceptance_contract_sha256,
+            changed_paths=expected_paths,
+        )
+        candidates: list[WorkCandidate] = []
+        for raw in raw_candidates:
+            if not isinstance(raw, dict):
+                continue
+            paths = raw.get("changed_paths")
+            if not isinstance(paths, list):
+                continue
+            kind = str(raw.get("kind") or "pull_request")
+            if kind == "issue":
+                candidates.append(
+                    WorkCandidate(
+                        kind="issue",
+                        number=int(raw["number"]) if raw.get("number") is not None else None,
+                        title=str(raw.get("title") or ""),
+                        state=str(raw.get("state") or ""),
+                        branch=None,
+                        linked_issue=(
+                            int(raw["linked_issue"])
+                            if isinstance(raw.get("linked_issue"), int)
+                            else None
+                        ),
+                        objective_sha256=(
+                            str(raw["objective_sha256"])
+                            if raw.get("objective_sha256")
+                            else None
+                        ),
+                        acceptance_contract_sha256=(
+                            str(raw["acceptance_contract_sha256"])
+                            if raw.get("acceptance_contract_sha256")
+                            else None
+                        ),
+                        changed_paths=tuple(str(item) for item in paths),
+                        canonical=raw.get("canonical") is True,
+                        merged=raw.get("merged") is True,
+                        unique_required_change=raw.get("unique_required_change") is True,
+                        url=str(raw["url"]) if raw.get("url") else None,
+                    )
+                )
+                continue
+            candidates.append(
+                candidate_from_pr(
+                    number=int(raw["number"]) if raw.get("number") is not None else 0,
+                    title=str(raw.get("title") or ""),
+                    state=str(raw.get("state") or ""),
+                    branch=str(raw.get("branch") or ""),
+                    linked_issue=(
+                        int(raw["linked_issue"])
+                        if isinstance(raw.get("linked_issue"), int)
+                        else None
+                    ),
+                    objective_sha256=(
+                        str(raw["objective_sha256"]) if raw.get("objective_sha256") else None
+                    ),
+                    acceptance_contract_sha256=(
+                        str(raw["acceptance_contract_sha256"])
+                        if raw.get("acceptance_contract_sha256")
+                        else None
+                    ),
+                    changed_paths=tuple(str(item) for item in paths),
+                    canonical=raw.get("canonical") is True,
+                    merged=raw.get("merged") is True,
+                    unique_required_change=raw.get("unique_required_change") is True,
+                    url=str(raw["url"]) if raw.get("url") else None,
+                )
+            )
+        decision = admit_work(
+            AdmissionRequest(
+                objective=objective,
+                writer_id=writer_id,
+                branch=plan.branch,
+                authorized_paths=expected_paths,
+                claim_root=self.state,
+                candidates=tuple(candidates),
+                expected_claim_generation=expected_generation,
+                evidence={
+                    "admission_phase": "controlled_publisher.pre_branch_pr",
+                    "job_id": job_id,
+                    "job_yaml": (job_dir / "job.yaml").as_posix(),
+                    "plan_branch": plan.branch,
+                    "claim_lifecycle": (
+                        "active until verified merge, explicit supersession, "
+                        "accepted abandonment, or bounded failure disposition"
+                    ),
+                },
+            )
+        )
+        return asdict(decision)
+
     def publish_job(
         self,
         job_id: str,
@@ -914,6 +1309,27 @@ class ControlledPublisher:
         source_head = str(gate_report.get("source_head") or "")
         if not re.fullmatch(r"[0-9a-fA-F]{40}", source_head):
             raise PublisherError("gate report is missing a full source_head SHA")
+        try:
+            job = _mapping(
+                yaml.safe_load((job_dir / "job.yaml").read_text(encoding="utf-8")),
+                "job.yaml",
+            )
+        except (OSError, yaml.YAMLError) as exc:
+            raise PublisherError("publisher could not read job.yaml for admission") from exc
+        admission = self._work_admission(
+            job_id=job_id,
+            job_dir=job_dir,
+            job=job,
+            expected_paths=expected_paths,
+            plan=plan,
+        )
+        if admission["status"] == AdmissionStatus.CONTINUE_EXISTING_WORK.value:
+            raise PublisherError("canonical work already exists; continue existing work")
+        if admission["status"] != AdmissionStatus.NEW_WORK_ADMITTED.value:
+            raise PublisherError(f"work admission refused publication: {admission['status']}")
+        claim = _mapping(admission.get("claim"), "work admission claim")
+        release_handoff = claim_release_handoff(_as_writer_claim(claim))
+        revision_evidence = self._load_revision_evidence(job_dir, gate_sha)
 
         base_head = self._prepare_product()
         ancestor = _git(
@@ -1063,6 +1479,8 @@ class ControlledPublisher:
             "gate_report_sha256": gate_sha,
             "source_report_sha256": source_sha,
             "changed_paths": list(expected_paths),
+            "work_admission": admission,
+            "claim_release_handoff": release_handoff,
             "checks": checks,
         }
         results_commit = self.evidence.publish_report(job_dir, publication_report)
@@ -1072,6 +1490,9 @@ class ControlledPublisher:
             publication_report=publication_report,
             gate_report_sha256=gate_sha,
             publication_report_sha256=publication_sha,
+            work_admission=admission,
+            claim_release_handoff=release_handoff,
+            revision_evidence=revision_evidence,
         )
         results_commit = self.evidence.publish_completion_sidecars(job_dir, sidecars)
         return publication_report, results_commit
@@ -1190,40 +1611,6 @@ class ControlledPublisher:
                         "status": report["status"],
                     }
                     self._save_ledger(ledger)
-                    identity = None
-                    try:
-                        identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
-                        if identity is not None:
-                            emit_lifecycle_evidence(
-                                self.host_root,
-                                evidence_kind="publication_review.disposition",
-                                identity=identity,
-                                source_path=job_dir / "publication-report.json",
-                                payload={
-                                    "publication_review_disposition": "drafted",
-                                    "reason_code": "publication_review.drafted.v1",
-                                    "draft_pr": report["pr_url"],
-                                    "product_branch": report["product_branch"],
-                                    "product_commit": report["product_commit"],
-                                    "results_commit": results_commit,
-                                },
-                                final=True,
-                                closed_status="final",
-                                observed_at=str(report["published_at"]),
-                            )
-                    except Exception as exc:
-                        record_producer_evidence_error(
-                            self.host_root,
-                            producer="controlled_publisher",
-                            evidence_kind="publication_review.disposition",
-                            error=exc,
-                            identity=identity,
-                            primary_outcome={
-                                "job_id": job_id,
-                                "pr_url": report["pr_url"],
-                                "results_commit": results_commit,
-                            },
-                        )
                     processed.append(job_id)
                     verified.add(job_id)
                 except (PublisherError, OSError, KeyError, TypeError, ValueError) as exc:

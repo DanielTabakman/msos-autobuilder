@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,17 @@ from msos_autobuilder.completion_controller import (
     load_completion_config,
 )
 from msos_autobuilder.controlled_publisher import build_completion_sidecar_evidence
+from msos_autobuilder.lifecycle_evidence import (
+    SourceRef,
+    attempt_identity_from_job_yaml,
+    emit_lifecycle_evidence,
+)
+from msos_autobuilder.work_admission import (
+    AdmissionRequest,
+    admit_work,
+    claim_release_handoff,
+    objective_identity_from_work,
+)
 
 
 def git(repo: Path | None, *args: str, accepted: tuple[int, ...] = (0,)) -> str:
@@ -193,6 +205,7 @@ def make_fixture(
     git(evidence_work, "config", "user.email", "fixture@example.invalid")
     job_id = "candidate-revision-1"
     job_dir = evidence_work / "results" / "MACHINE" / job_id
+    host_root = tmp_path / "host"
     path_text = changed.relative_to(product_work).as_posix()
     report = {
         "version": 1,
@@ -244,37 +257,27 @@ def make_fixture(
         "workspace_removed": True,
     }
     write_json(job_dir / "gate-report.json", gate)
-    write_json(
-        job_dir / "publication-report.json",
-        {
-            "version": 1,
-            "job_id": job_id,
-            "status": "published-draft",
-            "published_at": "2026-07-20T00:00:00+00:00",
-            "draft": True,
-            "merge_enabled": False,
-            "main_write_enabled": False,
-            "product_base_branch": "main",
-            "product_branch": branch,
-            "product_commit": candidate_head,
-            "pr_number": 7,
-            "pr_url": "https://example.invalid/pull/7",
-            "gate_report_sha256": sha256(job_dir / "gate-report.json"),
-            "source_report_sha256": report_sha,
-            "changed_paths": [path_text],
-            "checks": [{"name": "publication-check", "passed": True, "returncode": 0}],
+    objective = objective_identity_from_work(
+        repository="owner/product",
+        linked_issue=None,
+        work_item_id="fixture-work",
+        stable_parts={
+            "pipeline_id": "ppe",
+            "work_item_id": "fixture-work",
+            "authorized_paths": [path_text],
         },
+        acceptance_contract_sha256="1" * 64,
     )
-    sidecars = build_completion_sidecar_evidence(
-        job_id=job_id,
-        publication_report=json.loads((job_dir / "publication-report.json").read_text("utf-8")),
-        gate_report_sha256=sha256(job_dir / "gate-report.json"),
-        publication_report_sha256=sha256(job_dir / "publication-report.json"),
+    admission = admit_work(
+        AdmissionRequest(
+            objective=objective,
+            writer_id=f"build-next:{job_id}",
+            branch=branch,
+            authorized_paths=(path_text,),
+            claim_root=host_root / "state",
+        )
     )
-    if not omit_readiness:
-        write_json(job_dir / "completion-readiness.json", sidecars["completion-readiness.json"])
-    if not omit_revision_lineage:
-        write_json(job_dir / "revision-lineage.json", sidecars["revision-lineage.json"])
+    assert admission.claim is not None
     declared_at = "2026-07-19T00:00:00+00:00"
     if post_hoc_authority:
         declared_at = "2026-07-21T00:00:00+00:00"
@@ -293,6 +296,21 @@ def make_fixture(
                 "  pipeline_id: ppe",
                 "  work_item_id: fixture-work",
                 "  work_item_source_sha256_v1: " + ("d" * 64),
+                "  work_admission:",
+                "    status: NEW_WORK_ADMITTED",
+                f"    objective_sha256: {admission.objective_sha256}",
+                f"    claim_generation: {admission.claim.generation}",
+                f"    claim_writer_id: build-next:{job_id}",
+                "    authorized_paths:",
+                f"      - {path_text}",
+                "    objective_identity:",
+                "      repository: owner/product",
+                "      linked_issue:",
+                "      work_item_id: fixture-work",
+                f"      stable_key: {objective.stable_key}",
+                f"      acceptance_contract_sha256: '{'1' * 64}'",
+                "      error_signature:",
+                "      release_identity:",
                 "  refill_attempt:",
                 "    generation_id: refill-generation-1",
                 "    attempt_ordinal: 1",
@@ -311,6 +329,69 @@ def make_fixture(
         ),
         encoding="utf-8",
     )
+    identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
+    assert identity is not None
+    revision_result = emit_lifecycle_evidence(
+        host_root,
+        evidence_kind="revision.disposition",
+        identity=identity,
+        source_ref=SourceRef(
+            repository="fixture/evidence",
+            ref="results",
+            commit=source_head,
+            path="results/MACHINE/candidate-revision-1/gate-report.json",
+            sha256=sha256(job_dir / "gate-report.json"),
+        ),
+        payload={
+            "revision_disposition": "not_applicable",
+            "gate_report_sha256": sha256(job_dir / "gate-report.json"),
+        },
+        final=True,
+        closed_status="not_applicable",
+        observed_at="2026-07-20T00:00:00+00:00",
+    )
+    revision_envelope = json.loads(revision_result.envelope_path.read_text(encoding="utf-8"))
+    revision_evidence = {
+        **revision_envelope,
+        "envelope_sha256": revision_result.envelope_sha256,
+    }
+    release_handoff = claim_release_handoff(admission.claim)
+    write_json(
+        job_dir / "publication-report.json",
+        {
+            "version": 1,
+            "job_id": job_id,
+            "status": "published-draft",
+            "published_at": "2026-07-20T00:00:00+00:00",
+            "draft": True,
+            "merge_enabled": False,
+            "main_write_enabled": False,
+            "product_base_branch": "main",
+            "product_branch": branch,
+            "product_commit": candidate_head,
+            "pr_number": 7,
+            "pr_url": "https://example.invalid/pull/7",
+            "gate_report_sha256": sha256(job_dir / "gate-report.json"),
+            "source_report_sha256": report_sha,
+            "changed_paths": [path_text],
+            "work_admission": asdict(admission),
+            "claim_release_handoff": release_handoff,
+            "checks": [{"name": "publication-check", "passed": True, "returncode": 0}],
+        },
+    )
+    sidecars = build_completion_sidecar_evidence(
+        job_id=job_id,
+        publication_report=json.loads((job_dir / "publication-report.json").read_text("utf-8")),
+        gate_report_sha256=sha256(job_dir / "gate-report.json"),
+        publication_report_sha256=sha256(job_dir / "publication-report.json"),
+        work_admission=asdict(admission),
+        claim_release_handoff=release_handoff,
+        revision_evidence=revision_evidence,
+    )
+    if not omit_readiness:
+        write_json(job_dir / "completion-readiness.json", sidecars["completion-readiness.json"])
+    if not omit_revision_lineage:
+        write_json(job_dir / "revision-lineage.json", sidecars["revision-lineage.json"])
     git(evidence_work, "add", ".")
     git(evidence_work, "commit", "-m", "completion evidence")
     evidence_bare = tmp_path / "evidence.git"
@@ -376,6 +457,11 @@ def test_eligible_exact_head_merge_cleanup_terminalization_and_digest(tmp_path: 
     assert envelope["payload"]["publication_review_disposition"] == "merged"
     assert envelope["payload"]["reason_code"] == "publication_review.merged.verified.v1"
     assert envelope["payload"]["product_branch"] == "autobuilder/candidate-revision-1"
+    assert ledger[job_id]["claim_release"]["state"] == "merged"
+    active_claims = json.loads(
+        (state / "work-admission" / "active-claims.v1.json").read_text(encoding="utf-8")
+    )
+    assert active_claims["active_claims"] == []
 
     assert controller(config_path, client).run_once() == ()
     assert client.merge_calls == 1

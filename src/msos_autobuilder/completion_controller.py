@@ -20,7 +20,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -31,6 +31,7 @@ from .candidate_gate import _atomic_write_json, _safe_segment
 from .controlled_publisher import PublisherLock
 from .lifecycle_evidence import attempt_identity_from_job_yaml, emit_lifecycle_evidence
 from .service_error_lifecycle import record_service_cycle_success, write_service_error_marker
+from .work_admission import AdmissionError, release_claim
 
 
 class CompletionControllerError(RuntimeError):
@@ -688,6 +689,42 @@ def _validate_revision_lineage(
     return lineage
 
 
+def _validate_claim_release_handoff(
+    job: Mapping[str, Any],
+    publication: Mapping[str, Any],
+) -> dict[str, Any]:
+    handoff = _mapping(publication.get("claim_release_handoff"), "claim release handoff")
+    if handoff.get("handoff") != "msos-autobuilder.work_admission.claim_release.v1":
+        raise CompletionControllerError("publication lacks canonical claim release handoff")
+    if handoff.get("consumer") != "completion-controller":
+        raise CompletionControllerError("claim release handoff targets the wrong consumer")
+    admission = _mapping(publication.get("work_admission"), "publication work_admission")
+    claim = _mapping(admission.get("claim"), "publication work_admission claim")
+    founder = _mapping(job.get("founder_build_next"), "founder_build_next")
+    job_admission = _mapping(
+        founder.get("work_admission"),
+        "founder_build_next.work_admission",
+    )
+    for key in ("objective_sha256", "writer_id"):
+        claim_key = "claim_writer_id" if key == "writer_id" else key
+        if handoff.get(key) != claim.get(key) or handoff.get(key) != job_admission.get(claim_key):
+            raise CompletionControllerError(f"claim release handoff {key} is not trusted")
+    generation = handoff.get("claim_generation")
+    if (
+        not isinstance(generation, int)
+        or generation != claim.get("generation")
+        or generation != job_admission.get("claim_generation")
+    ):
+        raise CompletionControllerError("claim release handoff generation is not trusted")
+    if sorted(handoff.get("authorized_paths") or []) != sorted(
+        job_admission.get("authorized_paths") or []
+    ):
+        raise CompletionControllerError("claim release handoff paths are not trusted")
+    if handoff.get("verified_completion_terminal_state") != "merged":
+        raise CompletionControllerError("claim release handoff does not authorize merged release")
+    return dict(handoff)
+
+
 def _is_relative_to(child: Path, parent: Path) -> bool:
     try:
         child.relative_to(parent)
@@ -830,6 +867,7 @@ class CompletionController:
             gate_report_sha256=gate_sha,
             publication_report_sha256=publication_sha,
         )
+        claim_release_handoff = _validate_claim_release_handoff(job, publication)
         return {
             "job": job,
             "report": report,
@@ -838,6 +876,7 @@ class CompletionController:
             "publication": publication,
             "completion_readiness": readiness,
             "revision_lineage": revision_lineage,
+            "claim_release_handoff": claim_release_handoff,
             "changed_paths": tuple(sorted(changed)),
             "gate_report_sha256": gate_sha,
             "report_sha256": report_sha,
@@ -1007,11 +1046,11 @@ class CompletionController:
         terminal_path: Path,
         terminal: Mapping[str, Any],
         results_commit: str,
-    ) -> None:
+    ) -> Any:
         identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
         if identity is None:
             raise CompletionControllerError("completion terminalization lacks attempt identity")
-        emit_lifecycle_evidence(
+        return emit_lifecycle_evidence(
             self.host_root,
             evidence_kind="publication_review.disposition",
             identity=identity,
@@ -1030,6 +1069,36 @@ class CompletionController:
             closed_status="final",
             observed_at=str(terminal["completed_at"]),
         )
+
+    def _release_completion_claim(
+        self,
+        *,
+        terminal: Mapping[str, Any],
+        lifecycle_result: Any,
+        results_commit: str,
+    ) -> dict[str, Any]:
+        handoff = _mapping(terminal.get("claim_release_handoff"), "claim release handoff")
+        try:
+            released = release_claim(
+                self.state,
+                str(handoff.get("objective_sha256") or ""),
+                writer_id=str(handoff.get("writer_id") or ""),
+                terminal_state="merged",
+                expected_generation=int(handoff.get("claim_generation")),
+                evidence={
+                    "release_handoff_consumer": "completion-controller",
+                    "terminal_job_id": terminal.get("job_id"),
+                    "verified_pr": terminal.get("pr_number"),
+                    "validated_head": terminal.get("validated_head"),
+                    "merge_commit": terminal.get("merge_commit"),
+                    "publication_review_lifecycle_evidence_id": lifecycle_result.evidence_id,
+                    "publication_review_lifecycle_sha256": lifecycle_result.envelope_sha256,
+                    "completion_results_commit": results_commit,
+                },
+            )
+        except AdmissionError as exc:
+            raise CompletionControllerError("completion claim release failed closed") from exc
+        return asdict(released)
 
     def _save_ledger_entry(self, job_id: str, entry: Mapping[str, Any]) -> None:
         ledger = self._load_ledger()
@@ -1203,6 +1272,7 @@ class CompletionController:
             "gate_report_sha256": evidence["gate_report_sha256"],
             "publication_report_sha256": evidence["publication_report_sha256"],
             "revision_lineage": evidence["revision_lineage"],
+            "claim_release_handoff": evidence["claim_release_handoff"],
             "cleanup": cleanup,
         }
         terminal_path = self._terminalize(job_id=job_id, payload=terminal)
@@ -1335,6 +1405,7 @@ class CompletionController:
             "gate_report_sha256": evidence["gate_report_sha256"],
             "publication_report_sha256": evidence["publication_report_sha256"],
             "revision_lineage": evidence["revision_lineage"],
+            "claim_release_handoff": evidence["claim_release_handoff"],
             "cleanup": cleanup,
             "recovered_from_status": status,
         }
@@ -1375,10 +1446,15 @@ class CompletionController:
                     if recovered is not None:
                         results_commit = self.evidence.publish_report(job_dir, recovered)
                         recovered["results_commit"] = results_commit
-                        self._emit_completion_lifecycle(
+                        lifecycle_result = self._emit_completion_lifecycle(
                             job_dir=job_dir,
                             terminal_path=Path(str(recovered["terminal_path"])),
                             terminal=recovered,
+                            results_commit=results_commit,
+                        )
+                        recovered["claim_release"] = self._release_completion_claim(
+                            terminal=recovered,
+                            lifecycle_result=lifecycle_result,
                             results_commit=results_commit,
                         )
                         ledger[job_id] = recovered
@@ -1391,10 +1467,15 @@ class CompletionController:
                     results_commit = self.evidence.publish_report(job_dir, result)
                     result["results_commit"] = results_commit
                     if result.get("status") != "escalated":
-                        self._emit_completion_lifecycle(
+                        lifecycle_result = self._emit_completion_lifecycle(
                             job_dir=job_dir,
                             terminal_path=Path(str(result["terminal_path"])),
                             terminal=result,
+                            results_commit=results_commit,
+                        )
+                        result["claim_release"] = self._release_completion_claim(
+                            terminal=result,
+                            lifecycle_result=lifecycle_result,
                             results_commit=results_commit,
                         )
                     ledger[job_id] = result

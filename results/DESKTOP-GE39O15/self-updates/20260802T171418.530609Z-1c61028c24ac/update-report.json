@@ -1,0 +1,21 @@
+{
+  "attempt_id": "20260802T171418.530609Z-1c61028c24ac",
+  "attempted_at": "2026-08-02T17:14:18.541268+00:00",
+  "checks": [],
+  "cutover": {
+    "performed": false
+  },
+  "errors": [
+    "[WinError 5] Access is denied: 'C:\\\\Users\\\\USER\\\\.msos-autobuilder-supervisor\\\\versions\\\\292a0e6267331ab578e174679662f0d595dfc0fe\\\\.git\\\\objects\\\\pack\\\\pack-d3c5465fe9417b48fee7d24825d3d41937cd495e.idx'"
+  ],
+  "health": {},
+  "manifest_sha256": "0ebf19dc87b81eef69898c8b4b933b8578deb57e6af984269cd948595154aa97",
+  "outcome": "failed_before_cutover",
+  "previous_commit": "20d397dc1a7c1bcc54fd93212052507b218509ef",
+  "previous_release_path": "C:\\Users\\USER\\.msos-autobuilder-supervisor\\versions\\20d397dc1a7c1bcc54fd93212052507b218509ef",
+  "release_id": "issue-106-same-release-marker-recovery-v1",
+  "requested_commit": "292a0e6267331ab578e174679662f0d595dfc0fe",
+  "rollback": {},
+  "staged_release_path": null,
+  "version": 1
+}

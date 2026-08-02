@@ -33,6 +33,7 @@ import yaml
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_STAGING_PYTEST_TIMEOUT_SECONDS = 2700.0
 _REQUIRED_MANIFEST_PATHS = {
     "pyproject.toml",
     "src/msos_autobuilder/self_update_supervisor.py",
@@ -693,7 +694,11 @@ class ReleaseBuilder:
                     900.0,
                 ),
                 ("ruff", [str(venv_python), "-m", "ruff", "check", "."], 300.0),
-                ("pytest", [str(venv_python), "-m", "pytest", "-q"], 1800.0),
+                (
+                    "pytest",
+                    [str(venv_python), "-m", "pytest", "-q"],
+                    _STAGING_PYTEST_TIMEOUT_SECONDS,
+                ),
                 (
                     "release-health-probe",
                     [

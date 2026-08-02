@@ -14,6 +14,7 @@ import pytest
 import yaml
 
 from msos_autobuilder.self_update_supervisor import (
+    _STAGING_PYTEST_TIMEOUT_SECONDS,
     CheckResult,
     ExpectedFile,
     FileHealthVerifier,
@@ -733,6 +734,55 @@ def test_release_builder_fetches_and_verifies_only_exact_commit(tmp_path: Path) 
     assert verifier.calls == [("fixture/repo", commit, ("CI", "Windows Smoke"))]
     reused = builder.stage(manifest)
     assert reused.reused is True
+
+
+def test_release_builder_gives_full_pytest_suite_witness_runtime_budget(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=source, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=source, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=source, check=True)
+    (source / "pyproject.toml").write_text("[project]\nname='fixture'\n", encoding="utf-8")
+    module = source / "src" / "msos_autobuilder" / "self_update_supervisor.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("# fixture supervisor\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "pyproject.toml", str(module.relative_to(source))], cwd=source, check=True
+    )
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=source, check=True)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
+    file_hash = hashlib.sha256((source / "pyproject.toml").read_bytes()).hexdigest()
+
+    config = _config(tmp_path)
+    config = SupervisorConfig(
+        **{
+            **config.__dict__,
+            "repo_url": str(source),
+            "repository": "fixture/repo",
+        }
+    )
+    raw = _manifest_dict(commit=commit, file_hash=file_hash)
+    raw["repository"] = "fixture/repo"
+    raw["repo_url"] = str(source)
+    raw["expected_files"][1]["sha256"] = hashlib.sha256(module.read_bytes()).hexdigest()
+    raw["manifest_sha256"] = compute_manifest_sha256(raw)
+    manifest = parse_update_manifest(yaml.safe_dump(raw))
+    observed_timeouts: dict[tuple[str, ...], float] = {}
+
+    def executor(argv: Sequence[str], cwd: Path, timeout: float) -> CheckResult:
+        observed_timeouts[tuple(str(part) for part in argv)] = timeout
+        return _hybrid_executor(argv, cwd, timeout)
+
+    staged = ReleaseBuilder(
+        config,
+        status_verifier=RecordingStatusVerifier(),
+        command_executor=executor,
+    ).stage(manifest)
+
+    pytest_check = next(check for check in staged.checks if check.name == "pytest")
+    assert pytest_check.argv[1:] == ("-m", "pytest", "-q")
+    assert observed_timeouts[pytest_check.argv] == _STAGING_PYTEST_TIMEOUT_SECONDS
+    assert _STAGING_PYTEST_TIMEOUT_SECONDS > 1883.46
 
 
 def test_release_builder_stages_legacy_release_without_refill_controller(

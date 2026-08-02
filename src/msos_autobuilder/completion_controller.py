@@ -29,6 +29,7 @@ import yaml
 
 from .candidate_gate import _atomic_write_json, _safe_segment
 from .controlled_publisher import PublisherLock
+from .lifecycle_evidence import attempt_identity_from_job_yaml, emit_lifecycle_evidence
 from .service_error_lifecycle import record_service_cycle_success, write_service_error_marker
 
 
@@ -58,6 +59,7 @@ class CompletionPlan:
     merge_method: str = "merge"
     delete_branch: bool = True
     cleanup_paths: tuple[Path, ...] = ()
+    managed_cleanup_roots: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -79,8 +81,8 @@ class CompletionConfig:
             raise ValueError("completion evidence branch may not be main or master")
         if self.product_base_branch not in {"main", "master"}:
             raise ValueError("product base branch must be main or master")
-        if self.merge_method not in {"merge", "squash", "rebase"}:
-            raise ValueError("merge_method must be merge, squash, or rebase")
+        if self.merge_method not in {"merge", "squash"}:
+            raise ValueError("merge_method must be merge or squash; rebase is not supported in v1")
         if self.poll_seconds <= 0:
             raise ValueError("poll_seconds must be positive")
         if "/" not in self.product_repo_full_name:
@@ -163,14 +165,21 @@ def load_completion_config(path: str | Path) -> CompletionConfig:
             raise CompletionControllerError(f"invalid authority_class for {job_id}")
         plan_checks = tuple(str(item).strip() for item in plan_data.get("required_checks") or ())
         method = str(plan_data.get("merge_method") or merge_method).strip()
-        if method not in {"merge", "squash", "rebase"}:
-            raise CompletionControllerError("completion plan merge_method is invalid")
+        if method not in {"merge", "squash"}:
+            raise CompletionControllerError(
+                "completion plan merge_method is invalid; rebase is not supported in v1"
+            )
         plans[job_id] = CompletionPlan(
             authority_class=str(authority) if authority is not None else None,
             required_checks=plan_checks,
             merge_method=method,
             delete_branch=bool(plan_data.get("delete_branch", True)),
             cleanup_paths=_load_path_list(base, plan_data.get("cleanup_paths"), "cleanup_paths"),
+            managed_cleanup_roots=_load_path_list(
+                base,
+                plan_data.get("managed_cleanup_roots"),
+                "managed_cleanup_roots",
+            ),
         )
     return CompletionConfig(
         host_root=_resolve_path(base, root.get("host_root"), "host_root"),
@@ -312,6 +321,63 @@ class CompletionGitHubClient:
             self._request("GET", f"/repos/{self.repo_full_name}/pulls/{number}"),
             "pull request",
         )
+
+    def _graphql(self, query: str, variables: Mapping[str, Any]) -> dict[str, Any]:
+        response = _mapping(
+            self._request(
+                "POST",
+                "/graphql",
+                {"query": query, "variables": dict(variables)},
+            ),
+            "GitHub GraphQL response",
+        )
+        if response.get("errors"):
+            raise CompletionControllerError(
+                f"GitHub GraphQL review evidence failed: {response['errors']}"
+            )
+        return _mapping(response.get("data"), "GitHub GraphQL data")
+
+    def review_evidence(self, number: int) -> dict[str, Any]:
+        owner, repo = self.repo_full_name.split("/", 1)
+        data = self._graphql(
+            """
+            query($owner:String!, $repo:String!, $number:Int!) {
+              repository(owner:$owner, name:$repo) {
+                pullRequest(number:$number) {
+                  reviewDecision
+                  reviewThreads(first: 100) {
+                    nodes { isResolved isOutdated }
+                  }
+                  latestOpinionatedReviews(first: 20) {
+                    nodes { state author { login } submittedAt }
+                  }
+                }
+              }
+            }
+            """,
+            {"owner": owner, "repo": repo, "number": number},
+        )
+        repository = _mapping(data.get("repository"), "GitHub repository")
+        pr = _mapping(repository.get("pullRequest"), "GitHub pull request")
+        threads = _mapping(pr.get("reviewThreads"), "review threads").get("nodes")
+        reviews = _mapping(pr.get("latestOpinionatedReviews"), "latest reviews").get("nodes")
+        if not isinstance(threads, list):
+            raise CompletionControllerError("review-thread evidence is unavailable")
+        if not isinstance(reviews, list):
+            raise CompletionControllerError("review-decision evidence is unavailable")
+        unresolved = [
+            item
+            for item in threads
+            if isinstance(item, dict)
+            and item.get("isResolved") is not True
+            and item.get("isOutdated") is not True
+        ]
+        return {
+            "source": "github_graphql",
+            "review_decision": str(pr.get("reviewDecision") or "").upper(),
+            "unresolved_review_threads": len(unresolved),
+            "latest_opinionated_reviews": reviews,
+        }
 
     def checks_for_ref(self, ref: str) -> list[dict[str, Any]]:
         status = self._request("GET", f"/repos/{self.repo_full_name}/commits/{ref}/status")
@@ -556,6 +622,71 @@ def _validate_required_checks(
     return evidence
 
 
+def _validate_completion_readiness(
+    job_dir: Path,
+    *,
+    job_id: str,
+    pr_number: int,
+    expected_head: str,
+) -> dict[str, Any]:
+    path = job_dir / "completion-readiness.json"
+    if not path.exists():
+        raise CompletionControllerError("completion readiness conflict evidence is missing")
+    readiness = _mapping(json.loads(path.read_text(encoding="utf-8")), "completion readiness")
+    if (
+        readiness.get("version") != 1
+        or readiness.get("job_id") != job_id
+        or int(readiness.get("pr_number", -1)) != pr_number
+        or str(readiness.get("product_commit") or "").lower() != expected_head
+    ):
+        raise CompletionControllerError("completion readiness evidence is stale or contradictory")
+    for key in (
+        "canon_conflict",
+        "evidence_conflict",
+        "ownership_conflict",
+        "founder_decision_required",
+    ):
+        if readiness.get(key) is not False:
+            raise CompletionControllerError(f"completion readiness blocks merge: {key}")
+    return readiness
+
+
+def _validate_revision_lineage(
+    job_dir: Path,
+    *,
+    job_id: str,
+    expected_head: str,
+    gate_report_sha256: str,
+    publication_report_sha256: str,
+) -> dict[str, Any]:
+    path = job_dir / "revision-lineage.json"
+    if not path.exists():
+        raise CompletionControllerError("revision lineage evidence is missing")
+    lineage = _mapping(json.loads(path.read_text(encoding="utf-8")), "revision lineage")
+    if (
+        lineage.get("version") != 1
+        or lineage.get("job_id") != job_id
+        or str(lineage.get("product_commit") or "").lower() != expected_head
+        or lineage.get("gate_report_sha256") != gate_report_sha256
+        or lineage.get("publication_report_sha256") != publication_report_sha256
+    ):
+        raise CompletionControllerError("revision lineage evidence is stale or contradictory")
+    disposition = str(lineage.get("revision_disposition") or "")
+    if disposition not in {"not_applicable", "terminal"}:
+        raise CompletionControllerError("revision lineage is not terminal")
+    if disposition == "not_applicable" and lineage.get("not_applicable_evidence") is not True:
+        raise CompletionControllerError("revision lineage lacks explicit not-applicable evidence")
+    return lineage
+
+
+def _is_relative_to(child: Path, parent: Path) -> bool:
+    try:
+        child.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
 class CompletionController:
     def __init__(
         self,
@@ -675,21 +806,40 @@ class CompletionController:
         if tuple(sorted(changed)) != gate_changed:
             raise CompletionControllerError("publication and gate changed paths disagree")
         _validate_paths(job, changed)
+        readiness = _validate_completion_readiness(
+            job_dir,
+            job_id=job_dir.name,
+            pr_number=int(publication.get("pr_number")),
+            expected_head=expected_head,
+        )
+        gate_sha = _sha256_file(job_dir / "gate-report.json")
+        publication_sha = _sha256_file(job_dir / "publication-report.json")
+        revision_lineage = _validate_revision_lineage(
+            job_dir,
+            job_id=job_dir.name,
+            expected_head=expected_head,
+            gate_report_sha256=gate_sha,
+            publication_report_sha256=publication_sha,
+        )
         return {
             "job": job,
             "report": report,
             "integrity": integrity,
             "gate": gate,
             "publication": publication,
+            "completion_readiness": readiness,
+            "revision_lineage": revision_lineage,
             "changed_paths": tuple(sorted(changed)),
-            "gate_report_sha256": _sha256_file(job_dir / "gate-report.json"),
+            "gate_report_sha256": gate_sha,
             "report_sha256": report_sha,
-            "publication_report_sha256": _sha256_file(job_dir / "publication-report.json"),
+            "publication_report_sha256": publication_sha,
         }
 
     def _assert_pr_eligible(
         self,
         pr: Mapping[str, Any],
+        review_evidence: Mapping[str, Any],
+        readiness: Mapping[str, Any],
         *,
         branch: str,
         base: str,
@@ -706,20 +856,23 @@ class CompletionController:
         mergeable_state = str(pr.get("mergeable_state") or "").lower()
         if pr.get("mergeable") is False or mergeable_state in {"dirty", "blocked", "unknown"}:
             raise CompletionControllerError("pull request is not mergeable")
-        if pr.get("unresolved_review_threads") not in (None, 0):
+        unresolved_threads = review_evidence.get("unresolved_review_threads")
+        if not isinstance(unresolved_threads, int):
+            raise CompletionControllerError("review-thread evidence is unavailable")
+        if unresolved_threads != 0:
             raise CompletionControllerError("pull request has unresolved review threads")
-        review_decision = str(pr.get("review_decision") or "").upper()
+        review_decision = str(review_evidence.get("review_decision") or "").upper()
         if review_decision in {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}:
             raise CompletionControllerError(
                 "pull request has unresolved review or ownership conflict"
             )
-        if pr.get("canon_conflict") or pr.get("evidence_conflict") or pr.get(
+        if readiness.get("canon_conflict") or readiness.get("evidence_conflict") or readiness.get(
             "ownership_conflict"
         ):
             raise CompletionControllerError(
                 "pull request has unresolved canon/evidence/ownership conflict"
             )
-        if pr.get("founder_decision_required"):
+        if readiness.get("founder_decision_required"):
             raise CompletionControllerError("pull request discovered a new founder decision")
 
     def _verify_after_merge(
@@ -763,7 +916,7 @@ class CompletionController:
         ).returncode == 0
         if not contains_merge:
             raise CompletionControllerError("merge commit is not on default branch")
-        if method in {"merge", "rebase"} and not contains_head:
+        if method == "merge" and not contains_head:
             raise CompletionControllerError("validated head is not preserved on default branch")
         return {
             "pr_number": pr_number,
@@ -789,7 +942,17 @@ class CompletionController:
                         "error": str(exc),
                     }
                 )
-        for path in plan.cleanup_paths:
+        roots = tuple(root.resolve() for root in plan.managed_cleanup_roots)
+        if plan.cleanup_paths and not roots:
+            raise CompletionControllerError("cleanup paths require managed_cleanup_roots")
+        for raw_path in plan.cleanup_paths:
+            path = raw_path.resolve()
+            if path in roots or not any(_is_relative_to(path, root) for root in roots):
+                raise CompletionControllerError(
+                    f"cleanup path is outside approved managed roots: {path}"
+                )
+            if path in {self.host_root, self.state, self.evidence.checkout, self.product}:
+                raise CompletionControllerError(f"cleanup path targets protected state: {path}")
             try:
                 if path.is_dir():
                     shutil.rmtree(path)
@@ -811,6 +974,57 @@ class CompletionController:
         path = self.state / "completion-terminal-work-items" / f"{job_id}.json"
         _atomic_write_json(path, dict(payload))
         return path
+
+    def _emit_completion_lifecycle(
+        self,
+        *,
+        job_dir: Path,
+        terminal_path: Path,
+        terminal: Mapping[str, Any],
+        results_commit: str,
+    ) -> None:
+        identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
+        if identity is None:
+            raise CompletionControllerError("completion terminalization lacks attempt identity")
+        emit_lifecycle_evidence(
+            self.host_root,
+            evidence_kind="publication_review.disposition",
+            identity=identity,
+            source_path=terminal_path,
+            payload={
+                "publication_review_disposition": "drafted",
+                "reason_code": "publication_review.drafted.v1",
+                "draft_pr": str(terminal.get("pr_number")),
+                "product_branch": str(terminal.get("product_branch")),
+                "product_commit": terminal.get("validated_head"),
+                "results_commit": results_commit,
+            },
+            final=True,
+            closed_status="final",
+            observed_at=str(terminal["completed_at"]),
+        )
+
+    def _save_ledger_entry(self, job_id: str, entry: Mapping[str, Any]) -> None:
+        ledger = self._load_ledger()
+        ledger[job_id] = dict(entry)
+        self._save_ledger(ledger)
+
+    def _escalation_entry(
+        self,
+        *,
+        job_id: str,
+        authority: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        return {
+            "version": 1,
+            "status": "escalated",
+            "job_id": job_id,
+            "authority_class": authority,
+            "reason": reason,
+            "recorded_at": _utc_now(),
+            "merge_performed": False,
+        }
 
     def _digest(self, payload: Mapping[str, Any]) -> str:
         cleanup = payload.get("cleanup")
@@ -841,9 +1055,17 @@ class CompletionController:
                 "configured authority conflicts with immutable job authority"
             )
         if authority == AUTHORITY_FOUNDER_REQUIRED:
-            raise CompletionControllerError("FOUNDER_DECISION_REQUIRED blocks automatic merge")
+            return self._escalation_entry(
+                job_id=job_id,
+                authority=authority,
+                reason="FOUNDER_DECISION_REQUIRED blocks automatic merge",
+            )
         if authority == AUTHORITY_NEVER_MERGE:
-            raise CompletionControllerError("NEVER_MERGE blocks automatic merge")
+            return self._escalation_entry(
+                job_id=job_id,
+                authority=authority,
+                reason="NEVER_MERGE blocks automatic merge",
+            )
         publication = evidence["publication"]
         pr_number = int(publication.get("pr_number"))
         branch = _safe_branch(
@@ -855,8 +1077,11 @@ class CompletionController:
         if not required_checks:
             raise CompletionControllerError("no required GitHub checks configured")
         pr = self._client().get_pull_request(pr_number)
+        review = self._client().review_evidence(pr_number)
         self._assert_pr_eligible(
             pr,
+            review,
+            evidence["completion_readiness"],
             branch=branch,
             base=self.config.product_base_branch,
             expected_head=expected_head,
@@ -866,12 +1091,30 @@ class CompletionController:
             required_checks,
         )
         reread = self._client().get_pull_request(pr_number)
+        reread_review = self._client().review_evidence(pr_number)
         self._assert_pr_eligible(
             reread,
+            reread_review,
+            evidence["completion_readiness"],
             branch=branch,
             base=self.config.product_base_branch,
             expected_head=expected_head,
         )
+        intent = {
+            "version": 1,
+            "status": "merge_intent_prepared",
+            "job_id": job_id,
+            "pr_number": pr_number,
+            "validated_head": expected_head,
+            "product_branch": branch,
+            "merge_method": plan.merge_method,
+            "checks": checks,
+            "review_evidence": reread_review,
+            "completion_readiness": evidence["completion_readiness"],
+            "revision_lineage": evidence["revision_lineage"],
+            "prepared_at": _utc_now(),
+        }
+        self._save_ledger_entry(job_id, intent)
         merge = self._client().merge_pull_request(
             pr_number,
             expected_head=expected_head,
@@ -879,12 +1122,35 @@ class CompletionController:
         )
         if merge.get("merged") is not True:
             raise CompletionControllerError("GitHub did not report a successful merge")
+        self._save_ledger_entry(
+            job_id,
+            {**intent, "status": "merge_accepted", "merge_result": merge},
+        )
         verification = self._verify_after_merge(
             pr_number=pr_number,
             expected_head=expected_head,
             method=plan.merge_method,
         )
+        self._save_ledger_entry(
+            job_id,
+            {
+                **intent,
+                "status": "merge_verified",
+                "merge_result": merge,
+                "verification": verification,
+            },
+        )
         cleanup = self._cleanup(branch=branch, plan=plan)
+        self._save_ledger_entry(
+            job_id,
+            {
+                **intent,
+                "status": "cleanup_recorded",
+                "merge_result": merge,
+                "verification": verification,
+                "cleanup": cleanup,
+            },
+        )
         terminal = {
             "version": 1,
             "job_id": job_id,
@@ -903,10 +1169,99 @@ class CompletionController:
             "merge_commit": verification["merge_commit"],
             "default_branch_head": verification["default_branch_head"],
             "checks": checks,
+            "review_evidence": reread_review,
             "changed_paths": list(evidence["changed_paths"]),
             "gate_report_sha256": evidence["gate_report_sha256"],
             "publication_report_sha256": evidence["publication_report_sha256"],
+            "revision_lineage": evidence["revision_lineage"],
             "cleanup": cleanup,
+        }
+        terminal_path = self._terminalize(job_id=job_id, payload=terminal)
+        terminal["terminal_path"] = str(terminal_path)
+        terminal["founder_digest"] = self._digest(terminal)
+        return terminal
+
+    def _recover_existing(
+        self,
+        *,
+        job_dir: Path,
+        plan: CompletionPlan,
+        existing: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        status = str(existing.get("status") or "")
+        if status == "merged":
+            self._verify_after_merge(
+                pr_number=int(existing["pr_number"]),
+                expected_head=str(existing["validated_head"]),
+                method=str(existing["merge_method"]),
+            )
+            return None
+        if status not in {
+            "merge_intent_prepared",
+            "merge_accepted",
+            "merge_verified",
+            "cleanup_recorded",
+        }:
+            raise CompletionControllerError(f"unknown completion ledger status: {status}")
+        job_id = job_dir.name
+        evidence = self._load_job_evidence(job_dir)
+        pr_number = int(existing["pr_number"])
+        expected_head = str(existing["validated_head"]).lower()
+        if expected_head != str(evidence["publication"]["product_commit"]).lower():
+            raise CompletionControllerError(
+                "completion ledger validated head conflicts with evidence"
+            )
+        verification = (
+            _mapping(existing.get("verification"), "completion verification")
+            if isinstance(existing.get("verification"), dict)
+            else self._verify_after_merge(
+                pr_number=pr_number,
+                expected_head=expected_head,
+                method=str(existing["merge_method"]),
+            )
+        )
+        cleanup = (
+            list(existing["cleanup"])
+            if isinstance(existing.get("cleanup"), list)
+            else self._cleanup(
+                branch=_safe_branch(
+                    evidence["publication"].get("product_branch"),
+                    base_branch=self.config.product_base_branch,
+                ),
+                plan=plan,
+            )
+        )
+        job = evidence["job"]
+        authority, authority_declared_at = _authority_from_job(job)
+        terminal = {
+            "version": 1,
+            "job_id": job_id,
+            "work_item_id": (
+                _mapping(job.get("founder_build_next"), "founder_build_next").get("work_item_id")
+                if isinstance(job.get("founder_build_next"), dict)
+                else job_id
+            ),
+            "status": "merged",
+            "authority_class": authority,
+            "authority_declared_at": authority_declared_at,
+            "completed_at": _utc_now(),
+            "pr_number": pr_number,
+            "validated_head": expected_head,
+            "product_branch": _safe_branch(
+                evidence["publication"].get("product_branch"),
+                base_branch=self.config.product_base_branch,
+            ),
+            "merge_method": str(existing["merge_method"]),
+            "merge_commit": verification["merge_commit"],
+            "default_branch_head": verification["default_branch_head"],
+            "checks": dict(existing.get("checks") or {}),
+            "review_evidence": dict(existing.get("review_evidence") or {}),
+            "changed_paths": list(evidence["changed_paths"]),
+            "gate_report_sha256": evidence["gate_report_sha256"],
+            "publication_report_sha256": evidence["publication_report_sha256"],
+            "revision_lineage": evidence["revision_lineage"],
+            "cleanup": cleanup,
+            "recovered_from_status": status,
         }
         terminal_path = self._terminalize(job_id=job_id, payload=terminal)
         terminal["terminal_path"] = str(terminal_path)
@@ -921,6 +1276,7 @@ class CompletionController:
             self.evidence.prepare()
             ledger = self._load_ledger()
             completed: list[str] = []
+            escalated: list[str] = []
             verified: list[str] = []
             for job_dir in self.evidence.job_dirs():
                 job_id = job_dir.name
@@ -932,20 +1288,46 @@ class CompletionController:
                 ))
                 existing = ledger.get(job_id)
                 if existing:
-                    self._verify_after_merge(
-                        pr_number=int(existing["pr_number"]),
-                        expected_head=str(existing["validated_head"]),
-                        method=str(existing["merge_method"]),
+                    if existing.get("status") == "escalated":
+                        escalated.append(job_id)
+                        verified.append(job_id)
+                        continue
+                    recovered = self._recover_existing(
+                        job_dir=job_dir,
+                        plan=plan,
+                        existing=existing,
                     )
+                    if recovered is not None:
+                        results_commit = self.evidence.publish_report(job_dir, recovered)
+                        recovered["results_commit"] = results_commit
+                        self._emit_completion_lifecycle(
+                            job_dir=job_dir,
+                            terminal_path=Path(str(recovered["terminal_path"])),
+                            terminal=recovered,
+                            results_commit=results_commit,
+                        )
+                        ledger[job_id] = recovered
+                        self._save_ledger(ledger)
+                        completed.append(job_id)
                     verified.append(job_id)
                     continue
                 try:
                     result = self.complete_job(job_dir, plan)
                     results_commit = self.evidence.publish_report(job_dir, result)
                     result["results_commit"] = results_commit
+                    if result.get("status") != "escalated":
+                        self._emit_completion_lifecycle(
+                            job_dir=job_dir,
+                            terminal_path=Path(str(result["terminal_path"])),
+                            terminal=result,
+                            results_commit=results_commit,
+                        )
                     ledger[job_id] = result
                     self._save_ledger(ledger)
-                    completed.append(job_id)
+                    if result.get("status") == "escalated":
+                        escalated.append(job_id)
+                    else:
+                        completed.append(job_id)
                     verified.append(job_id)
                 except (CompletionControllerError, OSError, KeyError, TypeError, ValueError) as exc:
                     self._write_error_marker(
@@ -962,7 +1344,11 @@ class CompletionController:
                 service="completion",
                 cycle_started_at=cycle_started_at,
                 associated_jobs=verified,
-                terminal_evidence={"completed_jobs": completed, "verified_jobs": verified},
+                terminal_evidence={
+                    "completed_jobs": completed,
+                    "escalated_jobs": escalated,
+                    "verified_jobs": verified,
+                },
             )
             return tuple(completed)
 

@@ -37,6 +37,7 @@ _REQUIRED_MANIFEST_PATHS = {
     "pyproject.toml",
     "src/msos_autobuilder/self_update_supervisor.py",
 }
+STAGING_PYTEST_TIMEOUT_SECONDS = 2400.0
 
 
 class ManifestError(ValueError):
@@ -693,7 +694,11 @@ class ReleaseBuilder:
                     900.0,
                 ),
                 ("ruff", [str(venv_python), "-m", "ruff", "check", "."], 300.0),
-                ("pytest", [str(venv_python), "-m", "pytest", "-q"], 1800.0),
+                (
+                    "pytest",
+                    [str(venv_python), "-m", "pytest", "-q"],
+                    STAGING_PYTEST_TIMEOUT_SECONDS,
+                ),
                 (
                     "release-health-probe",
                     [

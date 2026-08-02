@@ -14,6 +14,7 @@ import pytest
 import yaml
 
 from msos_autobuilder.self_update_supervisor import (
+    STAGING_PYTEST_TIMEOUT_SECONDS,
     CheckResult,
     ExpectedFile,
     FileHealthVerifier,
@@ -718,10 +719,16 @@ def test_release_builder_fetches_and_verifies_only_exact_commit(tmp_path: Path) 
     raw["manifest_sha256"] = compute_manifest_sha256(raw)
     manifest = parse_update_manifest(yaml.safe_dump(raw))
     verifier = RecordingStatusVerifier()
+    executor_calls: list[tuple[tuple[str, ...], float]] = []
+
+    def recording_executor(argv: Sequence[str], cwd: Path, timeout: float) -> CheckResult:
+        executor_calls.append((tuple(str(part) for part in argv), timeout))
+        return _hybrid_executor(argv, cwd, timeout)
+
     builder = ReleaseBuilder(
         config,
         status_verifier=verifier,
-        command_executor=_hybrid_executor,
+        command_executor=recording_executor,
     )
 
     staged = builder.stage(manifest)
@@ -731,6 +738,10 @@ def test_release_builder_fetches_and_verifies_only_exact_commit(tmp_path: Path) 
     assert all(Path(check.cwd) == staged.release_path for check in staged.checks)
     assert json.loads((staged.release_path / "release.json").read_text())["commit"] == commit
     assert verifier.calls == [("fixture/repo", commit, ("CI", "Windows Smoke"))]
+    assert any(
+        argv[-3:] == ("-m", "pytest", "-q") and timeout == STAGING_PYTEST_TIMEOUT_SECONDS
+        for argv, timeout in executor_calls
+    )
     reused = builder.stage(manifest)
     assert reused.reused is True
 

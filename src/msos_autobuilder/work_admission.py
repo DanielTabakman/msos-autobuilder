@@ -111,6 +111,7 @@ class AdmissionRequest:
     pr_number: int | None = None
     candidates: tuple[WorkCandidate, ...] = ()
     evidence: Mapping[str, Any] | None = None
+    expected_claim_generation: int | None = None
 
 
 @dataclass(frozen=True)
@@ -258,6 +259,10 @@ def _claim_path(root: Path, objective_sha256: str) -> Path:
     return root / "work-admission" / "claims" / f"{objective_sha256}.json"
 
 
+def _index_path(root: Path) -> Path:
+    return root / "work-admission" / "active-claims.v1.json"
+
+
 def _load_claim(path: Path) -> WriterClaim | None:
     if not path.exists():
         return None
@@ -309,6 +314,63 @@ def _write_claim(path: Path, claim: WriterClaim) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _load_all_claims(root: Path) -> tuple[WriterClaim, ...]:
+    claims_dir = root / "work-admission" / "claims"
+    if not claims_dir.exists():
+        return ()
+    claims: list[WriterClaim] = []
+    for path in sorted(claims_dir.glob("*.json")):
+        claim = _load_claim(path)
+        if claim is not None:
+            claims.append(claim)
+    return tuple(claims)
+
+
+def _write_active_index(root: Path, claims: Sequence[WriterClaim]) -> None:
+    active = [claim for claim in claims if claim.state in ACTIVE_CLAIM_STATES]
+    payload = {
+        "version": 1,
+        "updated_at": _utc_now(),
+        "active_claims": [asdict(claim) for claim in active],
+    }
+    path = _index_path(root)
+    data = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+        temporary = Path(handle.name)
+    try:
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _conflicting_active_claim(
+    *,
+    active_claims: Sequence[WriterClaim],
+    objective_sha256: str,
+    writer_id: str,
+    authorized_paths: Sequence[str],
+) -> tuple[WriterClaim, tuple[str, ...], str] | None:
+    for claim in active_claims:
+        if claim.writer_id == writer_id:
+            continue
+        overlap = paths_overlap(claim.authorized_paths, authorized_paths)
+        if claim.objective_sha256 == objective_sha256:
+            return claim, overlap, "same_objective"
+        if overlap:
+            return claim, overlap, "overlapping_paths"
+    return None
+
+
 def release_claim(
     claim_root: Path,
     objective_sha256: str,
@@ -320,7 +382,7 @@ def release_claim(
     if terminal_state not in TERMINAL_CLAIM_STATES:
         raise AdmissionError(f"unsupported terminal claim state: {terminal_state}")
     path = _claim_path(claim_root, objective_sha256)
-    lock_path = path.with_suffix(".lock")
+    lock_path = _index_path(claim_root).with_suffix(".lock")
     with ClaimFileLock(lock_path):
         claim = _load_claim(path)
         if claim is None:
@@ -337,7 +399,79 @@ def release_claim(
             }
         )
         _write_claim(path, updated)
+        _write_active_index(claim_root, _load_all_claims(claim_root))
         return updated
+
+
+def claim_release_handoff(
+    claim: WriterClaim,
+    *,
+    consumer: str = "completion-controller",
+) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "handoff": "msos-autobuilder.work_admission.claim_release.v1",
+        "consumer": consumer,
+        "objective_sha256": claim.objective_sha256,
+        "writer_id": claim.writer_id,
+        "claim_generation": claim.generation,
+        "repository": claim.repository,
+        "linked_issue": claim.linked_issue,
+        "authorized_paths": list(claim.authorized_paths),
+        "release_api": "msos_autobuilder.work_admission.release_claim",
+        "verified_completion_terminal_state": "merged",
+        "allowed_terminal_states": sorted(TERMINAL_CLAIM_STATES),
+        "bounded_failure_behavior": {
+            "submission_or_publication_failure": "release as failed with bounded failure evidence",
+            "superseded_duplicate": "release as superseded with canonical successor evidence",
+            "accepted_abandonment": "release as abandoned with founder/owner disposition evidence",
+        },
+        "immutability": (
+            "consumer must match objective_sha256, writer_id and claim_generation before release"
+        ),
+    }
+
+
+def release_claims_for_jobs(
+    claim_root: Path,
+    terminal_jobs: Mapping[str, str],
+    *,
+    evidence: Mapping[str, Any] | None = None,
+) -> tuple[WriterClaim, ...]:
+    if not terminal_jobs:
+        return ()
+    unsupported = set(terminal_jobs.values()) - TERMINAL_CLAIM_STATES
+    if unsupported:
+        raise AdmissionError(f"unsupported terminal claim states: {sorted(unsupported)}")
+    lock_path = _index_path(claim_root).with_suffix(".lock")
+    released: list[WriterClaim] = []
+    with ClaimFileLock(lock_path):
+        claims = list(_load_all_claims(claim_root))
+        updated_claims: list[WriterClaim] = []
+        for claim in claims:
+            job_id = str(claim.evidence.get("job_id") or "")
+            terminal_state = terminal_jobs.get(job_id)
+            if terminal_state is None or claim.state not in ACTIVE_CLAIM_STATES:
+                updated_claims.append(claim)
+                continue
+            updated = WriterClaim(
+                **{
+                    **asdict(claim),
+                    "state": terminal_state,
+                    "evidence": {
+                        **dict(claim.evidence),
+                        **dict(evidence or {}),
+                        "terminalized_job_id": job_id,
+                    },
+                    "updated_at": _utc_now(),
+                }
+            )
+            _write_claim(_claim_path(claim_root, claim.objective_sha256), updated)
+            updated_claims.append(updated)
+            released.append(updated)
+        if released:
+            _write_active_index(claim_root, updated_claims)
+    return tuple(released)
 
 
 def admit_work(request: AdmissionRequest) -> AdmissionDecision:
@@ -403,13 +537,17 @@ def admit_work(request: AdmissionRequest) -> AdmissionDecision:
         )
 
     path = _claim_path(request.claim_root, objective_sha)
-    lock_path = path.with_suffix(".lock")
+    lock_path = _index_path(request.claim_root).with_suffix(".lock")
     with ClaimFileLock(lock_path):
         existing = _load_claim(path)
+        active_claims = tuple(
+            claim for claim in _load_all_claims(request.claim_root)
+            if claim.state in ACTIVE_CLAIM_STATES
+        )
         now = _utc_now()
         if existing is not None and existing.state in ACTIVE_CLAIM_STATES:
-            overlap = paths_overlap(existing.authorized_paths, authorized_paths)
-            if existing.writer_id != request.writer_id and overlap:
+            if existing.writer_id != request.writer_id:
+                overlap = paths_overlap(existing.authorized_paths, authorized_paths)
                 return AdmissionDecision(
                     status=AdmissionStatus.BLOCKED_BY_OWNERSHIP_CONFLICT,
                     objective_sha256=objective_sha,
@@ -421,10 +559,16 @@ def admit_work(request: AdmissionRequest) -> AdmissionDecision:
                         "conflicting_claim": asdict(existing),
                         "claim_path": path.as_posix(),
                         "path_overlap": list(overlap),
+                        "conflict_reason": "same_objective",
                     },
-                    message="Active durable writer claim owns this objective/path set.",
+                    message="Active durable writer claim owns this objective.",
                 )
             if existing.writer_id == request.writer_id:
+                if (
+                    request.expected_claim_generation is not None
+                    and existing.generation != request.expected_claim_generation
+                ):
+                    raise AdmissionError("active claim generation does not match immutable job")
                 return AdmissionDecision(
                     status=AdmissionStatus.NEW_WORK_ADMITTED,
                     objective_sha256=objective_sha,
@@ -438,6 +582,32 @@ def admit_work(request: AdmissionRequest) -> AdmissionDecision:
                     },
                     message="Existing durable writer claim matches this writer.",
                 )
+        conflict = _conflicting_active_claim(
+            active_claims=active_claims,
+            objective_sha256=objective_sha,
+            writer_id=request.writer_id,
+            authorized_paths=authorized_paths,
+        )
+        if conflict is not None:
+            conflicting_claim, overlap, reason = conflict
+            return AdmissionDecision(
+                status=AdmissionStatus.BLOCKED_BY_OWNERSHIP_CONFLICT,
+                objective_sha256=objective_sha,
+                canonical=None,
+                claim=conflicting_claim,
+                classifications=classifications,
+                evidence={
+                    **evidence,
+                    "conflicting_claim": asdict(conflicting_claim),
+                    "claim_path": _claim_path(
+                        request.claim_root,
+                        conflicting_claim.objective_sha256,
+                    ).as_posix(),
+                    "path_overlap": list(overlap),
+                    "conflict_reason": reason,
+                },
+                message="Active durable writer claim owns this objective/path set.",
+            )
         generation = 1 if existing is None else existing.generation + 1
         claim = WriterClaim(
             version=1,
@@ -455,6 +625,7 @@ def admit_work(request: AdmissionRequest) -> AdmissionDecision:
             updated_at=now,
         )
         _write_claim(path, claim)
+        _write_active_index(request.claim_root, (*active_claims, claim))
         return AdmissionDecision(
             status=AdmissionStatus.NEW_WORK_ADMITTED,
             objective_sha256=objective_sha,

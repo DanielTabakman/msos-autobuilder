@@ -15,6 +15,11 @@ from msos_autobuilder.controlled_publisher import (
     PublisherError,
     load_publisher_config,
 )
+from msos_autobuilder.work_admission import (
+    AdmissionRequest,
+    admit_work,
+    objective_identity_from_work,
+)
 
 
 def git(repo: Path | None, *args: str) -> str:
@@ -62,6 +67,16 @@ class FakeGitHubClient(GitHubDraftClient):
     def find_pull_requests(self, branch: str) -> list[dict[str, Any]]:
         return [pull for pull in self.pulls if pull["head"]["ref"] == branch]
 
+    def find_related_work(
+        self,
+        *,
+        linked_issue: int | None,
+        objective_sha256: str,
+        acceptance_contract_sha256: str | None = None,
+        changed_paths: object = (),
+    ) -> list[dict[str, Any]]:
+        return []
+
     def create_draft(
         self,
         *,
@@ -83,6 +98,58 @@ class FakeGitHubClient(GitHubDraftClient):
         }
         self.pulls.append(pull)
         return pull
+
+
+class FixtureDiscoveryClient(GitHubDraftClient):
+    def __init__(self) -> None:
+        self.repo_full_name = "DanielTabakman/msos-autobuilder"
+        self.owner = "DanielTabakman"
+        self.token = "unused"
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+    ) -> Any:
+        assert method == "GET"
+        assert payload is None
+        if path.startswith("/repos/DanielTabakman/msos-autobuilder/pulls?"):
+            return [
+                {
+                    "number": 111,
+                    "title": "Raise staged pytest timeout for Windows suite",
+                    "state": "closed",
+                    "body": "Issue #110 found that the staged pytest boundary is too tight.",
+                    "head": {"ref": "codex/issue-110-staged-pytest-timeout"},
+                    "merged_at": "2026-08-02T01:16:06Z",
+                    "html_url": "https://github.com/DanielTabakman/msos-autobuilder/pull/111",
+                },
+                {
+                    "number": 113,
+                    "title": "Raise self-update pytest staging timeout",
+                    "state": "closed",
+                    "body": "Issue #50 staging timeout follow-up.",
+                    "head": {"ref": "codex/issue50-self-update-pytest-timeout"},
+                    "merged_at": None,
+                    "html_url": "https://github.com/DanielTabakman/msos-autobuilder/pull/113",
+                },
+            ]
+        if path.startswith(
+            "/repos/DanielTabakman/msos-autobuilder/pulls/111/files?per_page=100"
+        ):
+            return [
+                {"filename": "src/msos_autobuilder/self_update_supervisor.py"},
+                {"filename": "tests/test_self_update_supervisor.py"},
+            ]
+        if path.startswith(
+            "/repos/DanielTabakman/msos-autobuilder/pulls/113/files?per_page=100"
+        ):
+            return [
+                {"filename": "src/msos_autobuilder/self_update_supervisor.py"},
+                {"filename": "tests/test_self_update_supervisor.py"},
+            ]
+        raise AssertionError(path)
 
 
 def make_fixture(tmp_path: Path, *, overlap: bool = False) -> tuple[Path, Path, Path, str]:
@@ -124,6 +191,32 @@ def make_fixture(tmp_path: Path, *, overlap: bool = False) -> tuple[Path, Path, 
     git(evidence_work, "config", "user.name", "Fixture")
     git(evidence_work, "config", "user.email", "fixture@example.invalid")
     job_id = "candidate-revision-1"
+    host_root = tmp_path / "host"
+    objective = objective_identity_from_work(
+        repository="owner/product",
+        linked_issue=None,
+        work_item_id="fixture-work",
+        stable_parts={
+            "work_item_id": "fixture-work",
+            "acceptance_contract_sha256": "b" * 64,
+            "canonical_capability_path_contract": {
+                "adapter": "ppe_operator",
+                "slice_id": "fixture-slice",
+                "touch_set": ["src/viz/value.py"],
+            },
+        },
+        acceptance_contract_sha256="b" * 64,
+    )
+    admission = admit_work(
+        AdmissionRequest(
+            objective=objective,
+            writer_id=f"build-next:{job_id}",
+            branch=f"autobuilder/{job_id}",
+            authorized_paths=("src/viz/value.py",),
+            claim_root=host_root / "state",
+        )
+    )
+    assert admission.claim is not None
     job_dir = evidence_work / "results" / "MACHINE" / job_id
     patch_path = job_dir / "patches" / "candidate.patch"
     patch_path.parent.mkdir(parents=True)
@@ -207,6 +300,21 @@ def make_fixture(tmp_path: Path, *, overlap: bool = False) -> tuple[Path, Path, 
                 "  pipeline_id: ppe",
                 "  work_item_id: fixture-work",
                 f"  work_item_source_sha256_v1: {'a' * 64}",
+                "  work_admission:",
+                "    status: NEW_WORK_ADMITTED",
+                f"    objective_sha256: {objective.objective_sha256}",
+                f"    claim_generation: {admission.claim.generation}",
+                f"    claim_writer_id: build-next:{job_id}",
+                "    authorized_paths:",
+                "      - src/viz/value.py",
+                "    objective_identity:",
+                "      repository: owner/product",
+                "      linked_issue: null",
+                "      work_item_id: fixture-work",
+                f"      stable_key: {objective.stable_key}",
+                f"      acceptance_contract_sha256: {'b' * 64}",
+                "      error_signature: null",
+                "      release_identity: null",
                 "  refill_attempt:",
                 "    generation_id: refill-12345678",
                 "    attempt_ordinal: 1",
@@ -232,7 +340,7 @@ version: 1
 draft_pr_publication_enabled: true
 merge_enabled: false
 main_write_enabled: false
-host_root: {tmp_path.as_posix()}/host
+host_root: {host_root.as_posix()}
 evidence_repo_url: {evidence_bare.as_posix()}
 results_branch: results
 product_repo_url: {product_bare.as_posix()}
@@ -257,6 +365,75 @@ plans:
         encoding="utf-8",
     )
     return config, product_bare, evidence_bare, job_id
+
+
+def test_real_pr_111_113_discovery_selects_111_and_refuses_second_writer(
+    tmp_path: Path,
+) -> None:
+    from msos_autobuilder.work_admission import AdmissionStatus, candidate_from_pr
+
+    objective = objective_identity_from_work(
+        repository="DanielTabakman/msos-autobuilder",
+        linked_issue=110,
+        work_item_id="staged-pytest-timeout",
+        stable_parts={
+            "work_item_id": "staged-pytest-timeout",
+            "acceptance_contract_sha256": "1" * 64,
+            "canonical_capability_path_contract": {
+                "touch_set": [
+                    "src/msos_autobuilder/self_update_supervisor.py",
+                    "tests/test_self_update_supervisor.py",
+                ],
+            },
+        },
+        acceptance_contract_sha256="1" * 64,
+    )
+    client = FixtureDiscoveryClient()
+    raw_candidates = client.find_related_work(
+        linked_issue=110,
+        objective_sha256=objective.objective_sha256,
+        acceptance_contract_sha256=objective.acceptance_contract_sha256,
+        changed_paths=(
+            "src/msos_autobuilder/self_update_supervisor.py",
+            "tests/test_self_update_supervisor.py",
+        ),
+    )
+    candidates = tuple(
+        candidate_from_pr(
+            number=int(raw["number"]),
+            title=str(raw["title"]),
+            state=str(raw["state"]),
+            branch=str(raw["branch"]),
+            linked_issue=raw["linked_issue"],
+            objective_sha256=raw["objective_sha256"],
+            acceptance_contract_sha256=raw["acceptance_contract_sha256"],
+            changed_paths=tuple(raw["changed_paths"]),
+            canonical=raw["canonical"],
+            merged=raw["merged"],
+            url=str(raw["url"]),
+        )
+        for raw in raw_candidates
+    )
+
+    decision = admit_work(
+        AdmissionRequest(
+            objective=objective,
+            writer_id="codex:second-writer",
+            branch="codex/issue50-self-update-pytest-timeout",
+            authorized_paths=(
+                "src/msos_autobuilder/self_update_supervisor.py",
+                "tests/test_self_update_supervisor.py",
+            ),
+            claim_root=tmp_path,
+            candidates=candidates,
+        )
+    )
+
+    assert {candidate.number for candidate in candidates} == {111, 113}
+    assert decision.status == AdmissionStatus.CONTINUE_EXISTING_WORK
+    assert decision.canonical is not None
+    assert decision.canonical.number == 111
+    assert not (tmp_path / "work-admission" / "claims").exists()
 
 
 def test_controlled_publisher_creates_one_draft_pr_and_is_repeat_safe(tmp_path: Path) -> None:

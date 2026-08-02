@@ -1053,6 +1053,10 @@ def test_manual_build_next_without_attempt_context_keeps_deterministic_id(tmp_pa
     )
     assert manual.job_id == expected
     assert refill.job_id != manual.job_id
+    assert (
+        manual.evidence["work_admission"]["objective_sha256"]
+        == refill.evidence["work_admission"]["objective_sha256"]
+    )
 
 
 def test_manual_short_job_id_matches_fixed_base_value() -> None:

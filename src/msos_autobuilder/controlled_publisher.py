@@ -38,10 +38,12 @@ from .service_error_lifecycle import record_service_cycle_success, write_service
 from .work_admission import (
     AdmissionRequest,
     AdmissionStatus,
+    ObjectiveIdentity,
     WorkCandidate,
+    WriterClaim,
     admit_work,
     candidate_from_pr,
-    objective_identity_from_work,
+    claim_release_handoff,
 )
 
 
@@ -312,6 +314,13 @@ def _changed_paths(repo: Path) -> tuple[str, ...]:
     return tuple(sorted(paths))
 
 
+def _linked_issue_from_text(text: str) -> int | None:
+    matches = re.findall(r"(?i)(?:fixes|closes|resolves|issue)\s+#(\d+)", text)
+    if not matches:
+        return None
+    return int(matches[0])
+
+
 class PublisherLock:
     """Cross-platform process lock released automatically on process exit."""
 
@@ -430,10 +439,82 @@ class GitHubDraftClient:
         *,
         linked_issue: int | None,
         objective_sha256: str,
+        acceptance_contract_sha256: str | None = None,
         changed_paths: Sequence[str],
     ) -> list[dict[str, Any]]:
-        """Return read-only duplicate/overlap candidates when a client supports it."""
-        return []
+        """Discover candidate issue/PR overlaps through read-only GitHub APIs."""
+        requested_paths = {path.replace("\\", "/").strip("/") for path in changed_paths}
+        candidates: list[dict[str, Any]] = []
+        pulls: list[dict[str, Any]] = []
+        for page in range(1, 11):
+            result = self._request(
+                "GET",
+                f"/repos/{self.repo_full_name}/pulls?state=all&per_page=100&page={page}",
+            )
+            if not isinstance(result, list):
+                raise PublisherError("GitHub pull-request discovery returned an invalid payload")
+            pulls.extend(item for item in result if isinstance(item, dict))
+            if len(result) < 100:
+                break
+        else:
+            raise PublisherError("GitHub pull-request discovery exceeded bounded page limit")
+        for item in pulls:
+            number = item.get("number")
+            if not isinstance(number, int):
+                continue
+            file_items: list[dict[str, Any]] = []
+            for page in range(1, 11):
+                files_result = self._request(
+                    "GET",
+                    f"/repos/{self.repo_full_name}/pulls/{number}/files?per_page=100&page={page}",
+                )
+                if not isinstance(files_result, list):
+                    raise PublisherError(
+                        "GitHub pull-request file discovery returned an invalid payload"
+                    )
+                file_items.extend(item for item in files_result if isinstance(item, dict))
+                if len(files_result) < 100:
+                    break
+            else:
+                raise PublisherError("GitHub pull-request file discovery exceeded page limit")
+            pr_paths = sorted(
+                {
+                    str(file.get("filename") or "").replace("\\", "/")
+                    for file in file_items
+                    if file.get("filename")
+                }
+            )
+            body = str(item.get("body") or "")
+            candidate_issue = _linked_issue_from_text(body)
+            head = item.get("head") if isinstance(item.get("head"), dict) else {}
+            merged = bool(item.get("merged_at"))
+            same_issue = linked_issue is not None and candidate_issue == linked_issue
+            same_objective = objective_sha256 in body
+            same_contract = (
+                acceptance_contract_sha256 is not None
+                and acceptance_contract_sha256 in body
+            )
+            overlaps_path = bool(requested_paths & set(pr_paths))
+            if not (same_issue or same_objective or same_contract or overlaps_path):
+                continue
+            candidates.append(
+                {
+                    "number": number,
+                    "title": str(item.get("title") or ""),
+                    "state": str(item.get("state") or ""),
+                    "branch": str(head.get("ref") or ""),
+                    "linked_issue": candidate_issue,
+                    "objective_sha256": objective_sha256 if same_objective else None,
+                    "acceptance_contract_sha256": (
+                        acceptance_contract_sha256 if same_contract else None
+                    ),
+                    "changed_paths": pr_paths,
+                    "canonical": merged,
+                    "merged": merged,
+                    "url": str(item.get("html_url") or ""),
+                }
+            )
+        return candidates
 
     def create_draft(
         self,
@@ -867,35 +948,31 @@ class ControlledPublisher:
         plan: PublishPlan,
     ) -> dict[str, Any]:
         founder = _mapping(job.get("founder_build_next"), "job founder_build_next")
-        contract = (
-            _mapping(job.get("candidate_validation"), "job candidate_validation")
-            if isinstance(job.get("candidate_validation"), dict)
-            else {}
+        admission_handoff = _mapping(
+            founder.get("work_admission"),
+            "job founder_build_next.work_admission",
         )
-        objective = objective_identity_from_work(
-            repository=self.config.product_repo_full_name,
-            linked_issue=(
-                int(founder["linked_issue"])
-                if isinstance(founder.get("linked_issue"), int)
-                else None
-            ),
-            work_item_id=str(founder.get("work_item_id") or job_id),
-            stable_parts={
-                "job_id": job_id,
-                "work_item_id": founder.get("work_item_id"),
-                "work_item_source_sha256_v1": founder.get("work_item_source_sha256_v1"),
-                "changed_paths": list(expected_paths),
-                "branch": plan.branch,
-            },
-            acceptance_contract_sha256=(
-                str(contract["contract_sha256"])
-                if contract.get("contract_sha256")
-                else None
-            ),
+        objective = ObjectiveIdentity(
+            **_mapping(
+                admission_handoff.get("objective_identity"),
+                "job work_admission objective_identity",
+            )
         )
+        if admission_handoff.get("objective_sha256") != objective.objective_sha256:
+            raise PublisherError("job work_admission objective identity hash mismatch")
+        expected_generation = admission_handoff.get("claim_generation")
+        if not isinstance(expected_generation, int) or expected_generation < 1:
+            raise PublisherError("job work_admission claim_generation is required")
+        writer_id = str(admission_handoff.get("claim_writer_id") or "")
+        if not writer_id:
+            raise PublisherError("job work_admission claim_writer_id is required")
+        if sorted(admission_handoff.get("authorized_paths") or []) != list(expected_paths):
+            raise PublisherError("job work_admission authorized paths conflict with gate")
+        contract_sha256 = objective.acceptance_contract_sha256
         raw_candidates = self._client().find_related_work(
             linked_issue=objective.linked_issue,
             objective_sha256=objective.objective_sha256,
+            acceptance_contract_sha256=contract_sha256,
             changed_paths=expected_paths,
         )
         candidates: list[WorkCandidate] = []
@@ -936,11 +1013,12 @@ class ControlledPublisher:
         decision = admit_work(
             AdmissionRequest(
                 objective=objective,
-                writer_id=f"controlled-publisher:{job_id}",
+                writer_id=writer_id,
                 branch=plan.branch,
                 authorized_paths=expected_paths,
                 claim_root=self.state,
                 candidates=tuple(candidates),
+                expected_claim_generation=expected_generation,
                 evidence={
                     "admission_phase": "controlled_publisher.pre_branch_pr",
                     "job_id": job_id,
@@ -986,6 +1064,34 @@ class ControlledPublisher:
         if admission["status"] != AdmissionStatus.NEW_WORK_ADMITTED.value:
             raise PublisherError(
                 f"work admission refused publication: {admission['status']}"
+            )
+        release_handoff = None
+        claim = admission.get("claim")
+        if isinstance(claim, dict):
+            release_handoff = claim_release_handoff(
+                WriterClaim(
+                    version=1,
+                    objective_sha256=str(claim.get("objective_sha256") or ""),
+                    repository=str(claim.get("repository") or ""),
+                    linked_issue=(
+                        int(claim["linked_issue"])
+                        if claim.get("linked_issue") is not None
+                        else None
+                    ),
+                    writer_id=str(claim.get("writer_id") or ""),
+                    branch=str(claim["branch"]) if claim.get("branch") is not None else None,
+                    pr_number=(
+                        int(claim["pr_number"])
+                        if claim.get("pr_number") is not None
+                        else None
+                    ),
+                    authorized_paths=tuple(str(item) for item in claim.get("authorized_paths") or ()),
+                    generation=int(claim.get("generation") or 0),
+                    state=str(claim.get("state") or ""),
+                    evidence=dict(claim.get("evidence") or {}),
+                    claimed_at=str(claim.get("claimed_at") or ""),
+                    updated_at=str(claim.get("updated_at") or ""),
+                )
             )
 
         base_head = self._prepare_product()
@@ -1137,6 +1243,7 @@ class ControlledPublisher:
             "source_report_sha256": source_sha,
             "changed_paths": list(expected_paths),
             "work_admission": admission,
+            "claim_release_handoff": release_handoff,
             "checks": checks,
         }
         results_commit = self.evidence.publish_report(job_dir, publication_report)

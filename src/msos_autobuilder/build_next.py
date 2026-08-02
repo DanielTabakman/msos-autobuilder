@@ -50,6 +50,8 @@ from .work_admission import (
     AdmissionStatus,
     admit_work,
     objective_identity_from_work,
+    release_claim,
+    release_claims_for_jobs,
 )
 
 
@@ -1078,6 +1080,39 @@ def _job_state(config: BuildNextConfig, job_id: str) -> str | None:
     return None
 
 
+def _release_terminal_admission_claims(config: BuildNextConfig) -> None:
+    if config.host_root is None:
+        return
+    terminal_jobs: dict[str, str] = {}
+    paths = HostPaths.from_root(config.host_root)
+    for root, state in ((paths.completed, "released"), (paths.failed, "failed")):
+        if root.exists():
+            terminal_jobs.update(
+                {
+                    path.name: state
+                    for path in root.iterdir()
+                    if path.is_dir() and path.name
+                }
+            )
+    publisher_seen = config.host_root / "state" / "controlled-publisher-seen.json"
+    if publisher_seen.exists():
+        try:
+            raw_seen = json.loads(publisher_seen.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raw_seen = None
+        if isinstance(raw_seen, dict):
+            for job_id, entry in raw_seen.items():
+                if isinstance(job_id, str) and isinstance(entry, dict):
+                    status = str(entry.get("status") or "")
+                    if status:
+                        terminal_jobs.setdefault(job_id, "released")
+    release_claims_for_jobs(
+        config.host_root / "state",
+        terminal_jobs,
+        evidence={"release_handoff_consumer": "build_next.pre_admission_terminal_sweep"},
+    )
+
+
 def _prepare_feed_checkout(config: BuildNextConfig) -> Path:
     root = (
         config.checkout_root
@@ -1351,6 +1386,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
         requirements_path = ppe_repo / "requirements.txt"
         if not requirements_path.is_file():
             raise BuildNextError("PPE dependency source is missing: requirements.txt")
+        _release_terminal_admission_claims(config)
         job = _build_job(
             job_id=job_id,
             pipeline_id=pipeline_id,
@@ -1368,6 +1404,26 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             work_item_source_sha256=work_item_source_sha256,
             refill_attempt=refill_attempt,
         )
+        admission_capability_contract = {
+            "version": 1,
+            "pipeline_id": pipeline_id,
+            "work_item_id": work_item_id,
+            "adapter": "ppe_operator",
+            "target_repository": "DanielTabakman/Probability-prediction-engine",
+            "native_slice_id": native_slice.slice_id,
+            "authorized_paths": list(native_slice.touch_set),
+            "forbidden_paths": list(forbidden_paths),
+            "publication_enabled": False,
+            "merge_enabled": False,
+            "product_main_write_enabled": False,
+        }
+        admission_acceptance_sha256 = _sha256_text(
+            json.dumps(
+                admission_capability_contract,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
         admission_objective = objective_identity_from_work(
             repository="DanielTabakman/Probability-prediction-engine",
             linked_issue=None,
@@ -1375,17 +1431,10 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             stable_parts={
                 "pipeline_id": pipeline_id,
                 "work_item_id": work_item_id,
-                "source_commit": source_identity.commit,
-                "work_item_source_sha256_v1": work_item_source_sha256,
-                "native_slice": {
-                    "slice_id": native_slice.slice_id,
-                    "touch_set": list(native_slice.touch_set),
-                },
-                "refill_attempt": refill_attempt,
+                "acceptance_contract_sha256": admission_acceptance_sha256,
+                "canonical_capability_path_contract": admission_capability_contract,
             },
-            acceptance_contract_sha256=str(
-                job["candidate_validation"]["contract_sha256"]
-            ),
+            acceptance_contract_sha256=admission_acceptance_sha256,
         )
         admission = admit_work(
             AdmissionRequest(
@@ -1394,7 +1443,9 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                 branch=native_slice.build_branch,
                 authorized_paths=native_slice.touch_set,
                 claim_root=(
-                    config.host_root / "state" if config.host_root is not None else None
+                    config.host_root / "state"
+                    if config.host_root is not None and config.submit
+                    else None
                 ),
                 evidence={
                     "admission_phase": "build_next.pre_feed_submission",
@@ -1437,8 +1488,28 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                 admission.claim.writer_id if admission.claim is not None else None
             ),
             "authorized_paths": list(native_slice.touch_set),
+            "objective_identity": asdict(admission_objective),
+            "acceptance_contract": admission_capability_contract,
+            "execution_validation_contract_sha256": job["candidate_validation"][
+                "contract_sha256"
+            ],
         }
-        submission = _submit_feed_job(config, job)
+        try:
+            submission = _submit_feed_job(config, job)
+        except Exception as exc:
+            if config.host_root is not None and admission.claim is not None:
+                release_claim(
+                    config.host_root / "state",
+                    admission.objective_sha256,
+                    writer_id=admission.claim.writer_id,
+                    terminal_state="failed",
+                    evidence={
+                        "bounded_failure_disposition": "feed_submission_failed",
+                        "job_id": job_id,
+                        "error": str(exc),
+                    },
+                )
+            raise
         if not config.submit:
             return BuildNextReceipt(
                 status="UNFILLED",

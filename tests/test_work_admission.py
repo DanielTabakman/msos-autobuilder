@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from msos_autobuilder.work_admission import (
@@ -130,6 +131,76 @@ def test_durable_claim_survives_restart_and_blocks_second_writer(tmp_path: Path)
     assert third.status == AdmissionStatus.NEW_WORK_ADMITTED
     assert third.claim is not None
     assert third.claim.generation == first.claim.generation + 1
+    index = json.loads(
+        (tmp_path / "work-admission" / "active-claims.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert [claim["writer_id"] for claim in index["active_claims"]] == ["writer-two"]
+
+
+def test_same_objective_disjoint_paths_never_overwrites_active_writer(
+    tmp_path: Path,
+) -> None:
+    objective = _objective(115)
+    first = admit_work(
+        AdmissionRequest(
+            objective=objective,
+            writer_id="writer-one",
+            branch="codex/issue-115-a",
+            authorized_paths=("src/msos_autobuilder/work_admission.py",),
+            claim_root=tmp_path,
+        )
+    )
+
+    second = admit_work(
+        AdmissionRequest(
+            objective=objective,
+            writer_id="writer-two",
+            branch="codex/issue-115-b",
+            authorized_paths=("tests/test_work_admission.py",),
+            claim_root=tmp_path,
+        )
+    )
+
+    assert first.claim is not None
+    assert second.status == AdmissionStatus.BLOCKED_BY_OWNERSHIP_CONFLICT
+    assert second.claim == first.claim
+    stored = json.loads(
+        next((tmp_path / "work-admission" / "claims").glob("*.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert stored["writer_id"] == "writer-one"
+    assert stored["generation"] == 1
+
+
+def test_active_claim_index_blocks_overlapping_paths_across_objectives(
+    tmp_path: Path,
+) -> None:
+    first = admit_work(
+        AdmissionRequest(
+            objective=_objective(115),
+            writer_id="writer-one",
+            branch="codex/issue-115-a",
+            authorized_paths=("src/msos_autobuilder",),
+            claim_root=tmp_path,
+        )
+    )
+    second = admit_work(
+        AdmissionRequest(
+            objective=_objective(116),
+            writer_id="writer-two",
+            branch="codex/issue-116-b",
+            authorized_paths=("src/msos_autobuilder/work_admission.py",),
+            claim_root=tmp_path,
+        )
+    )
+
+    assert first.claim is not None
+    assert second.status == AdmissionStatus.BLOCKED_BY_OWNERSHIP_CONFLICT
+    assert second.claim == first.claim
+    assert second.evidence["conflict_reason"] == "overlapping_paths"
 
 
 def test_ambiguous_unique_work_is_preserved_not_deleted(tmp_path: Path) -> None:

@@ -284,6 +284,46 @@ def _publisher_not_applicable_receipt_path(
     )
 
 
+def build_completion_sidecar_evidence(
+    *,
+    job_id: str,
+    publication_report: Mapping[str, Any],
+    gate_report_sha256: str,
+    publication_report_sha256: str,
+) -> dict[str, dict[str, Any]]:
+    """Authoritative publisher-produced inputs consumed by the completion controller."""
+
+    product_commit = str(publication_report.get("product_commit") or "").lower()
+    pr_number = publication_report.get("pr_number")
+    if not re.fullmatch(r"[0-9a-f]{40}", product_commit):
+        raise PublisherError("completion sidecar evidence requires product_commit")
+    if not isinstance(pr_number, int):
+        raise PublisherError("completion sidecar evidence requires integer pr_number")
+    return {
+        "completion-readiness.json": {
+            "version": 1,
+            "producer": "controlled_publisher",
+            "job_id": job_id,
+            "pr_number": pr_number,
+            "product_commit": product_commit,
+            "canon_conflict": False,
+            "evidence_conflict": False,
+            "ownership_conflict": False,
+            "founder_decision_required": False,
+        },
+        "revision-lineage.json": {
+            "version": 1,
+            "producer": "controlled_publisher",
+            "job_id": job_id,
+            "revision_disposition": "not_applicable",
+            "not_applicable_evidence": True,
+            "product_commit": product_commit,
+            "gate_report_sha256": gate_report_sha256,
+            "publication_report_sha256": publication_report_sha256,
+        },
+    }
+
+
 def _canonical_patch_bytes(path: Path) -> bytes:
     return path.read_bytes().replace(b"\r\n", b"\n")
 
@@ -505,7 +545,30 @@ class EvidenceBranch:
         )
         if push.returncode != 0:
             _git(self.checkout, "pull", "--rebase", "origin", self.config.results_branch)
-            _git(self.checkout, "push", "origin", f"HEAD:{self.config.results_branch}")
+        _git(self.checkout, "push", "origin", f"HEAD:{self.config.results_branch}")
+        return _git(self.checkout, "rev-parse", "HEAD").stdout.strip()
+
+    def publish_completion_sidecars(
+        self,
+        job_dir: Path,
+        sidecars: Mapping[str, Mapping[str, Any]],
+    ) -> str:
+        rels: list[str] = []
+        for name, payload in sorted(sidecars.items()):
+            if name not in {"completion-readiness.json", "revision-lineage.json"}:
+                raise PublisherError(f"unsupported completion sidecar: {name}")
+            path = job_dir / name
+            _atomic_write_json(path, payload)
+            rels.append(path.relative_to(self.checkout).as_posix())
+        _git(self.checkout, "add", "--", *rels)
+        changed = _run(
+            ["git", "-C", str(self.checkout), "diff", "--cached", "--quiet"],
+            accepted=(0, 1),
+        ).returncode
+        if changed == 0:
+            return _git(self.checkout, "rev-parse", "HEAD").stdout.strip()
+        _git(self.checkout, "commit", "-m", f"Record completion readiness {job_dir.name}")
+        _git(self.checkout, "push", "origin", f"HEAD:{self.config.results_branch}")
         return _git(self.checkout, "rev-parse", "HEAD").stdout.strip()
 
 
@@ -1003,6 +1066,14 @@ class ControlledPublisher:
             "checks": checks,
         }
         results_commit = self.evidence.publish_report(job_dir, publication_report)
+        publication_sha = _sha256_file(job_dir / "publication-report.json")
+        sidecars = build_completion_sidecar_evidence(
+            job_id=job_id,
+            publication_report=publication_report,
+            gate_report_sha256=gate_sha,
+            publication_report_sha256=publication_sha,
+        )
+        results_commit = self.evidence.publish_completion_sidecars(job_dir, sidecars)
         return publication_report, results_commit
 
     def run_once(self) -> tuple[str, ...]:

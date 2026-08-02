@@ -346,6 +346,7 @@ class CompletionGitHubClient:
                 pullRequest(number:$number) {
                   reviewDecision
                   reviewThreads(first: 100) {
+                    pageInfo { hasNextPage endCursor }
                     nodes { isResolved isOutdated }
                   }
                   latestOpinionatedReviews(first: 20) {
@@ -359,7 +360,13 @@ class CompletionGitHubClient:
         )
         repository = _mapping(data.get("repository"), "GitHub repository")
         pr = _mapping(repository.get("pullRequest"), "GitHub pull request")
-        threads = _mapping(pr.get("reviewThreads"), "review threads").get("nodes")
+        thread_connection = _mapping(pr.get("reviewThreads"), "review threads")
+        page_info = _mapping(thread_connection.get("pageInfo"), "review thread pageInfo")
+        if page_info.get("hasNextPage") is True:
+            raise CompletionControllerError(
+                "review-thread evidence is paginated; refusing partial GraphQL evidence"
+            )
+        threads = thread_connection.get("nodes")
         reviews = _mapping(pr.get("latestOpinionatedReviews"), "latest reviews").get("nodes")
         if not isinstance(threads, list):
             raise CompletionControllerError("review-thread evidence is unavailable")
@@ -635,6 +642,7 @@ def _validate_completion_readiness(
     readiness = _mapping(json.loads(path.read_text(encoding="utf-8")), "completion readiness")
     if (
         readiness.get("version") != 1
+        or readiness.get("producer") != "controlled_publisher"
         or readiness.get("job_id") != job_id
         or int(readiness.get("pr_number", -1)) != pr_number
         or str(readiness.get("product_commit") or "").lower() != expected_head
@@ -665,6 +673,7 @@ def _validate_revision_lineage(
     lineage = _mapping(json.loads(path.read_text(encoding="utf-8")), "revision lineage")
     if (
         lineage.get("version") != 1
+        or lineage.get("producer") != "controlled_publisher"
         or lineage.get("job_id") != job_id
         or str(lineage.get("product_commit") or "").lower() != expected_head
         or lineage.get("gate_report_sha256") != gate_report_sha256
@@ -862,9 +871,9 @@ class CompletionController:
         if unresolved_threads != 0:
             raise CompletionControllerError("pull request has unresolved review threads")
         review_decision = str(review_evidence.get("review_decision") or "").upper()
-        if review_decision in {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}:
+        if review_decision != "APPROVED":
             raise CompletionControllerError(
-                "pull request has unresolved review or ownership conflict"
+                "pull request lacks required APPROVED review decision"
             )
         if readiness.get("canon_conflict") or readiness.get("evidence_conflict") or readiness.get(
             "ownership_conflict"
@@ -942,17 +951,33 @@ class CompletionController:
                         "error": str(exc),
                     }
                 )
+        disposable_root = (self.host_root / "disposable-workspaces").resolve()
         roots = tuple(root.resolve() for root in plan.managed_cleanup_roots)
         if plan.cleanup_paths and not roots:
             raise CompletionControllerError("cleanup paths require managed_cleanup_roots")
+        for root in roots:
+            if root == disposable_root or not _is_relative_to(root, disposable_root):
+                raise CompletionControllerError(
+                    f"managed cleanup root is not an authorized disposable workspace root: {root}"
+                )
+            if root == self.host_root or root == self.state or self.state in root.parents:
+                raise CompletionControllerError(
+                    f"managed cleanup root targets protected state: {root}"
+                )
         for raw_path in plan.cleanup_paths:
             path = raw_path.resolve()
             if path in roots or not any(_is_relative_to(path, root) for root in roots):
                 raise CompletionControllerError(
                     f"cleanup path is outside approved managed roots: {path}"
                 )
-            if path in {self.host_root, self.state, self.evidence.checkout, self.product}:
+            if (
+                path in {self.host_root, self.state, self.evidence.checkout, self.product}
+                or self.state in path.parents
+                or path == self.host_root.parent
+            ):
                 raise CompletionControllerError(f"cleanup path targets protected state: {path}")
+            if raw_path.exists() and raw_path.is_symlink():
+                raise CompletionControllerError(f"cleanup path is a symlink: {raw_path}")
             try:
                 if path.is_dir():
                     shutil.rmtree(path)
@@ -992,11 +1017,13 @@ class CompletionController:
             identity=identity,
             source_path=terminal_path,
             payload={
-                "publication_review_disposition": "drafted",
-                "reason_code": "publication_review.drafted.v1",
-                "draft_pr": str(terminal.get("pr_number")),
+                "publication_review_disposition": "merged",
+                "reason_code": "publication_review.merged.verified.v1",
+                "merged_pr": str(terminal.get("pr_number")),
                 "product_branch": str(terminal.get("product_branch")),
                 "product_commit": terminal.get("validated_head"),
+                "merge_commit": terminal.get("merge_commit"),
+                "default_branch": terminal.get("default_branch"),
                 "results_commit": results_commit,
             },
             final=True,
@@ -1165,8 +1192,10 @@ class CompletionController:
             "completed_at": _utc_now(),
             "pr_number": pr_number,
             "validated_head": expected_head,
+            "product_branch": branch,
             "merge_method": plan.merge_method,
             "merge_commit": verification["merge_commit"],
+            "default_branch": self.config.product_base_branch,
             "default_branch_head": verification["default_branch_head"],
             "checks": checks,
             "review_evidence": reread_review,
@@ -1211,6 +1240,51 @@ class CompletionController:
             raise CompletionControllerError(
                 "completion ledger validated head conflicts with evidence"
             )
+        merge_result: Mapping[str, Any] | None = (
+            _mapping(existing.get("merge_result"), "merge result")
+            if isinstance(existing.get("merge_result"), dict)
+            else None
+        )
+        if status == "merge_intent_prepared":
+            pr = self._client().get_pull_request(pr_number)
+            if pr.get("merged") is True:
+                pass
+            elif pr.get("state") == "open":
+                publication = evidence["publication"]
+                branch = _safe_branch(
+                    publication.get("product_branch"),
+                    base_branch=self.config.product_base_branch,
+                )
+                review = self._client().review_evidence(pr_number)
+                self._assert_pr_eligible(
+                    pr,
+                    review,
+                    evidence["completion_readiness"],
+                    branch=branch,
+                    base=self.config.product_base_branch,
+                    expected_head=expected_head,
+                )
+                _validate_required_checks(
+                    self._client().checks_for_ref(expected_head),
+                    list(existing.get("checks") or {}),
+                )
+                merge_result = self._client().merge_pull_request(
+                    pr_number,
+                    expected_head=expected_head,
+                    method=str(existing["merge_method"]),
+                )
+                if merge_result.get("merged") is not True:
+                    raise CompletionControllerError(
+                        "GitHub did not report a successful recovered merge"
+                    )
+                self._save_ledger_entry(
+                    job_id,
+                    {**dict(existing), "status": "merge_accepted", "merge_result": merge_result},
+                )
+            else:
+                raise CompletionControllerError(
+                    "prepared merge intent cannot recover because pull request changed or closed"
+                )
         verification = (
             _mapping(existing.get("verification"), "completion verification")
             if isinstance(existing.get("verification"), dict)
@@ -1253,6 +1327,7 @@ class CompletionController:
             ),
             "merge_method": str(existing["merge_method"]),
             "merge_commit": verification["merge_commit"],
+            "default_branch": self.config.product_base_branch,
             "default_branch_head": verification["default_branch_head"],
             "checks": dict(existing.get("checks") or {}),
             "review_evidence": dict(existing.get("review_evidence") or {}),

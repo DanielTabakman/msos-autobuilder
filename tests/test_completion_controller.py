@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from msos_autobuilder.build_next import BuildNextConfig, build_next
 from msos_autobuilder.completion_controller import (
     AUTHORITY_AUTO_MERGE,
     AUTHORITY_FOUNDER_REQUIRED,
@@ -18,6 +19,7 @@ from msos_autobuilder.completion_controller import (
     CompletionGitHubClient,
     load_completion_config,
 )
+from msos_autobuilder.controlled_publisher import build_completion_sidecar_evidence
 
 
 def git(repo: Path | None, *args: str, accepted: tuple[int, ...] = (0,)) -> str:
@@ -57,6 +59,7 @@ class FakeCompletionGitHubClient(CompletionGitHubClient):
         self.mergeable_state = "clean"
         self.review_decision = "APPROVED"
         self.unresolved_review_threads = 0
+        self.review_threads_paginated = False
         self.canon_conflict = False
         self.evidence_conflict = False
         self.ownership_conflict = False
@@ -102,6 +105,7 @@ class FakeCompletionGitHubClient(CompletionGitHubClient):
             "source": "fake_graphql",
             "review_decision": self.review_decision,
             "unresolved_review_threads": self.unresolved_review_threads,
+            "review_threads_paginated": self.review_threads_paginated,
             "latest_opinionated_reviews": [],
         }
 
@@ -261,33 +265,16 @@ def make_fixture(
             "checks": [{"name": "publication-check", "passed": True, "returncode": 0}],
         },
     )
+    sidecars = build_completion_sidecar_evidence(
+        job_id=job_id,
+        publication_report=json.loads((job_dir / "publication-report.json").read_text("utf-8")),
+        gate_report_sha256=sha256(job_dir / "gate-report.json"),
+        publication_report_sha256=sha256(job_dir / "publication-report.json"),
+    )
     if not omit_readiness:
-        write_json(
-            job_dir / "completion-readiness.json",
-            {
-                "version": 1,
-                "job_id": job_id,
-                "pr_number": 7,
-                "product_commit": candidate_head,
-                "canon_conflict": False,
-                "evidence_conflict": False,
-                "ownership_conflict": False,
-                "founder_decision_required": False,
-            },
-        )
+        write_json(job_dir / "completion-readiness.json", sidecars["completion-readiness.json"])
     if not omit_revision_lineage:
-        write_json(
-            job_dir / "revision-lineage.json",
-            {
-                "version": 1,
-                "job_id": job_id,
-                "revision_disposition": "not_applicable",
-                "not_applicable_evidence": True,
-                "product_commit": candidate_head,
-                "gate_report_sha256": sha256(job_dir / "gate-report.json"),
-                "publication_report_sha256": sha256(job_dir / "publication-report.json"),
-            },
-        )
+        write_json(job_dir / "revision-lineage.json", sidecars["revision-lineage.json"])
     declared_at = "2026-07-19T00:00:00+00:00"
     if post_hoc_authority:
         declared_at = "2026-07-21T00:00:00+00:00"
@@ -329,7 +316,7 @@ def make_fixture(
     evidence_bare = tmp_path / "evidence.git"
     git(None, "clone", "--bare", str(evidence_work), str(evidence_bare))
 
-    cleanup_root = tmp_path / "managed-cleanup"
+    cleanup_root = tmp_path / "host" / "disposable-workspaces" / "managed-cleanup"
     cleanup_path = cleanup_root / "workspace-to-clean"
     cleanup_path.mkdir(parents=True)
     config = tmp_path / "completion.yaml"
@@ -382,7 +369,13 @@ def test_eligible_exact_head_merge_cleanup_terminalization_and_digest(tmp_path: 
     assert terminal["authority_class"] == AUTHORITY_AUTO_MERGE
     ledger = json.loads((state / "completion-controller-seen.json").read_text(encoding="utf-8"))
     assert "Merged automatically" in ledger[job_id]["founder_digest"]
-    assert (state / "publisher-evidence" / "heads" / "publication-review").exists()
+    heads = list((state / "publisher-evidence" / "heads" / "publication-review").glob("*.json"))
+    assert heads
+    head = json.loads(heads[0].read_text(encoding="utf-8"))
+    envelope = json.loads((state.parent / head["envelope_path"]).read_text("utf-8"))
+    assert envelope["payload"]["publication_review_disposition"] == "merged"
+    assert envelope["payload"]["reason_code"] == "publication_review.merged.verified.v1"
+    assert envelope["payload"]["product_branch"] == "autobuilder/candidate-revision-1"
 
     assert controller(config_path, client).run_once() == ()
     assert client.merge_calls == 1
@@ -566,6 +559,31 @@ def test_crash_after_merge_before_report_recovers_idempotently(
     assert client.merge_calls == 1
 
 
+def test_pre_merge_intent_recovery_retries_guarded_merge_once(tmp_path: Path) -> None:
+    config_path, _, _, client, job_id = make_fixture(tmp_path)
+    client.merge_result_ok = False
+    with pytest.raises(CompletionControllerError, match="successful merge"):
+        controller(config_path, client).run_once()
+    assert client.merge_calls == 0
+
+    client.merge_result_ok = True
+    assert controller(config_path, client).run_once() == (job_id,)
+    assert client.merge_calls == 1
+
+
+def test_pre_merge_intent_recovery_fails_closed_when_head_changed(tmp_path: Path) -> None:
+    config_path, _, _, client, _ = make_fixture(tmp_path)
+    client.merge_result_ok = False
+    with pytest.raises(CompletionControllerError, match="successful merge"):
+        controller(config_path, client).run_once()
+
+    client.merge_result_ok = True
+    client.head = "0" * 40
+    with pytest.raises(CompletionControllerError, match="head changed"):
+        controller(config_path, client).run_once()
+    assert client.merge_calls == 0
+
+
 def test_missing_review_thread_evidence_fails_closed(tmp_path: Path) -> None:
     config_path, _, _, client, _ = make_fixture(tmp_path)
     client.review_evidence_error = CompletionControllerError(
@@ -575,10 +593,26 @@ def test_missing_review_thread_evidence_fails_closed(tmp_path: Path) -> None:
         controller(config_path, client).run_once()
 
 
+def test_absent_review_decision_fails_closed(tmp_path: Path) -> None:
+    config_path, _, _, client, _ = make_fixture(tmp_path)
+    client.review_decision = ""
+    with pytest.raises(CompletionControllerError, match="APPROVED review decision"):
+        controller(config_path, client).run_once()
+
+
+def test_paginated_review_threads_fail_closed(tmp_path: Path) -> None:
+    config_path, _, _, client, _ = make_fixture(tmp_path)
+    client.review_evidence_error = CompletionControllerError(
+        "review-thread evidence is paginated; refusing partial GraphQL evidence"
+    )
+    with pytest.raises(CompletionControllerError, match="paginated"):
+        controller(config_path, client).run_once()
+
+
 @pytest.mark.parametrize(
     ("review_decision", "unresolved_threads", "message"),
     [
-        ("CHANGES_REQUESTED", 0, "unresolved review"),
+        ("CHANGES_REQUESTED", 0, "APPROVED review decision"),
         ("APPROVED", 1, "unresolved review threads"),
     ],
 )
@@ -676,6 +710,262 @@ def test_cleanup_outside_managed_roots_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(CompletionControllerError, match="outside approved managed roots"):
         controller(config_path, client).run_once()
+
+
+def test_broad_cleanup_root_configuration_is_rejected(tmp_path: Path) -> None:
+    config_path, _, _, client, _ = make_fixture(tmp_path)
+    config = load_completion_config(config_path)
+    raw = config_path.read_text(encoding="utf-8")
+    original_root = next(iter(config.plans.values())).managed_cleanup_roots[0].as_posix()
+    config_path.write_text(
+        raw.replace("      - " + original_root, "      - " + tmp_path.as_posix()),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CompletionControllerError, match="authorized disposable"):
+        controller(config_path, client).run_once()
+
+
+def test_completion_terminal_exclusion_uses_actual_build_next_selector(tmp_path: Path) -> None:
+    config_path, _, _, client, job_id = make_fixture(tmp_path)
+    assert controller(config_path, client).run_once() == (job_id,)
+    ledger_path = (
+        load_completion_config(config_path).host_root
+        / "state"
+        / "completion-controller-seen.json"
+    )
+    ledger = json.loads(ledger_path.read_text("utf-8"))
+    excluded = ledger[job_id]["work_item_id"]
+
+    ppe = tmp_path / "ppe"
+    ppe.mkdir()
+    subprocess.run(["git", "-C", str(ppe), "init", "-b", "main"], check=True)
+    subprocess.run(["git", "-C", str(ppe), "config", "user.name", "Fixture"], check=True)
+    subprocess.run(
+        ["git", "-C", str(ppe), "config", "user.email", "fixture@example.invalid"],
+        check=True,
+    )
+    (ppe / "scripts").mkdir()
+    (ppe / "scripts" / "founder_portfolio.py").write_text(
+        """
+import json, pathlib, sys
+root = pathlib.Path(__file__).resolve().parents[1]
+excluded = {
+    sys.argv[i + 1]
+    for i, arg in enumerate(sys.argv[:-1])
+    if arg == '--exclude-work-item-id'
+}
+payload = json.loads((root / 'snapshot.json').read_text())
+ready = payload['pipelines'][0]['ready_work']
+eligible = [item for item in ready if item['work_item_id'] not in excluded]
+context = {
+    'excluded_work_item_ids': sorted(excluded),
+    'matched_exclusions': [
+        {'pipeline_id': 'ppe', 'work_item_id': item['work_item_id']}
+        for item in ready
+        if item['work_item_id'] in excluded
+    ],
+    'unmatched_exclusions': [],
+    'scope': 'request',
+    'effect': (
+        'exclusions remove matching READY candidates from recommendation eligibility only; '
+        'ready_work is unchanged'
+    ),
+}
+payload['selection_context'] = context
+pick = eligible[0] if eligible else None
+payload['recommended_next_action'] = {
+    'pipeline_id': 'ppe',
+    'state': 'READY_TO_BUILD' if pick else 'UNFILLED',
+    'action_type': 'build' if pick else 'wait',
+    'work_item_id': pick['work_item_id'] if pick else None,
+    'trace': pick['trace'] if pick else None,
+    'selection_context': context,
+}
+print(json.dumps(payload))
+""".lstrip(),
+        encoding="utf-8",
+    )
+    (ppe / "config").mkdir()
+    (ppe / "config" / "founder_pipeline_registry.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "canon": [
+                    "docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md",
+                    "docs/SOP/FOUNDER_PIPELINE_COMMANDS_V1.md",
+                    "docs/SOP/PIPELINE_CREATION_SOP_V1.md",
+                    "docs/SOP/SCHEDULED_AUTOBUILDER_LANE_POLICY_V1.md",
+                ],
+                "pipelines": [
+                    {
+                        "pipeline_id": "ppe",
+                        "display_name": "PPE",
+                        "canonical_repo": "DanielTabakman/Probability-prediction-engine",
+                        "registration_stage": "EXECUTION_READY",
+                        "build_adapter": {
+                            "adapter": "ppe_operator",
+                            "readiness": "READY_FOR_MANUAL_OR_SINGLE_DISPATCH",
+                            "dispatch_commands_enabled": True,
+                        },
+                        "authority": {
+                            "publication_authority": (
+                                "controlled publisher only; draft PR by default"
+                            )
+                        },
+                        "scheduling": {"build_next_eligible": True},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ppe / "requirements.txt").write_text("# fixture\n", encoding="utf-8")
+    (ppe / "docs" / "SOP" / "PHASE_PLANS").mkdir(parents=True)
+    for rel in (
+        "CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md",
+        "FOUNDER_PIPELINE_COMMANDS_V1.md",
+        "PIPELINE_CREATION_SOP_V1.md",
+        "SCHEDULED_AUTOBUILDER_LANE_POLICY_V1.md",
+        "ACTIVE_PHASE_MANIFEST.json",
+        "PHASE_QUEUE.json",
+        "POST_FIXTURE_SELECTION.md",
+        "PHASE_PLANS/fixture.json",
+    ):
+        path = ppe / "docs" / "SOP" / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "slices": [
+                        {
+                            "sliceId": "control",
+                            "buildBranch": "build/control",
+                            "layerPreset": "CONTROL",
+                            "declaredPlane": "EVIDENCE-PLANE",
+                        },
+                        {
+                            "sliceId": "product",
+                            "touchSet": ["src/viz/panel.py"],
+                            "buildBranch": "build/product",
+                            "layerPreset": "PPE_UI",
+                            "declaredPlane": "PRODUCT-PLANE",
+                        },
+                    ]
+                }
+            )
+            if path.suffix == ".json"
+            else "# doc\n",
+            encoding="utf-8",
+        )
+    snapshot = {
+        "version": 1,
+        "as_of": "2026-07-20T00:00:00+00:00",
+        "read_only": True,
+        "registry_errors": [],
+        "capacity": {"running": 0, "queued": 0},
+        "pipelines": [
+            {
+                "pipeline_id": "ppe",
+                "display_name": "PPE",
+                "registration_stage": "EXECUTION_READY",
+                "canonical_repo": "DanielTabakman/Probability-prediction-engine",
+                "state": "READY_TO_BUILD",
+                "evidence": [{"kind": "manual", "source": "fixture", "fresh": True}],
+                "running_work": [],
+                "queued_work": [],
+                "awaiting_review_work": [],
+                "backpressure": [],
+                "stale_evidence": [],
+                "ready_work": [
+                    {
+                        "work_item_id": excluded,
+                        "title": "completed work",
+                        "native_state": "READY",
+                        "state": "READY_TO_BUILD",
+                        "trace": "docs/SOP/PHASE_PLANS/fixture.json",
+                        "evidence": "canonical",
+                        "native_prerequisites": {
+                            "version": 1,
+                            "read_only": True,
+                            "source": "ppe_native_read_only",
+                            "evidence": "native_runtime",
+                            "statuses": [
+                                {
+                                    "slice_id": "control",
+                                    "status": "complete",
+                                    "non_blocking": False,
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "work_item_id": "next-work",
+                        "title": "next work",
+                        "native_state": "READY",
+                        "state": "READY_TO_BUILD",
+                        "trace": "docs/SOP/PHASE_PLANS/fixture.json",
+                        "evidence": "canonical",
+                        "native_prerequisites": {
+                            "version": 1,
+                            "read_only": True,
+                            "source": "ppe_native_read_only",
+                            "evidence": "native_runtime",
+                            "statuses": [
+                                {
+                                    "slice_id": "control",
+                                    "status": "complete",
+                                    "non_blocking": False,
+                                }
+                            ],
+                        },
+                    },
+                ],
+            }
+        ],
+    }
+    snapshot["recommended_next_action"] = {
+        "pipeline_id": "ppe",
+        "state": "READY_TO_BUILD",
+        "action_type": "build",
+        "work_item_id": excluded,
+        "trace": "docs/SOP/PHASE_PLANS/fixture.json",
+    }
+    (ppe / "snapshot.json").write_text(json.dumps(snapshot), encoding="utf-8")
+    subprocess.run(["git", "-C", str(ppe), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(ppe), "commit", "-m", "ppe"], check=True)
+    ppe_bare = tmp_path / "ppe.git"
+    subprocess.run(["git", "clone", "--bare", str(ppe), str(ppe_bare)], check=True)
+    subprocess.run(["git", "-C", str(ppe), "remote", "add", "origin", str(ppe_bare)], check=True)
+    subprocess.run(["git", "-C", str(ppe), "push", "-u", "origin", "main"], check=True)
+
+    feed_work = tmp_path / "feed"
+    feed_work.mkdir()
+    subprocess.run(["git", "-C", str(feed_work), "init", "-b", "jobs"], check=True)
+    subprocess.run(["git", "-C", str(feed_work), "config", "user.name", "Fixture"], check=True)
+    subprocess.run(
+        ["git", "-C", str(feed_work), "config", "user.email", "fixture@example.invalid"],
+        check=True,
+    )
+    (feed_work / "jobs" / "approved").mkdir(parents=True)
+    (feed_work / "jobs" / "approved" / ".keep").write_text("", encoding="utf-8")
+    subprocess.run(["git", "-C", str(feed_work), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(feed_work), "commit", "-m", "feed"], check=True)
+    feed_bare = tmp_path / "feed.git"
+    subprocess.run(["git", "clone", "--bare", str(feed_work), str(feed_bare)], check=True)
+
+    receipt = build_next(
+        BuildNextConfig(
+            ppe_repo=ppe,
+            feed_repo_url=str(feed_bare),
+            checkout_root=tmp_path / "feed-checkout",
+            allow_test_local_source_remote=True,
+            max_snapshot_age_seconds=60 * 60 * 24 * 365,
+            exclude_work_item_ids=(excluded,),
+        )
+    )
+    assert receipt.status == "QUEUED", receipt.message
+    assert receipt.work_item_id == "next-work"
 
 
 def test_rebase_merge_method_is_rejected_in_v1(tmp_path: Path) -> None:

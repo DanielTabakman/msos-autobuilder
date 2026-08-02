@@ -21,7 +21,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -35,6 +35,14 @@ from .lifecycle_evidence import (
     record_producer_evidence_error,
 )
 from .service_error_lifecycle import record_service_cycle_success, write_service_error_marker
+from .work_admission import (
+    AdmissionRequest,
+    AdmissionStatus,
+    WorkCandidate,
+    admit_work,
+    candidate_from_pr,
+    objective_identity_from_work,
+)
 
 
 class PublisherError(RuntimeError):
@@ -416,6 +424,16 @@ class GitHubDraftClient:
         if not isinstance(result, list):
             raise PublisherError("GitHub pull-request query returned an invalid payload")
         return [item for item in result if isinstance(item, dict)]
+
+    def find_related_work(
+        self,
+        *,
+        linked_issue: int | None,
+        objective_sha256: str,
+        changed_paths: Sequence[str],
+    ) -> list[dict[str, Any]]:
+        """Return read-only duplicate/overlap candidates when a client supports it."""
+        return []
 
     def create_draft(
         self,
@@ -839,6 +857,104 @@ class ControlledPublisher:
         if pull is None or pull.get("number") != entry.get("pr_number"):
             raise PublisherError("published product PR drifted after publication")
 
+    def _work_admission(
+        self,
+        *,
+        job_id: str,
+        job_dir: Path,
+        job: Mapping[str, Any],
+        expected_paths: tuple[str, ...],
+        plan: PublishPlan,
+    ) -> dict[str, Any]:
+        founder = _mapping(job.get("founder_build_next"), "job founder_build_next")
+        contract = (
+            _mapping(job.get("candidate_validation"), "job candidate_validation")
+            if isinstance(job.get("candidate_validation"), dict)
+            else {}
+        )
+        objective = objective_identity_from_work(
+            repository=self.config.product_repo_full_name,
+            linked_issue=(
+                int(founder["linked_issue"])
+                if isinstance(founder.get("linked_issue"), int)
+                else None
+            ),
+            work_item_id=str(founder.get("work_item_id") or job_id),
+            stable_parts={
+                "job_id": job_id,
+                "work_item_id": founder.get("work_item_id"),
+                "work_item_source_sha256_v1": founder.get("work_item_source_sha256_v1"),
+                "changed_paths": list(expected_paths),
+                "branch": plan.branch,
+            },
+            acceptance_contract_sha256=(
+                str(contract["contract_sha256"])
+                if contract.get("contract_sha256")
+                else None
+            ),
+        )
+        raw_candidates = self._client().find_related_work(
+            linked_issue=objective.linked_issue,
+            objective_sha256=objective.objective_sha256,
+            changed_paths=expected_paths,
+        )
+        candidates: list[WorkCandidate] = []
+        for raw in raw_candidates:
+            if not isinstance(raw, dict):
+                continue
+            paths = raw.get("changed_paths")
+            if not isinstance(paths, list):
+                continue
+            candidates.append(
+                candidate_from_pr(
+                    number=int(raw["number"]) if raw.get("number") is not None else 0,
+                    title=str(raw.get("title") or ""),
+                    state=str(raw.get("state") or ""),
+                    branch=str(raw.get("branch") or ""),
+                    linked_issue=(
+                        int(raw["linked_issue"])
+                        if isinstance(raw.get("linked_issue"), int)
+                        else None
+                    ),
+                    objective_sha256=(
+                        str(raw["objective_sha256"])
+                        if raw.get("objective_sha256")
+                        else None
+                    ),
+                    acceptance_contract_sha256=(
+                        str(raw["acceptance_contract_sha256"])
+                        if raw.get("acceptance_contract_sha256")
+                        else None
+                    ),
+                    changed_paths=tuple(str(item) for item in paths),
+                    canonical=raw.get("canonical") is True,
+                    merged=raw.get("merged") is True,
+                    unique_required_change=raw.get("unique_required_change") is True,
+                    url=str(raw["url"]) if raw.get("url") else None,
+                )
+            )
+        decision = admit_work(
+            AdmissionRequest(
+                objective=objective,
+                writer_id=f"controlled-publisher:{job_id}",
+                branch=plan.branch,
+                authorized_paths=expected_paths,
+                claim_root=self.state,
+                candidates=tuple(candidates),
+                evidence={
+                    "admission_phase": "controlled_publisher.pre_branch_pr",
+                    "job_id": job_id,
+                    "job_yaml": (job_dir / "job.yaml").as_posix(),
+                    "plan_branch": plan.branch,
+                    "claim_lifecycle": (
+                        "active until verified merge, explicit supersession, "
+                        "accepted abandonment, or bounded failure disposition"
+                    ),
+                },
+            )
+        )
+        return asdict(decision)
+
     def publish_job(
         self,
         job_id: str,
@@ -851,6 +967,26 @@ class ControlledPublisher:
         source_head = str(gate_report.get("source_head") or "")
         if not re.fullmatch(r"[0-9a-fA-F]{40}", source_head):
             raise PublisherError("gate report is missing a full source_head SHA")
+        try:
+            job = _mapping(
+                yaml.safe_load((job_dir / "job.yaml").read_text(encoding="utf-8")),
+                "job.yaml",
+            )
+        except (OSError, yaml.YAMLError) as exc:
+            raise PublisherError("publisher could not read job.yaml for admission") from exc
+        admission = self._work_admission(
+            job_id=job_id,
+            job_dir=job_dir,
+            job=job,
+            expected_paths=expected_paths,
+            plan=plan,
+        )
+        if admission["status"] == AdmissionStatus.CONTINUE_EXISTING_WORK.value:
+            raise PublisherError("canonical work already exists; continue existing work")
+        if admission["status"] != AdmissionStatus.NEW_WORK_ADMITTED.value:
+            raise PublisherError(
+                f"work admission refused publication: {admission['status']}"
+            )
 
         base_head = self._prepare_product()
         ancestor = _git(
@@ -1000,6 +1136,7 @@ class ControlledPublisher:
             "gate_report_sha256": gate_sha,
             "source_report_sha256": source_sha,
             "changed_paths": list(expected_paths),
+            "work_admission": admission,
             "checks": checks,
         }
         results_commit = self.evidence.publish_report(job_dir, publication_report)

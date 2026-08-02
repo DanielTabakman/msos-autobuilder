@@ -23,6 +23,11 @@ from msos_autobuilder.validation_contract import (
     canonical_dependency_source_sha256,
     stable_contract_sha256,
 )
+from msos_autobuilder.work_admission import (
+    AdmissionRequest,
+    ObjectiveIdentity,
+    admit_work,
+)
 
 SOURCE_REPO = "DanielTabakman/Probability-prediction-engine"
 
@@ -471,6 +476,44 @@ def test_duplicate_invocation_is_idempotent(tmp_path: Path) -> None:
     review = tmp_path / "review"
     _git(None, "clone", "-q", "--branch", "jobs", str(feed), str(review))
     assert len(list((review / "jobs" / "approved").glob("build-next-*.yaml"))) == 1
+
+
+def test_build_next_blocks_before_feed_submission_when_writer_claim_conflicts(
+    tmp_path: Path,
+) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    feed = _feed_repo(tmp_path / "feed-work")
+    host_root = tmp_path / "host"
+    config = _config(tmp_path, ppe, feed, host_root=host_root)
+    dry = build_next(
+        BuildNextConfig(
+            **{
+                **config.__dict__,
+                "host_root": None,
+                "submit": False,
+            }
+        )
+    )
+    objective = ObjectiveIdentity(
+        **dry.evidence["work_admission"]["evidence"]["objective"]
+    )
+    admit_work(
+        AdmissionRequest(
+            objective=objective,
+            writer_id="other-writer",
+            branch="build/auto/other",
+            authorized_paths=("src/viz/panel.py", "tests/test_panel.py"),
+            claim_root=host_root / "state",
+        )
+    )
+
+    receipt = build_next(config)
+
+    assert receipt.status == "BLOCKED_BY_OWNERSHIP_CONFLICT"
+    assert receipt.submitted is False
+    review = tmp_path / "review-conflict"
+    _git(None, "clone", "-q", "--branch", "jobs", str(feed), str(review))
+    assert not list((review / "jobs" / "approved").glob("build-next-*.yaml"))
 
 
 def test_refill_dispatch_submitted_replay_is_deterministic(tmp_path: Path) -> None:

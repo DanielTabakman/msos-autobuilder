@@ -45,6 +45,12 @@ from .validation_contract import (
     build_ppe_validation_contract,
     canonical_dependency_source_sha256,
 )
+from .work_admission import (
+    AdmissionRequest,
+    AdmissionStatus,
+    admit_work,
+    objective_identity_from_work,
+)
 
 
 class BuildNextError(RuntimeError):
@@ -1362,6 +1368,76 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             work_item_source_sha256=work_item_source_sha256,
             refill_attempt=refill_attempt,
         )
+        admission_objective = objective_identity_from_work(
+            repository="DanielTabakman/Probability-prediction-engine",
+            linked_issue=None,
+            work_item_id=work_item_id,
+            stable_parts={
+                "pipeline_id": pipeline_id,
+                "work_item_id": work_item_id,
+                "source_commit": source_identity.commit,
+                "work_item_source_sha256_v1": work_item_source_sha256,
+                "native_slice": {
+                    "slice_id": native_slice.slice_id,
+                    "touch_set": list(native_slice.touch_set),
+                },
+                "refill_attempt": refill_attempt,
+            },
+            acceptance_contract_sha256=str(
+                job["candidate_validation"]["contract_sha256"]
+            ),
+        )
+        admission = admit_work(
+            AdmissionRequest(
+                objective=admission_objective,
+                writer_id=f"build-next:{job_id}",
+                branch=native_slice.build_branch,
+                authorized_paths=native_slice.touch_set,
+                claim_root=(
+                    config.host_root / "state" if config.host_root is not None else None
+                ),
+                evidence={
+                    "admission_phase": "build_next.pre_feed_submission",
+                    "job_id": job_id,
+                    "pipeline_id": pipeline_id,
+                    "work_item_id": work_item_id,
+                    "source_commit": source_identity.commit,
+                    "claim_lifecycle": (
+                        "active until verified merge, explicit supersession, "
+                        "accepted abandonment, or bounded failure disposition"
+                    ),
+                },
+            )
+        )
+        receipt_evidence_identity = {
+            **receipt_evidence_identity,
+            "work_admission": asdict(admission),
+        }
+        if admission.status != AdmissionStatus.NEW_WORK_ADMITTED:
+            return BuildNextReceipt(
+                status=admission.status.value,
+                pipeline_id=pipeline_id,
+                work_item_id=work_item_id,
+                job_id=job_id,
+                repository="DanielTabakman/Probability-prediction-engine",
+                source_commit=source_identity.commit,
+                feed_path=None,
+                feed_commit=None,
+                message=admission.message,
+                evidence=receipt_evidence_identity,
+                submitted=False,
+            )
+        job["founder_build_next"]["work_admission"] = {
+            "status": admission.status.value,
+            "objective_sha256": admission.objective_sha256,
+            "claim_generation": (
+                admission.claim.generation if admission.claim is not None else None
+            ),
+            "claim_writer_id": (
+                admission.claim.writer_id if admission.claim is not None else None
+            ),
+            "authorized_paths": list(native_slice.touch_set),
+        }
         submission = _submit_feed_job(config, job)
         if not config.submit:
             return BuildNextReceipt(

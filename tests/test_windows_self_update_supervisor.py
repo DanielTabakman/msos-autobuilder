@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
 
@@ -566,6 +567,7 @@ def _prepare_policy_paused_refill_runtime(
     *,
     policy: dict[str, object] | str | None = None,
     witness_commit: str | None = None,
+    witness_started_at: str | None = None,
     include_refill_controller: bool = True,
     include_witness: bool = True,
 ) -> dict[str, bytes | None]:
@@ -607,7 +609,8 @@ def _prepare_policy_paused_refill_runtime(
                     "state": "running",
                     "release_commit": witness_commit or active_commit,
                     "child_pid": 1,
-                    "started_at": "2999-01-01T00:00:00+00:00",
+                    "started_at": witness_started_at
+                    or (datetime.now(UTC) - timedelta(seconds=5)).isoformat(),
                 },
                 sort_keys=True,
             )
@@ -617,6 +620,42 @@ def _prepare_policy_paused_refill_runtime(
 
     host_state = host_root / "state"
     host_state.mkdir(parents=True, exist_ok=True)
+
+    protected_fixture_paths = {
+        "queue/pending/job-a.json": "queued-a\n",
+        "queue/running/job-running.json": "running-a\n",
+        "state/jobs/job-a.json": "job-a\n",
+        "state/feed-seen.json": "{}\n",
+        "state/refill-generation.json": json.dumps(
+            {
+                "version": 1,
+                "generation_id": "generation-a",
+                "current_attempt": {"attempt_id": "attempt-a"},
+                "prepared_dispatch": {"action_id": "action-a"},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        "state/refill-generation-history/generation-a.json": "generation-history\n",
+        "state/refill-generation-supersessions/generation-a.json": "supersession\n",
+        "state/refill-evidence/dispatch/prepared/attempt-a.json": "prepared\n",
+        "state/refill-evidence/dispatch/submitted/attempt-a.json": "submitted\n",
+        "state/refill-evidence/heads/dispatch/prepared/attempt-a.json": "prepared-head\n",
+        "state/refill-evidence/heads/dispatch/submitted/attempt-a.json": "submitted-head\n",
+        "state/results-relay-seen.json": "{}\n",
+        "state/candidate-gate-seen.json": "{}\n",
+        "state/revision-loop-seen.json": "{}\n",
+        "state/controlled-publisher-seen.json": "{}\n",
+        "state/host-evidence/execution/attempt-a.json": "host-evidence\n",
+        "state/relay-evidence/result/attempt-a.json": "relay-evidence\n",
+        "state/gate-evidence/validation/attempt-a.json": "gate-evidence\n",
+        "state/revision-evidence/disposition/attempt-a.json": "revision-evidence\n",
+        "state/publisher-evidence/publication-review/attempt-a.json": "publisher-evidence\n",
+    }
+    for relative, value in protected_fixture_paths.items():
+        protected_path = host_root / relative
+        protected_path.parent.mkdir(parents=True, exist_ok=True)
+        protected_path.write_text(value, encoding="utf-8")
     if policy is None:
         policy = {
             "version": 1,
@@ -1395,6 +1434,10 @@ def test_stable_bootstrap_handoff_accepts_running_policy_paused_refill(
     assert result.returncode == 0, result.stderr or result.stdout
     report = _read_handoff_report(fixture)
     assert report["outcome"] == "success"
+    protected = report["protected_runtime_state"]
+    assert protected["mode"] == "six-task-running-policy-paused"
+    assert protected["before"]["paths"] == protected["after"]["paths"]
+    assert protected["differences"] == []
     assert report["scheduled_tasks"]["baseline_mode"] == "six-task-running-policy-paused"
     assert report["scheduled_tasks"]["preflight"]["MSOS Autobuilder Capacity-One Refill"][
         "state"
@@ -2311,3 +2354,249 @@ def test_self_update_document_keeps_issue_33_blocked_until_rollback_witness() ->
     assert "deliberately broken" in document
     assert "automatically restores the previous release" in document
     assert "two-stage handoff" in document
+
+
+
+def _set_refill_witness_started_at(fixture: dict[str, object], started_at: str) -> None:
+    supervisor = fixture["supervisor"]
+    assert isinstance(supervisor, Path)
+    witness_path = supervisor / "state" / "service-witnesses" / "refill.json"
+    witness = json.loads(witness_path.read_text(encoding="utf-8"))
+    witness["started_at"] = started_at
+    witness_path.write_text(json.dumps(witness, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _restart_mutation_script(command: str) -> str:
+    return f"""
+$global:ProtectedMutationApplied = $false
+function Start-ScheduledTask {{
+    param([string]$TaskName, [object]$ErrorAction)
+    Add-Call -Action 'start' -Name $TaskName
+    if (Get-ServiceName $TaskName) {{
+        $global:ManagedTaskStates[$TaskName] = 'Running'
+    }}
+    if (-not $global:ProtectedMutationApplied -and $TaskName -eq 'MSOS Autobuilder Host') {{
+        $global:ProtectedMutationApplied = $true
+        {command}
+    }}
+    Write-OuterStubbedWitness $TaskName
+}}
+"""
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "mutation", "expected_change"),
+    [
+        ("queue/pending/job-a.json", "Add-Content -Path $MutationPath -Value 'changed'", "child_content_changed"),
+        ("state/feed-seen.json", "Add-Content -Path $MutationPath -Value 'changed'", "content_changed"),
+        ("state/refill-generation.json", "Add-Content -Path $MutationPath -Value 'changed'", "content_changed"),
+        (
+            "state/refill-evidence/dispatch/prepared/created-during-restart.json",
+            "New-Item -ItemType File -Force -Path $MutationPath | Out-Null",
+            "child_appeared",
+        ),
+        ("state/controlled-publisher-seen.json", "Remove-Item -Force $MutationPath", "disappeared"),
+        (
+            "state/publisher-evidence/publication-review/attempt-a.json",
+            "Add-Content -Path $MutationPath -Value 'changed'",
+            "child_content_changed",
+        ),
+    ],
+)
+def test_stable_bootstrap_handoff_rejects_protected_runtime_mutation(
+    tmp_path: Path,
+    relative_path: str,
+    mutation: str,
+    expected_change: str,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    _prepare_policy_paused_refill_runtime(fixture)
+    host_root = fixture["host_root"]
+    assert isinstance(host_root, Path)
+    mutation_path = host_root / relative_path
+    mutation_script = _restart_mutation_script(
+        f"$MutationPath = '{mutation_path.as_posix()}'; {mutation}"
+    )
+
+    result, _calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=_running_refill_before_script(fixture) + mutation_script,
+    )
+
+    assert result.returncode != 0
+    report = _read_handoff_report(fixture)
+    assert report["outcome"] != "success"
+    differences = report["protected_runtime_state"]["differences"]
+    assert differences
+    assert any(item["change"] == expected_change for item in differences)
+    assert any(relative_path in item["relative_path"] for item in differences)
+    assert "Protected runtime state changed" in json.dumps(report)
+
+
+@pytest.mark.parametrize("future_seconds", [0, 60])
+def test_stable_bootstrap_handoff_accepts_recent_or_bounded_future_witness(
+    tmp_path: Path,
+    future_seconds: int,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    started_at = (datetime.now(UTC) + timedelta(seconds=future_seconds)).isoformat()
+    _prepare_policy_paused_refill_runtime(fixture, witness_started_at=started_at)
+
+    result, _calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=_running_refill_before_script(fixture),
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    report = _read_handoff_report(fixture)
+    time_evidence = report["service_configuration"]["refill_witness_preflight"]
+    assert time_evidence["max_age_seconds"] == 600
+    assert time_evidence["max_future_skew_seconds"] == 120
+    assert time_evidence["started_at_utc"].endswith("+00:00")
+    assert time_evidence["validated_at_utc"].endswith("+00:00")
+
+
+@pytest.mark.parametrize(
+    ("started_at", "message"),
+    [
+        ((datetime.now(UTC) + timedelta(seconds=121)).isoformat(), "future clock skew"),
+        ("2999-01-01T00:00:00+00:00", "future clock skew"),
+        ((datetime.now(UTC) - timedelta(minutes=11)).isoformat(), "fresh refill service witness"),
+    ],
+)
+def test_stable_bootstrap_handoff_rejects_out_of_window_witness(
+    tmp_path: Path,
+    started_at: str,
+    message: str,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    _prepare_policy_paused_refill_runtime(fixture, witness_started_at=started_at)
+
+    result, _calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=_running_refill_before_script(fixture),
+    )
+
+    assert result.returncode != 0
+    report = _read_handoff_report(fixture)
+    assert message in json.dumps(report)
+    assert report["activation"]["performed"] is False
+
+
+@pytest.mark.parametrize(
+    ("suffix", "message"),
+    [
+        (
+            "$global:RefillAction.Execute = 'cmd.exe'; "
+            "$global:RefillAction.Arguments = '/c echo run_windows_managed_service.ps1 -ServiceName refill'",
+            "approved PowerShell executable",
+        ),
+        (
+            "$global:RefillAction.Arguments = '-NoProfile -Command \"echo run_windows_managed_service.ps1\" '",
+            "may not use PowerShell -Command",
+        ),
+        (
+            "$global:RefillAction.Arguments = $global:RefillAction.Arguments.Replace("
+            "'run_windows_managed_service.ps1', 'other.ps1 run_windows_managed_service.ps1')",
+            "approved stable runner",
+        ),
+        ("$global:RefillAction.Execute = 'other-powershell.exe'", "approved PowerShell executable"),
+        (
+            "$global:RefillAction.Arguments = $global:RefillAction.Arguments.Replace("
+            "'run_windows_managed_service.ps1', 'other.ps1')",
+            "approved stable runner",
+        ),
+        (
+            "$global:RefillAction.Arguments = $global:RefillAction.Arguments.Replace("
+            "'-ServiceName refill', '-ServiceName other')",
+            "ServiceName",
+        ),
+        (
+            "$global:RefillAction.Arguments = $global:RefillAction.Arguments.Replace("
+            "'-HostRoot', '-HostRootX')",
+            "unsupported parameter",
+        ),
+        (
+            "$global:RefillAction.Arguments = $global:RefillAction.Arguments.Replace("
+            "'-SupervisorRoot', '-SupervisorRootX')",
+            "unsupported parameter",
+        ),
+        (
+            "$global:RefillAction.Arguments += ' -HostRoot C:/conflict'",
+            "duplicate parameter",
+        ),
+    ],
+)
+def test_stable_bootstrap_handoff_rejects_noncanonical_refill_action(
+    tmp_path: Path,
+    suffix: str,
+    message: str,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    _prepare_policy_paused_refill_runtime(fixture)
+
+    result, _calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=_running_refill_before_script(fixture) + suffix,
+    )
+
+    assert result.returncode != 0
+    report = _read_handoff_report(fixture)
+    assert message in json.dumps(report)
+    assert report["activation"]["performed"] is False
+
+
+def test_stable_bootstrap_handoff_rejects_refill_action_changed_during_restart(
+    tmp_path: Path,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    _prepare_policy_paused_refill_runtime(fixture)
+    mutation_script = _restart_mutation_script(
+        "$global:RefillAction.Arguments += ' -HostRoot C:/conflict'"
+    )
+
+    result, _calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=_running_refill_before_script(fixture) + mutation_script,
+    )
+
+    assert result.returncode != 0
+    report = _read_handoff_report(fixture)
+    assert "duplicate parameter" in json.dumps(report)
+    assert report["scheduled_tasks"]["post_handoff_refill"]
+    assert report["outcome"] != "success"

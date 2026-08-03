@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -121,6 +122,10 @@ class SupervisorConfig:
         return self.supervisor_root / "reports"
 
     @property
+    def staging_pytest_temp_root(self) -> Path:
+        return self.supervisor_root / "tmp" / "staging-pytest"
+
+    @property
     def notifications_root(self) -> Path:
         return self.supervisor_root / "notifications"
 
@@ -142,10 +147,15 @@ class CheckResult:
     duration_seconds: float
     stdout: str = ""
     stderr: str = ""
+    timeout_seconds: float | None = None
+    environment: dict[str, str] = field(default_factory=dict)
+    timed_out: bool = False
+    termination: dict[str, Any] = field(default_factory=dict)
+    process_tree: dict[str, Any] = field(default_factory=dict)
 
     @property
     def passed(self) -> bool:
-        return self.returncode == 0
+        return self.returncode == 0 and not self.timed_out
 
 
 @dataclass(frozen=True)
@@ -466,27 +476,339 @@ def verify_expected_files(root: Path, expected_files: Iterable[ExpectedFile]) ->
             )
 
 
+def _lexical_absolute(path: Path) -> Path:
+    return Path(os.path.abspath(os.fspath(path)))
+
+
+def _path_lexists(path: Path) -> bool:
+    return os.path.lexists(path)
+
+
+def _is_link_like(path: Path) -> bool:
+    is_junction = getattr(path, "is_junction", None)
+    return path.is_symlink() or bool(is_junction and is_junction())
+
+
+def _assert_no_symlink_components(path: Path, root: Path) -> None:
+    lexical_root = _lexical_absolute(root)
+    lexical_path = _lexical_absolute(path)
+    try:
+        relative = lexical_path.relative_to(lexical_root)
+    except ValueError as exc:
+        raise SupervisorError(f"path escapes authorized root: {lexical_path}") from exc
+    current = lexical_root
+    if _path_lexists(current) and _is_link_like(current):
+        raise SupervisorError(f"authorized root may not be a symlink: {current}")
+    for part in relative.parts:
+        current = current / part
+        if _path_lexists(current) and _is_link_like(current):
+            raise SupervisorError(f"staging pytest temp path contains a symlink: {current}")
+
+
+def _validate_staging_pytest_temp_dir(config: SupervisorConfig, path: Path) -> Path:
+    supervisor_root = _lexical_absolute(config.supervisor_root)
+    authorized_root = _lexical_absolute(config.staging_pytest_temp_root)
+    expected_root = supervisor_root / "tmp" / "staging-pytest"
+    if authorized_root != expected_root or authorized_root == supervisor_root:
+        raise SupervisorError("staging pytest temp root is outside the supervisor-owned boundary")
+    candidate = _lexical_absolute(path)
+    if candidate.parent != authorized_root or candidate == authorized_root:
+        raise SupervisorError("staging pytest temp path must be one release-specific child")
+    if not re.fullmatch(r"[0-9a-f]{12}-[0-9a-f]{8}", candidate.name):
+        raise SupervisorError("staging pytest temp path is not release bounded")
+    _assert_no_symlink_components(authorized_root, supervisor_root)
+    _assert_no_symlink_components(candidate, supervisor_root)
+    return candidate
+
+
+def _staging_pytest_temp_dir(
+    config: SupervisorConfig, manifest: UpdateManifest
+) -> Path:
+    release_hash = hashlib.sha256(manifest.release_id.encode("utf-8")).hexdigest()[:8]
+    candidate = config.staging_pytest_temp_root / f"{manifest.commit[:12]}-{release_hash}"
+    return _validate_staging_pytest_temp_dir(config, candidate)
+
+
+def _remove_tree_no_symlinks(path: Path) -> None:
+    if _is_link_like(path):
+        raise SupervisorError(f"refusing to traverse staging pytest temp link: {path}")
+    if not path.exists():
+        return
+    if not path.is_dir():
+        path.unlink()
+        return
+    with os.scandir(path) as entries:
+        for entry in entries:
+            child = Path(entry.path)
+            if entry.is_symlink() or _is_link_like(child):
+                child.unlink()
+            elif entry.is_dir(follow_symlinks=False):
+                _remove_tree_no_symlinks(child)
+            else:
+                child.unlink()
+    path.rmdir()
+
+
+def _cleanup_staging_pytest_temp_dir(
+    config: SupervisorConfig, path: Path, cwd: Path
+) -> CheckResult:
+    started = time.monotonic()
+    try:
+        candidate = _validate_staging_pytest_temp_dir(config, path)
+        existed = _path_lexists(candidate)
+        _remove_tree_no_symlinks(candidate)
+        return CheckResult(
+            name="pytest-temp-cleanup",
+            argv=("remove-tree-no-symlinks", str(candidate)),
+            cwd=str(cwd),
+            returncode=0,
+            duration_seconds=time.monotonic() - started,
+            stdout="removed" if existed else "already absent",
+            environment={"TMP": str(candidate), "TEMP": str(candidate)},
+        )
+    except Exception as exc:
+        return CheckResult(
+            name="pytest-temp-cleanup",
+            argv=("remove-tree-no-symlinks", str(path)),
+            cwd=str(cwd),
+            returncode=1,
+            duration_seconds=time.monotonic() - started,
+            stderr=_bounded(_redact(str(exc))),
+            environment={"TMP": str(path), "TEMP": str(path)},
+        )
+
+
+def _prepare_staging_pytest_temp_dir(
+    config: SupervisorConfig, manifest: UpdateManifest, cwd: Path
+) -> Path:
+    candidate = _staging_pytest_temp_dir(config, manifest)
+    if _path_lexists(candidate):
+        cleanup = _cleanup_staging_pytest_temp_dir(config, candidate, cwd)
+        if not cleanup.passed:
+            raise StagingError("could not clean stale staging pytest temp directory", (cleanup,))
+    config.staging_pytest_temp_root.mkdir(parents=True, exist_ok=True)
+    _assert_no_symlink_components(
+        _lexical_absolute(config.staging_pytest_temp_root),
+        _lexical_absolute(config.supervisor_root),
+    )
+    candidate.mkdir(parents=False, exist_ok=False)
+    _validate_staging_pytest_temp_dir(config, candidate)
+    return candidate
+
+
+@contextmanager
+def _temporary_environment(overrides: Mapping[str, str]):
+    previous = {key: os.environ.get(key) for key in overrides}
+    try:
+        os.environ.update(overrides)
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _coerce_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _merge_timeout_output(partial: str, remaining: str) -> str:
+    if not partial:
+        return remaining
+    if not remaining or remaining == partial:
+        return partial
+    if remaining.startswith(partial):
+        return remaining
+    if partial.startswith(remaining):
+        return partial
+    return partial + remaining
+
+
+def _best_effort_process_tree(pid: int) -> dict[str, Any]:
+    try:
+        if os.name == "nt":
+            powershell = shutil.which("powershell.exe") or shutil.which("pwsh")
+            if not powershell:
+                return {"captured": False, "reason": "PowerShell unavailable", "root_pid": pid}
+            script = (
+                "$root=" + str(pid) + "; "
+                "$all=Get-CimInstance Win32_Process | "
+                "Select-Object ProcessId,ParentProcessId,Name,CommandLine; "
+                "$ids=New-Object 'System.Collections.Generic.HashSet[int]'; [void]$ids.Add($root); "
+                "do {$added=$false; foreach($p in $all){if("
+                "$ids.Contains([int]$p.ParentProcessId) -and "
+                "-not $ids.Contains([int]$p.ProcessId)){"
+                "[void]$ids.Add([int]$p.ProcessId);$added=$true}}} "
+                "while($added); $all | Where-Object {$ids.Contains([int]$_.ProcessId)} | "
+                "ConvertTo-Json -Compress"
+            )
+            completed = subprocess.run(
+                [powershell, "-NoProfile", "-Command", script],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=15.0,
+            )
+            return {
+                "captured": completed.returncode == 0,
+                "root_pid": pid,
+                "returncode": completed.returncode,
+                "stdout": _bounded(_redact(completed.stdout)),
+                "stderr": _bounded(_redact(completed.stderr)),
+            }
+        completed = subprocess.run(
+            ["ps", "-eo", "pid=,ppid=,stat=,comm=,args="],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=15.0,
+        )
+        rows: list[dict[str, Any]] = []
+        by_parent: dict[int, list[int]] = {}
+        by_pid: dict[int, dict[str, Any]] = {}
+        for line in completed.stdout.splitlines():
+            parts = line.strip().split(None, 4)
+            if len(parts) < 4:
+                continue
+            process_pid, parent_pid = int(parts[0]), int(parts[1])
+            row = {
+                "pid": process_pid,
+                "ppid": parent_pid,
+                "state": parts[2],
+                "command": _redact(parts[3]),
+                "args": _redact(parts[4] if len(parts) == 5 else ""),
+            }
+            by_pid[process_pid] = row
+            by_parent.setdefault(parent_pid, []).append(process_pid)
+        pending = [pid]
+        seen: set[int] = set()
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            if current in by_pid:
+                rows.append(by_pid[current])
+            pending.extend(by_parent.get(current, ()))
+        return {
+            "captured": completed.returncode == 0,
+            "root_pid": pid,
+            "returncode": completed.returncode,
+            "processes": rows[:64],
+            "truncated": len(rows) > 64,
+            "stderr": _bounded(_redact(completed.stderr)),
+        }
+    except Exception as exc:
+        return {"captured": False, "root_pid": pid, "error": _redact(str(exc))}
+
+
+def _terminate_process_tree(process: subprocess.Popen[str]) -> dict[str, Any]:
+    evidence: dict[str, Any] = {"attempted": True, "root_pid": process.pid}
+    try:
+        if os.name == "nt":
+            completed = subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=30.0,
+            )
+            evidence.update(
+                {
+                    "method": "taskkill-tree",
+                    "returncode": completed.returncode,
+                    "stdout": _bounded(_redact(completed.stdout)),
+                    "stderr": _bounded(_redact(completed.stderr)),
+                }
+            )
+            if process.poll() is None:
+                process.kill()
+        else:
+            evidence["method"] = "process-group-term-kill"
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+                process.wait(timeout=5.0)
+                evidence["signal"] = "SIGTERM"
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                evidence["signal"] = "SIGKILL"
+            except ProcessLookupError:
+                evidence["signal"] = "already-exited"
+        evidence["final_returncode"] = process.poll()
+    except Exception as exc:
+        evidence["error"] = _redact(str(exc))
+        try:
+            process.kill()
+            evidence["fallback_kill"] = True
+        except Exception as fallback_exc:
+            evidence["fallback_error"] = _redact(str(fallback_exc))
+    return evidence
+
+
 def default_command_executor(argv: Sequence[str], cwd: Path, timeout: float) -> CheckResult:
     started = time.monotonic()
-    completed = subprocess.run(
+    process = subprocess.Popen(
         list(argv),
         cwd=cwd,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         errors="replace",
-        check=False,
-        timeout=timeout,
+        start_new_session=os.name != "nt",
+        creationflags=(
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
+        ),
     )
-    return CheckResult(
-        name="command",
-        argv=tuple(str(part) for part in argv),
-        cwd=str(cwd),
-        returncode=completed.returncode,
-        duration_seconds=time.monotonic() - started,
-        stdout=_bounded(_redact(completed.stdout)),
-        stderr=_bounded(_redact(completed.stderr)),
-    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+        return CheckResult(
+            name="command",
+            argv=tuple(str(part) for part in argv),
+            cwd=str(cwd),
+            returncode=process.returncode,
+            duration_seconds=time.monotonic() - started,
+            stdout=_bounded(_redact(stdout)),
+            stderr=_bounded(_redact(stderr)),
+        )
+    except subprocess.TimeoutExpired as exc:
+        partial_stdout = _coerce_output(exc.stdout)
+        partial_stderr = _coerce_output(exc.stderr)
+        process_tree = _best_effort_process_tree(process.pid)
+        termination = _terminate_process_tree(process)
+        try:
+            remaining_stdout, remaining_stderr = process.communicate(timeout=10.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            remaining_stdout, remaining_stderr = process.communicate()
+            termination["post_termination_kill"] = True
+        stdout = _merge_timeout_output(partial_stdout, _coerce_output(remaining_stdout))
+        stderr = _merge_timeout_output(partial_stderr, _coerce_output(remaining_stderr))
+        termination["final_returncode"] = process.returncode
+        return CheckResult(
+            name="command",
+            argv=tuple(str(part) for part in argv),
+            cwd=str(cwd),
+            returncode=process.returncode if process.returncode is not None else 124,
+            duration_seconds=time.monotonic() - started,
+            stdout=_bounded(_redact(_coerce_output(stdout))),
+            stderr=_bounded(_redact(_coerce_output(stderr))),
+            timed_out=True,
+            termination=termination,
+            process_tree=process_tree,
+        )
 
 
 def _run_named_check(
@@ -495,8 +817,27 @@ def _run_named_check(
     argv: Sequence[str],
     cwd: Path,
     timeout: float,
+    *,
+    environment: Mapping[str, str] | None = None,
 ) -> CheckResult:
-    result = executor(argv, cwd, timeout)
+    effective_environment = {key: str(value) for key, value in (environment or {}).items()}
+    started = time.monotonic()
+    try:
+        with _temporary_environment(effective_environment):
+            result = executor(argv, cwd, timeout)
+    except subprocess.TimeoutExpired as exc:
+        result = CheckResult(
+            name="command",
+            argv=tuple(str(part) for part in argv),
+            cwd=str(cwd),
+            returncode=124,
+            duration_seconds=time.monotonic() - started,
+            stdout=_bounded(_redact(_coerce_output(exc.stdout))),
+            stderr=_bounded(_redact(_coerce_output(exc.stderr))),
+            timed_out=True,
+            termination={"attempted": False, "reason": "executor raised TimeoutExpired"},
+            process_tree={"captured": False, "reason": "executor did not expose a process id"},
+        )
     return CheckResult(
         name=name,
         argv=tuple(str(part) for part in argv),
@@ -505,7 +846,35 @@ def _run_named_check(
         duration_seconds=result.duration_seconds,
         stdout=result.stdout,
         stderr=result.stderr,
+        timeout_seconds=timeout,
+        environment=effective_environment or dict(result.environment),
+        timed_out=result.timed_out,
+        termination=dict(result.termination),
+        process_tree=dict(result.process_tree),
     )
+
+
+def _run_staged_pytest_checks(
+    config: SupervisorConfig,
+    manifest: UpdateManifest,
+    executor: CommandExecutor,
+    venv_python: Path,
+    staging_path: Path,
+) -> tuple[CheckResult, CheckResult]:
+    temp_dir = _prepare_staging_pytest_temp_dir(config, manifest, staging_path)
+    environment = {"TMP": str(temp_dir), "TEMP": str(temp_dir)}
+    try:
+        pytest_result = _run_named_check(
+            executor,
+            "pytest",
+            [str(venv_python), "-m", "pytest", "-q"],
+            staging_path,
+            STAGING_PYTEST_TIMEOUT_SECONDS,
+            environment=environment,
+        )
+    finally:
+        cleanup_result = _cleanup_staging_pytest_temp_dir(config, temp_dir, staging_path)
+    return pytest_result, cleanup_result
 
 
 class GitHubCommitStatusVerifier:
@@ -694,20 +1063,6 @@ class ReleaseBuilder:
                     900.0,
                 ),
                 ("ruff", [str(venv_python), "-m", "ruff", "check", "."], 300.0),
-                (
-                    "pytest",
-                    [str(venv_python), "-m", "pytest", "-q"],
-                    STAGING_PYTEST_TIMEOUT_SECONDS,
-                ),
-                (
-                    "release-health-probe",
-                    [
-                        str(venv_python),
-                        str(self.config.release_probe_script),
-                        str(staging_path),
-                    ],
-                    120.0,
-                ),
             ]
             for name, argv, timeout in stage_commands:
                 result = _run_named_check(self.command_executor, name, argv, staging_path, timeout)
@@ -717,6 +1072,44 @@ class ReleaseBuilder:
                         f"staging check {name} failed with exit {result.returncode}: "
                         f"{result.stderr or result.stdout}"
                     )
+
+            pytest_result, cleanup_result = _run_staged_pytest_checks(
+                self.config, manifest, self.command_executor, venv_python, staging_path
+            )
+            checks.extend((pytest_result, cleanup_result))
+            if not pytest_result.passed:
+                reason = (
+                    "timed out"
+                    if pytest_result.timed_out
+                    else f"failed with exit {pytest_result.returncode}"
+                )
+                raise SupervisorError(
+                    f"staging check pytest {reason}: "
+                    f"{pytest_result.stderr or pytest_result.stdout}"
+                )
+            if not cleanup_result.passed:
+                raise SupervisorError(
+                    "staging pytest temp cleanup failed: "
+                    f"{cleanup_result.stderr or cleanup_result.stdout}"
+                )
+
+            result = _run_named_check(
+                self.command_executor,
+                "release-health-probe",
+                [
+                    str(venv_python),
+                    str(self.config.release_probe_script),
+                    str(staging_path),
+                ],
+                staging_path,
+                120.0,
+            )
+            checks.append(result)
+            if not result.passed:
+                raise SupervisorError(
+                    f"staging check release-health-probe failed with exit {result.returncode}: "
+                    f"{result.stderr or result.stdout}"
+                )
 
             if os.name == "nt":
                 if not self.powershell_executable:

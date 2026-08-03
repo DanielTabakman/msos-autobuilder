@@ -2387,9 +2387,21 @@ function Start-ScheduledTask {{
 @pytest.mark.parametrize(
     ("relative_path", "mutation", "expected_change"),
     [
-        ("queue/pending/job-a.json", "Add-Content -Path $MutationPath -Value 'changed'", "child_content_changed"),
-        ("state/feed-seen.json", "Add-Content -Path $MutationPath -Value 'changed'", "content_changed"),
-        ("state/refill-generation.json", "Add-Content -Path $MutationPath -Value 'changed'", "content_changed"),
+        (
+            "queue/pending/job-a.json",
+            "Add-Content -Path $MutationPath -Value 'changed'",
+            "child_content_changed",
+        ),
+        (
+            "state/feed-seen.json",
+            "Add-Content -Path $MutationPath -Value 'changed'",
+            "content_changed",
+        ),
+        (
+            "state/refill-generation.json",
+            "Add-Content -Path $MutationPath -Value 'changed'",
+            "content_changed",
+        ),
         (
             "state/refill-evidence/dispatch/prepared/created-during-restart.json",
             "New-Item -ItemType File -Force -Path $MutationPath | Out-Null",
@@ -2509,11 +2521,13 @@ def test_stable_bootstrap_handoff_rejects_out_of_window_witness(
     [
         (
             "$global:RefillAction.Execute = 'cmd.exe'; "
-            "$global:RefillAction.Arguments = '/c echo run_windows_managed_service.ps1 -ServiceName refill'",
+            "$global:RefillAction.Arguments = "
+            "'/c echo run_windows_managed_service.ps1 -ServiceName refill'",
             "approved PowerShell executable",
         ),
         (
-            "$global:RefillAction.Arguments = '-NoProfile -Command \"echo run_windows_managed_service.ps1\" '",
+            "$global:RefillAction.Arguments = "
+            "'-NoProfile -Command \"echo run_windows_managed_service.ps1\" '",
             "may not use PowerShell -Command",
         ),
         (

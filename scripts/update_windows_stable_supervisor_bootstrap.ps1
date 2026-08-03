@@ -117,7 +117,8 @@ function Invoke-Checked {
 
 function Get-FileSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
-    return Get-ByteArraySha256 -Bytes ([System.IO.File]::ReadAllBytes($Path))
+    $Bytes = [System.IO.File]::ReadAllBytes($Path)
+    return Get-ByteArraySha256 -Bytes $Bytes
 }
 
 function Get-TextFileEvidence {
@@ -239,7 +240,7 @@ function Get-JsonFileEvidence {
 }
 
 function Get-ByteArraySha256 {
-    param([Parameter(Mandatory = $true)][byte[]]$Bytes)
+    param([byte[]]$Bytes)
     $Sha256 = [System.Security.Cryptography.SHA256]::Create()
     try {
         return [System.BitConverter]::ToString($Sha256.ComputeHash($Bytes)).

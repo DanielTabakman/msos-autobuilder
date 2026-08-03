@@ -2482,11 +2482,22 @@ def test_stable_bootstrap_handoff_rejects_protected_runtime_mutation(
     assert result.returncode != 0
     report = _read_handoff_report(fixture)
     assert report["outcome"] != "success"
-    differences = report["protected_runtime_state"]["differences"]
+    protected = report["protected_runtime_state"]
+    assert protected.get("snapshot_error") in (None, "")
+    assert protected["before"] is not None
+    assert protected["after"] is not None
+    before_text = json.dumps(protected["before"])
+    after_text = json.dumps(protected["after"])
+    if operation == "create":
+        assert mutation_path.is_file()
+        assert Path(relative_path).name not in before_text
+        assert Path(relative_path).name in after_text
+    differences = protected["differences"]
     assert differences
     assert any(item["change"] == expected_change for item in differences)
     assert any(relative_path in item["relative_path"] for item in differences)
     assert "Protected runtime state changed" in json.dumps(report)
+    assert "unsupported protected mutation operation" not in json.dumps(report)
 
 
 @pytest.mark.parametrize("future_seconds", [0, 60])
@@ -2539,7 +2550,7 @@ def test_stable_bootstrap_handoff_rejects_out_of_window_witness(
     fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
     _convert_installed_bootstrap_to_six_service_baseline(fixture)
     if witness_case == "future":
-        started_at = (datetime.now(UTC) + timedelta(seconds=121)).isoformat()
+        started_at = (datetime.now(UTC) + timedelta(seconds=300)).isoformat()
     elif witness_case == "extreme_future":
         started_at = "2999-01-01T00:00:00+00:00"
     else:

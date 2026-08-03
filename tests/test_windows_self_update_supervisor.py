@@ -770,6 +770,7 @@ def _stubbed_task_control_script(
             "if (-not $CallsPath) { throw 'MSOS_STUBBED_TASK_CALLS_PATH is required.' }",
             "$StubbedSupervisorRoot = $env:MSOS_STUBBED_SUPERVISOR_ROOT",
             "$script:StubbedStartCount = 0",
+            "$script:ProtectedMutationApplied = $false",
             "function Add-Call([string]$Action, [string]$Name) {",
             "    [pscustomobject]@{ action = $Action; name = $Name } |",
             "        ConvertTo-Json -Compress |",
@@ -877,6 +878,29 @@ def _stubbed_task_control_script(
             "            throw 'simulated restart witness start failure'",
             "        }",
             "    }",
+            "    if (-not $script:ProtectedMutationApplied -and $TaskName -eq 'MSOS Autobuilder Host') {",
+            "        $MutationPath = $env:MSOS_STUBBED_PROTECTED_MUTATION_PATH",
+            "        $MutationOperation = $env:MSOS_STUBBED_PROTECTED_MUTATION_OPERATION",
+            "        if ($MutationPath -and $MutationOperation) {",
+            "            $script:ProtectedMutationApplied = $true",
+            "            switch ($MutationOperation) {",
+            "                'append' { Add-Content -Path $MutationPath -Value 'changed' }",
+            "                'create' {",
+            "                    $MutationParent = Split-Path -Parent $MutationPath",
+            "                    New-Item -ItemType Directory -Force -Path $MutationParent | Out-Null",
+            "                    New-Item -ItemType File -Force -Path $MutationPath | Out-Null",
+            "                }",
+            "                'delete' { Remove-Item -Force $MutationPath }",
+            "                default { throw 'unsupported protected mutation operation: $MutationOperation' }",
+            "            }",
+            "        }",
+            "    }",
+            "    $ActionChangeMarker = $env:MSOS_STUBBED_ACTION_CHANGE_MARKER",
+            "    if ($ActionChangeMarker -and $TaskName -eq 'MSOS Autobuilder Host') {",
+            "        $MarkerParent = Split-Path -Parent $ActionChangeMarker",
+            "        New-Item -ItemType Directory -Force -Path $MarkerParent | Out-Null",
+            "        Set-Content -Path $ActionChangeMarker -Value 'changed' -Encoding UTF8",
+            "    }",
             "    Write-StubbedWitness $TaskName",
             "}",
             "",
@@ -954,6 +978,14 @@ function Get-ScheduledTask {{
     }}
     if ($TaskName -eq 'MSOS Autobuilder Capacity-One Refill') {{
         $State = $global:RefillState
+        if (
+            -not $global:RefillActionChanged -and
+            $env:MSOS_STUBBED_ACTION_CHANGE_MARKER -and
+            (Test-Path $env:MSOS_STUBBED_ACTION_CHANGE_MARKER -PathType Leaf)
+        ) {{
+            $global:RefillAction.Arguments += ' -HostRoot C:/conflict'
+            $global:RefillActionChanged = $true
+        }}
         if ($null -ne $global:RefillAction) {{
             $Execute = $global:RefillAction.Execute
             $Arguments = $global:RefillAction.Arguments
@@ -1039,6 +1071,7 @@ function Start-ScheduledTask {{
 $global:RefillRegistered = $false
 $global:RefillState = 'Ready'
 $global:RefillAction = $null
+$global:RefillActionChanged = $false
 $global:UpdateTaskState = 'Ready'
 $global:ManagedTaskStates = @{{}}
 $global:UpdateTaskXml = @'
@@ -2369,56 +2402,45 @@ def _set_refill_witness_started_at(fixture: dict[str, object], started_at: str) 
     witness_path.write_text(json.dumps(witness, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _restart_mutation_script(command: str) -> str:
+def _restart_mutation_script(mutation_path: Path, operation: str) -> str:
     return f"""
-$global:ProtectedMutationApplied = $false
-function Start-ScheduledTask {{
-    param([string]$TaskName, [object]$ErrorAction)
-    Add-Call -Action 'start' -Name $TaskName
-    if (Get-ServiceName $TaskName) {{
-        $global:ManagedTaskStates[$TaskName] = 'Running'
-    }}
-    if (-not $global:ProtectedMutationApplied -and $TaskName -eq 'MSOS Autobuilder Host') {{
-        $global:ProtectedMutationApplied = $true
-        {command}
-    }}
-    Write-OuterStubbedWitness $TaskName
-}}
+$env:MSOS_STUBBED_PROTECTED_MUTATION_PATH = '{mutation_path.as_posix()}'
+$env:MSOS_STUBBED_PROTECTED_MUTATION_OPERATION = '{operation}'
 """
 
 
 @pytest.mark.parametrize(
-    ("relative_path", "mutation", "expected_change"),
+    ("relative_path", "operation", "expected_change"),
     [
         (
             "queue/pending/job-a.json",
-            "Add-Content -Path $MutationPath -Value 'changed'",
+            "append",
             "child_content_changed",
         ),
         (
             "state/feed-seen.json",
-            "Add-Content -Path $MutationPath -Value 'changed'",
+            "append",
             "content_changed",
         ),
         (
             "state/refill-generation.json",
-            "Add-Content -Path $MutationPath -Value 'changed'",
+            "append",
             "content_changed",
         ),
         (
             "state/refill-evidence/dispatch/prepared/created-during-restart.json",
-            "New-Item -ItemType File -Force -Path $MutationPath | Out-Null",
+            "create",
             "child_appeared",
         ),
         (
             "state/refill-evidence/sources/dispatch-prepared/generation-a/job-a.json",
-            "Add-Content -Path $MutationPath -Value 'changed'",
+            "append",
             "child_content_changed",
         ),
-        ("state/controlled-publisher-seen.json", "Remove-Item -Force $MutationPath", "disappeared"),
+        ("state/controlled-publisher-seen.json", "delete", "disappeared"),
         (
             "state/publisher-evidence/publication-review/attempt-a.json",
-            "Add-Content -Path $MutationPath -Value 'changed'",
+            "append",
             "child_content_changed",
         ),
     ],
@@ -2426,7 +2448,7 @@ function Start-ScheduledTask {{
 def test_stable_bootstrap_handoff_rejects_protected_runtime_mutation(
     tmp_path: Path,
     relative_path: str,
-    mutation: str,
+    operation: str,
     expected_change: str,
 ) -> None:
     powershell = shutil.which("powershell") or shutil.which("pwsh")
@@ -2439,9 +2461,7 @@ def test_stable_bootstrap_handoff_rejects_protected_runtime_mutation(
     host_root = fixture["host_root"]
     assert isinstance(host_root, Path)
     mutation_path = host_root / relative_path
-    mutation_script = _restart_mutation_script(
-        f"$MutationPath = '{mutation_path.as_posix()}'; {mutation}"
-    )
+    mutation_script = _restart_mutation_script(mutation_path, operation)
 
     result, _calls_path = _run_handoff_fixture(
         fixture,
@@ -2662,8 +2682,10 @@ def test_stable_bootstrap_handoff_rejects_refill_action_changed_during_restart(
     fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
     _convert_installed_bootstrap_to_six_service_baseline(fixture)
     _prepare_policy_paused_refill_runtime(fixture)
-    mutation_script = _restart_mutation_script(
-        "$global:RefillAction.Arguments += ' -HostRoot C:/conflict'"
+    action_change_marker = tmp_path / "refill-action-changed.marker"
+    mutation_script = (
+        "$env:MSOS_STUBBED_ACTION_CHANGE_MARKER = "
+        f"'{action_change_marker.as_posix()}'"
     )
 
     result, _calls_path = _run_handoff_fixture(

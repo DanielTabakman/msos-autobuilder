@@ -1,0 +1,57 @@
+name: PR 118 protect prepared dispatch source receipts
+
+on:
+  push:
+    branches:
+      - codex/issue-50-policy-paused-refill
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/issue-50-policy-paused-refill
+          fetch-depth: 0
+      - name: Add canonical prepared-dispatch source receipt boundary
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          script = Path('scripts/update_windows_stable_supervisor_bootstrap.ps1')
+          text = script.read_text(encoding='utf-8')
+          old = '''    "state/refill-generation-supersessions",\n    "state/refill-evidence/dispatch/prepared",\n'''
+          new = '''    "state/refill-generation-supersessions",\n    "state/refill-evidence/sources/dispatch-prepared",\n    "state/refill-evidence/dispatch/prepared",\n'''
+          if old not in text:
+              raise SystemExit('missing protected-path anchor')
+          script.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          tests = Path('tests/test_windows_self_update_supervisor.py')
+          text = tests.read_text(encoding='utf-8')
+          old = '''        "state/refill-generation-supersessions/generation-a.json": "supersession\\n",\n        "state/refill-evidence/dispatch/prepared/attempt-a.json": "prepared\\n",\n'''
+          new = '''        "state/refill-generation-supersessions/generation-a.json": "supersession\\n",\n        "state/refill-evidence/sources/dispatch-prepared/generation-a/job-a.json": (\n            "prepared-source\\n"\n        ),\n        "state/refill-evidence/dispatch/prepared/attempt-a.json": "prepared\\n",\n'''
+          if old not in text:
+              raise SystemExit('missing fixture anchor')
+          text = text.replace(old, new, 1)
+          old = '''        (\n            "state/refill-evidence/dispatch/prepared/created-during-restart.json",\n            "New-Item -ItemType File -Force -Path $MutationPath | Out-Null",\n            "child_appeared",\n        ),\n'''
+          new = '''        (\n            "state/refill-evidence/dispatch/prepared/created-during-restart.json",\n            "New-Item -ItemType File -Force -Path $MutationPath | Out-Null",\n            "child_appeared",\n        ),\n        (\n            "state/refill-evidence/sources/dispatch-prepared/generation-a/job-a.json",\n            "Add-Content -Path $MutationPath -Value 'changed'",\n            "child_content_changed",\n        ),\n'''
+          if old not in text:
+              raise SystemExit('missing mutation-test anchor')
+          tests.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          rm .github/workflows/pr118-add-prepared-source.yml
+          python -m py_compile tests/test_windows_self_update_supervisor.py
+          git diff --check
+      - name: Commit and push
+        shell: bash
+        run: |
+          git config user.name 'MSOS Autobuilder Review Fix'
+          git config user.email 'autobuilder-review-fix@localhost'
+          git add -A
+          git commit -m 'Protect prepared dispatch source receipts'
+          git push origin HEAD:codex/issue-50-policy-paused-refill

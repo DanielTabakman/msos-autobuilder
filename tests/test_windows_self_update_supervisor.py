@@ -561,6 +561,117 @@ def _convert_installed_bootstrap_to_six_service_baseline(fixture: dict[str, obje
     )
 
 
+def _prepare_policy_paused_refill_runtime(
+    fixture: dict[str, object],
+    *,
+    policy: dict[str, object] | str | None = None,
+    witness_commit: str | None = None,
+    include_refill_controller: bool = True,
+    include_witness: bool = True,
+) -> dict[str, bytes | None]:
+    supervisor = fixture["supervisor"]
+    host_root = fixture["host_root"]
+    active_commit = fixture["old_commit"]
+    assert isinstance(supervisor, Path)
+    assert isinstance(host_root, Path)
+    assert isinstance(active_commit, str)
+
+    active_release = supervisor / "versions" / active_commit
+    if include_refill_controller:
+        refill_controller = active_release / "src" / "msos_autobuilder" / "refill_controller.py"
+        refill_controller.parent.mkdir(parents=True, exist_ok=True)
+        refill_controller.write_text("# refill fixture\n", encoding="utf-8")
+
+    state = supervisor / "state"
+    previous_pointer = state / "previous-release.json"
+    previous_pointer.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "commit": "0" * 40,
+                "release_path": (supervisor / "versions" / ("0" * 40)).as_posix(),
+                "activated_at": "2026-07-15T00:00:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    if include_witness:
+        witness_root = state / "service-witnesses"
+        witness_root.mkdir(parents=True, exist_ok=True)
+        (witness_root / "refill.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "service": "refill",
+                    "state": "running",
+                    "release_commit": witness_commit or active_commit,
+                    "child_pid": 1,
+                    "started_at": "2999-01-01T00:00:00+00:00",
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    host_state = host_root / "state"
+    host_state.mkdir(parents=True, exist_ok=True)
+    if policy is None:
+        policy = {
+            "version": 1,
+            "enabled": False,
+            "desired_capacity": 0,
+            "resume_desired_capacity": 1,
+            "status": "PAUSED",
+            "message": "Refill is paused; no new dispatch was attempted.",
+        }
+    policy_path = host_state / "refill-policy.json"
+    if isinstance(policy, str):
+        policy_path.write_text(policy, encoding="utf-8")
+    else:
+        policy_path.write_text(json.dumps(policy, sort_keys=True) + "\n", encoding="utf-8")
+
+    protected_paths = [
+        state / "active-release.json",
+        state / "previous-release.json",
+        policy_path,
+        host_state / "refill-generation.json",
+        host_state / "prepared-dispatch.json",
+        host_state / "queue.json",
+        host_state / "feed.json",
+        host_state / "ledger.json",
+        host_state / "lifecycle.json",
+    ]
+    for path in protected_paths[3:]:
+        path.write_text(path.name + "\n", encoding="utf-8")
+    return {
+        path.as_posix(): path.read_bytes() if path.exists() else None
+        for path in protected_paths
+    }
+
+
+def _running_refill_before_script(fixture: dict[str, object]) -> str:
+    host_root = fixture["host_root"]
+    supervisor = fixture["supervisor"]
+    assert isinstance(host_root, Path)
+    assert isinstance(supervisor, Path)
+    runner = supervisor / "bootstrap" / "run_windows_managed_service.ps1"
+    return f"""
+$global:RefillRegistered = $true
+$global:RefillState = 'Running'
+$global:RefillAction = [pscustomobject]@{{
+    Execute = 'pwsh'
+    Arguments = (
+        '-NoProfile -File "{runner.as_posix()}" ' +
+        '-ServiceName refill ' +
+        '-SupervisorRoot "{supervisor.as_posix()}" ' +
+        '-HostRoot "{host_root.as_posix()}"'
+    )
+}}
+"""
+
+
 def _read_handoff_report(fixture: dict[str, object]) -> dict[str, object]:
     supervisor = fixture["supervisor"]
     assert isinstance(supervisor, Path)
@@ -1263,6 +1374,230 @@ $global:RefillAction = [pscustomobject]@{{
     assert "unregister" not in refill_actions
 
 
+def test_stable_bootstrap_handoff_accepts_running_policy_paused_refill(
+    tmp_path: Path,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    protected_before = _prepare_policy_paused_refill_runtime(fixture)
+
+    result, calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=_running_refill_before_script(fixture),
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    report = _read_handoff_report(fixture)
+    assert report["outcome"] == "success"
+    assert report["scheduled_tasks"]["baseline_mode"] == "six-task-running-policy-paused"
+    assert report["scheduled_tasks"]["preflight"]["MSOS Autobuilder Capacity-One Refill"][
+        "state"
+    ] == "Running"
+    assert report["scheduled_tasks"]["staged_refill"]["state"] == "Running"
+    assert report["activation"]["refill_task_state"] == "Running"
+    restart = report["activation"]["legacy_restart_witness"]
+    assert restart["selected_services"] == [
+        "host",
+        "relay",
+        "gate",
+        "revision",
+        "publisher",
+        "refill",
+    ]
+    assert restart["disabled_services"] == []
+    assert restart["health"]["service_set"] == [
+        "host",
+        "relay",
+        "gate",
+        "revision",
+        "publisher",
+        "refill",
+    ]
+    refill_witness = restart["health"]["witnesses"]["refill"]
+    assert refill_witness["state"] == "running"
+    assert refill_witness["release_commit"] == fixture["old_commit"]
+    policy_preflight = report["service_configuration"]["preflight"]["refill_policy"]
+    policy_post = report["service_configuration"]["post_handoff_invariants"]["refill_policy"]
+    assert policy_preflight["sha256"] == policy_post["sha256"]
+    assert policy_preflight["sha256"] == report["service_configuration"][
+        "refill_policy_preflight"
+    ]["sha256"]
+    assert (
+        report["service_configuration"]["preflight"]["active_release"]["sha256"]
+        == report["service_configuration"]["post_handoff_invariants"]["active_release"]["sha256"]
+    )
+    assert (
+        report["service_configuration"]["preflight"]["previous_release"]["sha256"]
+        == report["service_configuration"]["post_handoff_invariants"]["previous_release"][
+            "sha256"
+        ]
+    )
+    for path_text, before in protected_before.items():
+        path = Path(path_text)
+        assert before is not None
+        assert path.read_bytes() == before
+
+    calls = [
+        json.loads(line)
+        for line in calls_path.read_text(encoding="utf-8-sig").splitlines()
+    ]
+    refill_actions = [
+        call["action"]
+        for call in calls
+        if call["name"] == "MSOS Autobuilder Capacity-One Refill"
+    ]
+    assert "register" not in refill_actions
+    assert "unregister" not in refill_actions
+    assert "disable" not in refill_actions
+
+
+@pytest.mark.parametrize(
+    ("policy", "message"),
+    [
+        ({"version": 1, "enabled": True, "desired_capacity": 0}, "enabled exactly false"),
+        ({"version": 1, "enabled": False, "desired_capacity": 1}, "desired_capacity exactly 0"),
+        ({"version": 2, "enabled": False, "desired_capacity": 0}, "unsupported"),
+        ("{not json", "malformed"),
+    ],
+)
+def test_stable_bootstrap_handoff_rejects_running_refill_policy_contradictions(
+    tmp_path: Path,
+    policy: dict[str, object] | str,
+    message: str,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    _prepare_policy_paused_refill_runtime(fixture, policy=policy)
+
+    result, _calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=_running_refill_before_script(fixture),
+    )
+
+    assert result.returncode != 0
+    report = _read_handoff_report(fixture)
+    assert message in json.dumps(report)
+    assert report["activation"]["performed"] is False
+
+
+def test_stable_bootstrap_handoff_rejects_running_refill_without_policy(
+    tmp_path: Path,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    _prepare_policy_paused_refill_runtime(fixture)
+    policy_path = fixture["host_root"] / "state" / "refill-policy.json"
+    assert isinstance(policy_path, Path)
+    policy_path.unlink()
+
+    result, _calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=_running_refill_before_script(fixture),
+    )
+
+    assert result.returncode != 0
+    report = _read_handoff_report(fixture)
+    assert "requires an existing paused refill policy" in json.dumps(report)
+    assert report["activation"]["performed"] is False
+
+
+@pytest.mark.parametrize(
+    ("witness_commit", "include_witness", "message"),
+    [
+        ("1" * 40, True, "match the active release commit"),
+        (None, False, "requires a fresh refill service witness"),
+    ],
+)
+def test_stable_bootstrap_handoff_rejects_running_refill_bad_witness(
+    tmp_path: Path,
+    witness_commit: str | None,
+    include_witness: bool,
+    message: str,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    _prepare_policy_paused_refill_runtime(
+        fixture,
+        witness_commit=witness_commit,
+        include_witness=include_witness,
+    )
+
+    result, _calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=_running_refill_before_script(fixture),
+    )
+
+    assert result.returncode != 0
+    report = _read_handoff_report(fixture)
+    assert message in json.dumps(report)
+    assert report["activation"]["performed"] is False
+
+
+@pytest.mark.parametrize(
+    ("before_script_suffix", "message"),
+    [
+        (
+            "$global:RefillAction.Arguments = "
+            "'-NoProfile -File other.ps1 -ServiceName refill'",
+            "approved stable runner",
+        ),
+        (
+            "$global:RefillAction.Arguments = "
+            "$global:RefillAction.Arguments.Replace('-HostRoot', '-OtherRoot')",
+            "HostRoot",
+        ),
+    ],
+)
+def test_stable_bootstrap_handoff_rejects_running_refill_action_mismatch(
+    tmp_path: Path,
+    before_script_suffix: str,
+    message: str,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    _prepare_policy_paused_refill_runtime(fixture)
+
+    result, _calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=_running_refill_before_script(fixture) + before_script_suffix,
+    )
+
+    assert result.returncode != 0
+    report = _read_handoff_report(fixture)
+    assert message in json.dumps(report)
+    assert report["activation"]["performed"] is False
+
+
 def test_stable_bootstrap_handoff_recovers_legacy_services_after_restart_witness_failure(
     tmp_path: Path,
 ) -> None:
@@ -1851,8 +2186,9 @@ def test_stable_bootstrap_handoff_fails_closed_when_refill_task_preexists_enable
 
     assert result.returncode != 0
     report = _read_handoff_report(fixture)
-    assert "baseline requires refill to be absent or exactly Disabled" in json.dumps(
-        report
+    assert (
+        "baseline requires refill to be absent, exactly Disabled, or exactly Running"
+        in json.dumps(report)
     )
     calls = [
         json.loads(line)

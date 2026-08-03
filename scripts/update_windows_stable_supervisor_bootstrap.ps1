@@ -195,6 +195,23 @@ function Get-ActiveReleaseEvidence {
     return $Evidence
 }
 
+function Get-JsonFileEvidence {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $Evidence = Get-TextFileEvidence -Path $Path
+    if (-not $Evidence.exists) { return $Evidence }
+    try {
+        $Value = Get-Content -Path $Path -Raw | ConvertFrom-Json
+    }
+    catch {
+        throw "JSON file is malformed: $Path"
+    }
+    if ($null -eq $Value -or $Value.GetType().Name -notin @("PSCustomObject", "OrderedDictionary", "Hashtable")) {
+        throw "JSON file must contain an object: $Path"
+    }
+    $Evidence["json"] = $Value
+    return $Evidence
+}
+
 function Get-ByteArraySha256 {
     param([Parameter(Mandatory = $true)][byte[]]$Bytes)
     $Sha256 = [System.Security.Cryptography.SHA256]::Create()
@@ -526,19 +543,119 @@ function Register-DisabledRefillTask {
 }
 
 function Assert-InstalledScheduledTaskBaseline {
-    param([Parameter(Mandatory = $true)][hashtable]$Evidence)
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Evidence,
+        [Parameter(Mandatory = $true)][hashtable]$ActiveRelease,
+        [Parameter(Mandatory = $true)][string]$HostRoot,
+        [Parameter(Mandatory = $true)][string]$SupervisorRoot
+    )
     foreach ($TaskName in $ExistingManagedTaskNames) {
         if (-not $Evidence[$TaskName].exists) {
             throw "Installed Scheduled Task baseline is incomplete: missing $TaskName."
         }
     }
     if ($Evidence[$RefillTaskName].exists) {
-        if ([string]$Evidence[$RefillTaskName].state -ne "Disabled") {
-            throw "Installed Scheduled Task baseline requires refill to be absent or exactly Disabled."
+        $RefillState = [string]$Evidence[$RefillTaskName].state
+        if ($RefillState -eq "Disabled") {
+            return "six-task-disabled-refill"
         }
-        return "six-task-disabled-refill"
+        if ($RefillState -ne "Running") {
+            throw "Installed Scheduled Task baseline requires refill to be absent, exactly Disabled, or exactly Running with a proved paused policy."
+        }
+        Assert-RunningPolicyPausedRefillBaseline -Evidence $Evidence -ActiveRelease $ActiveRelease -HostRoot $HostRoot -SupervisorRoot $SupervisorRoot
+        return "six-task-running-policy-paused"
     }
     return "five-task-refill-absent"
+}
+
+function Assert-RefillTaskActionMatchesStableRunner {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$RefillEvidence,
+        [Parameter(Mandatory = $true)][string]$HostRoot,
+        [Parameter(Mandatory = $true)][string]$SupervisorRoot
+    )
+    $Actions = @($RefillEvidence.actions)
+    if ($Actions.Count -ne 1) {
+        throw "Running refill task must expose exactly one stable runner action."
+    }
+    $Action = $Actions[0]
+    $ExpectedRunner = Join-Path $SupervisorRoot "bootstrap\run_windows_managed_service.ps1"
+    $Arguments = [string]$Action.arguments
+    $ComparableArguments = ConvertTo-ComparablePath -Path $Arguments
+    if ($ComparableArguments -notlike ("*" + (ConvertTo-ComparablePath -Path $ExpectedRunner) + "*")) {
+        throw "Running refill task action is not routed through the approved stable runner."
+    }
+    if ($Arguments -notlike "*-ServiceName `"$RefillServiceName`"*" -and $Arguments -notlike "*-ServiceName $RefillServiceName*") {
+        throw "Running refill task action does not select the refill service."
+    }
+    if ($ComparableArguments -notlike ("*" + (ConvertTo-ComparablePath -Path $SupervisorRoot) + "*")) {
+        throw "Running refill task SupervisorRoot does not match the installed supervisor configuration."
+    }
+    if ($Arguments -notlike "*-HostRoot*" -or $ComparableArguments -notlike ("*" + (ConvertTo-ComparablePath -Path $HostRoot) + "*")) {
+        throw "Running refill task HostRoot does not match the installed supervisor configuration."
+    }
+}
+
+function Assert-RunningPolicyPausedRefillBaseline {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Evidence,
+        [Parameter(Mandatory = $true)][hashtable]$ActiveRelease,
+        [Parameter(Mandatory = $true)][string]$HostRoot,
+        [Parameter(Mandatory = $true)][string]$SupervisorRoot
+    )
+    Assert-RefillTaskActionMatchesStableRunner -RefillEvidence $Evidence[$RefillTaskName] -HostRoot $HostRoot -SupervisorRoot $SupervisorRoot
+
+    $ActiveCommit = [string]$ActiveRelease.commit
+    $ReleasePath = [string]$ActiveRelease.release_path
+    if ($ActiveCommit -notmatch "^[0-9a-f]{40}$") {
+        throw "Running refill baseline requires a valid exact active release commit."
+    }
+    if (-not (Test-Path (Join-Path $ReleasePath "src\msos_autobuilder\refill_controller.py") -PathType Leaf)) {
+        throw "Running refill baseline requires active release refill-controller support."
+    }
+
+    $PolicyPath = Join-Path (Join-Path $HostRoot "state") "refill-policy.json"
+    $PolicyEvidence = Get-JsonFileEvidence -Path $PolicyPath
+    if (-not $PolicyEvidence.exists) {
+        throw "Running refill baseline requires an existing paused refill policy."
+    }
+    $Policy = $PolicyEvidence.json
+    if ([int]$Policy.version -ne 1) {
+        throw "Running refill baseline has unsupported refill policy version."
+    }
+    if ($Policy.enabled -ne $false) {
+        throw "Running refill baseline requires refill policy enabled exactly false."
+    }
+    if ([int]$Policy.desired_capacity -ne 0) {
+        throw "Running refill baseline requires refill policy desired_capacity exactly 0."
+    }
+    if ($Policy.PSObject.Properties.Name -contains "status" -and [string]$Policy.status -notin @("", "PAUSED", "paused")) {
+        throw "Running refill baseline has contradictory paused-policy state."
+    }
+
+    $WitnessPath = Join-Path (Join-Path (Join-Path $SupervisorRoot "state") "service-witnesses") "$RefillServiceName.json"
+    $WitnessEvidence = Get-JsonFileEvidence -Path $WitnessPath
+    if (-not $WitnessEvidence.exists) {
+        throw "Running refill baseline requires a fresh refill service witness."
+    }
+    $Witness = $WitnessEvidence.json
+    if ([string]$Witness.state -ne "running") {
+        throw "Running refill baseline requires refill witness state running."
+    }
+    if ([string]$Witness.release_commit -ne $ActiveCommit) {
+        throw "Running refill baseline requires refill witness to match the active release commit."
+    }
+    try {
+        $StartedAt = [DateTimeOffset]::Parse([string]$Witness.started_at)
+    }
+    catch {
+        throw "Running refill baseline requires a parseable refill witness started_at."
+    }
+    if ([DateTimeOffset]::UtcNow - $StartedAt.ToUniversalTime() -gt [TimeSpan]::FromMinutes(10)) {
+        throw "Running refill baseline requires a fresh refill service witness."
+    }
+    $Report.service_configuration["refill_policy_preflight"] = $PolicyEvidence
+    $Report.service_configuration["refill_witness_preflight"] = $WitnessEvidence
 }
 
 function Restore-RefillTask {
@@ -1160,11 +1277,16 @@ try {
     }
     $SupervisorConfigPath = Join-Path $BootstrapRoot "supervisor.yaml"
     $ManagedServicesPath = Join-Path $BootstrapRoot "managed-services.json"
-    $ActivePointerPath = Join-Path (Join-Path $SupervisorRoot "state") "active-release.json"
+    $SupervisorStateRoot = Join-Path $SupervisorRoot "state"
+    $ActivePointerPath = Join-Path $SupervisorStateRoot "active-release.json"
+    $PreviousPointerPath = Join-Path $SupervisorStateRoot "previous-release.json"
+    $RefillPolicyPath = Join-Path (Join-Path $HostRoot "state") "refill-policy.json"
     $Report.service_configuration["preflight"] = @{
         supervisor = Get-TextFileEvidence -Path $SupervisorConfigPath
         managed_services = Get-TextFileEvidence -Path $ManagedServicesPath
         active_release = Get-ActiveReleaseEvidence -Path $ActivePointerPath
+        previous_release = Get-TextFileEvidence -Path $PreviousPointerPath
+        refill_policy = Get-TextFileEvidence -Path $RefillPolicyPath
     }
     if (-not $Report.service_configuration["preflight"]["active_release"].exists) {
         throw "Installed managed release pointer is missing; refusing an unbound bootstrap handoff."
@@ -1174,7 +1296,7 @@ try {
         $TaskEvidence[$TaskName] = Get-ScheduledTaskEvidence -TaskName $TaskName
     }
     $Report.scheduled_tasks["preflight"] = $TaskEvidence
-    $InstalledTaskBaselineMode = Assert-InstalledScheduledTaskBaseline -Evidence $TaskEvidence
+    $InstalledTaskBaselineMode = Assert-InstalledScheduledTaskBaseline -Evidence $TaskEvidence -ActiveRelease $Report.service_configuration["preflight"]["active_release"] -HostRoot $HostRoot -SupervisorRoot $SupervisorRoot
     $Report.scheduled_tasks["baseline_mode"] = $InstalledTaskBaselineMode
 
     Test-ReportPathWritable -Path $ReportPath
@@ -1230,11 +1352,15 @@ try {
         Register-DisabledRefillTask -SupervisorRoot $SupervisorRoot -HostRoot $HostRoot -BackupXmlPath $RefillTaskBackupXml
     }
     $Report.scheduled_tasks["staged_refill"] = Get-ScheduledTaskEvidence -TaskName $RefillTaskName
-    if ([string]$Report.scheduled_tasks["staged_refill"].state -ne "Disabled") {
+    $ExpectedRefillState = if ($InstalledTaskBaselineMode -eq "six-task-running-policy-paused") { "Running" } else { "Disabled" }
+    if ([string]$Report.scheduled_tasks["staged_refill"].state -ne $ExpectedRefillState) {
+        throw "Refill task must remain exactly $ExpectedRefillState for $InstalledTaskBaselineMode."
+    }
+    if ($InstalledTaskBaselineMode -ne "six-task-running-policy-paused" -and [string]$Report.scheduled_tasks["staged_refill"].state -ne "Disabled") {
         throw "Refill task must remain exactly Disabled until a later managed-release cutover."
     }
     $RefillAction = @($Report.scheduled_tasks["staged_refill"].actions)[0]
-    if ($null -eq $RefillAction -or [string]$RefillAction.arguments -notlike "*-HostRoot `"$HostRoot`"*") {
+    if ($null -eq $RefillAction -or (ConvertTo-ComparablePath -Path ([string]$RefillAction.arguments)) -notlike ("*" + (ConvertTo-ComparablePath -Path $HostRoot) + "*")) {
         throw "Refill task HostRoot does not match the installed supervisor configuration."
     }
     Invoke-Checked -Name "staged Python to PowerShell states transport" -Results $ValidationResults -Command {
@@ -1276,6 +1402,32 @@ try {
         $Report.activation["selected_services"] = @($RestartWitness.selected_services)
         $Report.activation["disabled_services"] = @($RestartWitness.disabled_services)
         $Report.activation["legacy_restart_witness"] = $RestartWitness
+        if ($InstalledTaskBaselineMode -eq "six-task-running-policy-paused") {
+            $PostActiveRelease = Get-TextFileEvidence -Path $ActivePointerPath
+            $PostPreviousRelease = Get-TextFileEvidence -Path $PreviousPointerPath
+            $PostRefillPolicy = Get-TextFileEvidence -Path $RefillPolicyPath
+            if ([string]$PostActiveRelease.sha256 -ne [string]$Report.service_configuration["preflight"]["active_release"].sha256) {
+                throw "active-release.json changed during policy-paused bootstrap handoff."
+            }
+            if ([string]$PostPreviousRelease.sha256 -ne [string]$Report.service_configuration["preflight"]["previous_release"].sha256) {
+                throw "previous-release.json changed during policy-paused bootstrap handoff."
+            }
+            if ([string]$PostRefillPolicy.sha256 -ne [string]$Report.service_configuration["preflight"]["refill_policy"].sha256) {
+                throw "refill-policy.json changed during policy-paused bootstrap handoff."
+            }
+            $Report.service_configuration["post_handoff_invariants"] = @{
+                active_release = $PostActiveRelease
+                previous_release = $PostPreviousRelease
+                refill_policy = $PostRefillPolicy
+            }
+            if ([string](Get-ScheduledTask -TaskName $RefillTaskName -ErrorAction Stop).State -ne "Running") {
+                throw "Policy-paused refill task did not return to Running."
+            }
+            $RefillWitness = $RestartWitness.health.witnesses.refill
+            if ($null -eq $RefillWitness -or [string]$RefillWitness.release_commit -ne [string]$Report.service_configuration["preflight"]["active_release"].commit -or [string]$RefillWitness.state -ne "running") {
+                throw "Policy-paused refill witness is not fresh and bound to the unchanged active release."
+            }
+        }
         $Report.activation["status"] = "restart_witness_passed"
         $Report.outcome = "success"
     }

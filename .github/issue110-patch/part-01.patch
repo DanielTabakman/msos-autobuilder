@@ -1,0 +1,182 @@
++            powershell = shutil.which("powershell.exe") or shutil.which("pwsh")
++            if not powershell:
++                return {"captured": False, "reason": "PowerShell unavailable", "root_pid": pid}
++            script = (
++                "$root=" + str(pid) + "; "
++                "$all=Get-CimInstance Win32_Process | "
++                "Select-Object ProcessId,ParentProcessId,Name,CommandLine; "
++                "$ids=New-Object 'System.Collections.Generic.HashSet[int]'; [void]$ids.Add($root); "
++                "do {$added=$false; foreach($p in $all){if("
++                "$ids.Contains([int]$p.ParentProcessId) -and "
++                "-not $ids.Contains([int]$p.ProcessId)){"
++                "[void]$ids.Add([int]$p.ProcessId);$added=$true}}} "
++                "while($added); $all | Where-Object {$ids.Contains([int]$_.ProcessId)} | "
++                "ConvertTo-Json -Compress"
++            )
++            completed = subprocess.run(
++                [powershell, "-NoProfile", "-Command", script],
++                capture_output=True,
++                text=True,
++                encoding="utf-8",
++                errors="replace",
++                check=False,
++                timeout=15.0,
++            )
++            return {
++                "captured": completed.returncode == 0,
++                "root_pid": pid,
++                "returncode": completed.returncode,
++                "stdout": _bounded(_redact(completed.stdout)),
++                "stderr": _bounded(_redact(completed.stderr)),
++            }
++        completed = subprocess.run(
++            ["ps", "-eo", "pid=,ppid=,stat=,comm=,args="],
++            capture_output=True,
++            text=True,
++            encoding="utf-8",
++            errors="replace",
++            check=False,
++            timeout=15.0,
++        )
++        rows: list[dict[str, Any]] = []
++        by_parent: dict[int, list[int]] = {}
++        by_pid: dict[int, dict[str, Any]] = {}
++        for line in completed.stdout.splitlines():
++            parts = line.strip().split(None, 4)
++            if len(parts) < 4:
++                continue
++            process_pid, parent_pid = int(parts[0]), int(parts[1])
++            row = {
++                "pid": process_pid,
++                "ppid": parent_pid,
++                "state": parts[2],
++                "command": _redact(parts[3]),
++                "args": _redact(parts[4] if len(parts) == 5 else ""),
++            }
++            by_pid[process_pid] = row
++            by_parent.setdefault(parent_pid, []).append(process_pid)
++        pending = [pid]
++        seen: set[int] = set()
++        while pending:
++            current = pending.pop()
++            if current in seen:
++                continue
++            seen.add(current)
++            if current in by_pid:
++                rows.append(by_pid[current])
++            pending.extend(by_parent.get(current, ()))
++        return {
++            "captured": completed.returncode == 0,
++            "root_pid": pid,
++            "returncode": completed.returncode,
++            "processes": rows[:64],
++            "truncated": len(rows) > 64,
++            "stderr": _bounded(_redact(completed.stderr)),
++        }
++    except Exception as exc:
++        return {"captured": False, "root_pid": pid, "error": _redact(str(exc))}
++
++
++def _terminate_process_tree(process: subprocess.Popen[str]) -> dict[str, Any]:
++    evidence: dict[str, Any] = {"attempted": True, "root_pid": process.pid}
++    try:
++        if os.name == "nt":
++            completed = subprocess.run(
++                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
++                capture_output=True,
++                text=True,
++                encoding="utf-8",
++                errors="replace",
++                check=False,
++                timeout=30.0,
++            )
++            evidence.update(
++                {
++                    "method": "taskkill-tree",
++                    "returncode": completed.returncode,
++                    "stdout": _bounded(_redact(completed.stdout)),
++                    "stderr": _bounded(_redact(completed.stderr)),
++                }
++            )
++            if process.poll() is None:
++                process.kill()
++        else:
++            evidence["method"] = "process-group-term-kill"
++            try:
++                os.killpg(process.pid, signal.SIGTERM)
++                process.wait(timeout=5.0)
++                evidence["signal"] = "SIGTERM"
++            except subprocess.TimeoutExpired:
++                os.killpg(process.pid, signal.SIGKILL)
++                evidence["signal"] = "SIGKILL"
++            except ProcessLookupError:
++                evidence["signal"] = "already-exited"
++        evidence["final_returncode"] = process.poll()
++    except Exception as exc:
++        evidence["error"] = _redact(str(exc))
++        try:
++            process.kill()
++            evidence["fallback_kill"] = True
++        except Exception as fallback_exc:
++            evidence["fallback_error"] = _redact(str(fallback_exc))
++    return evidence
++
++
+ def default_command_executor(argv: Sequence[str], cwd: Path, timeout: float) -> CheckResult:
+     started = time.monotonic()
+-    completed = subprocess.run(
++    process = subprocess.Popen(
+         list(argv),
+         cwd=cwd,
+-        capture_output=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
+         text=True,
+         encoding="utf-8",
+         errors="replace",
+-        check=False,
+-        timeout=timeout,
+-    )
+-    return CheckResult(
+-        name="command",
+-        argv=tuple(str(part) for part in argv),
+-        cwd=str(cwd),
+-        returncode=completed.returncode,
+-        duration_seconds=time.monotonic() - started,
+-        stdout=_bounded(_redact(completed.stdout)),
+-        stderr=_bounded(_redact(completed.stderr)),
++        start_new_session=os.name != "nt",
++        creationflags=(
++            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
++        ),
+     )
++    try:
++        stdout, stderr = process.communicate(timeout=timeout)
++        return CheckResult(
++            name="command",
++            argv=tuple(str(part) for part in argv),
++            cwd=str(cwd),
++            returncode=process.returncode,
++            duration_seconds=time.monotonic() - started,
++            stdout=_bounded(_redact(stdout)),
++            stderr=_bounded(_redact(stderr)),
++        )
++    except subprocess.TimeoutExpired as exc:
++        partial_stdout = _coerce_output(exc.stdout)
++        partial_stderr = _coerce_output(exc.stderr)
++        process_tree = _best_effort_process_tree(process.pid)
++        termination = _terminate_process_tree(process)
++        try:
++            remaining_stdout, remaining_stderr = process.communicate(timeout=10.0)
++        except subprocess.TimeoutExpired:
++            process.kill()
++            remaining_stdout, remaining_stderr = process.communicate()
++            termination["post_termination_kill"] = True
++        stdout = _merge_timeout_output(partial_stdout, _coerce_output(remaining_stdout))
++        stderr = _merge_timeout_output(partial_stderr, _coerce_output(remaining_stderr))
++        termination["final_returncode"] = process.returncode
++        return CheckResult(
++            name="command",
++            argv=tuple(str(part) for part in argv),
++            cwd=str(cwd),
++            returncode=process.returncode if process.returncode is not None else 124,

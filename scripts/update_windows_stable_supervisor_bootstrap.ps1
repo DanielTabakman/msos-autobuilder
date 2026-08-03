@@ -48,6 +48,7 @@ $ProtectedRuntimeRelativePaths = @(
     "state/refill-generation.json",
     "state/refill-generation-history",
     "state/refill-generation-supersessions",
+    "state/refill-evidence/sources/dispatch-prepared",
     "state/refill-evidence/dispatch/prepared",
     "state/refill-evidence/dispatch/submitted",
     "state/refill-evidence/heads/dispatch/prepared",

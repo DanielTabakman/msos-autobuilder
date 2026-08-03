@@ -638,6 +638,9 @@ def _prepare_policy_paused_refill_runtime(
         + "\n",
         "state/refill-generation-history/generation-a.json": "generation-history\n",
         "state/refill-generation-supersessions/generation-a.json": "supersession\n",
+        "state/refill-evidence/sources/dispatch-prepared/generation-a/job-a.json": (
+            "prepared-source\n"
+        ),
         "state/refill-evidence/dispatch/prepared/attempt-a.json": "prepared\n",
         "state/refill-evidence/dispatch/submitted/attempt-a.json": "submitted\n",
         "state/refill-evidence/heads/dispatch/prepared/attempt-a.json": "prepared-head\n",
@@ -2406,6 +2409,11 @@ function Start-ScheduledTask {{
             "state/refill-evidence/dispatch/prepared/created-during-restart.json",
             "New-Item -ItemType File -Force -Path $MutationPath | Out-Null",
             "child_appeared",
+        ),
+        (
+            "state/refill-evidence/sources/dispatch-prepared/generation-a/job-a.json",
+            "Add-Content -Path $MutationPath -Value 'changed'",
+            "child_content_changed",
         ),
         ("state/controlled-publisher-seen.json", "Remove-Item -Force $MutationPath", "disappeared"),
         (

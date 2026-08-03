@@ -1609,12 +1609,12 @@ def test_stable_bootstrap_handoff_rejects_running_refill_bad_witness(
         (
             "$global:RefillAction.Arguments = "
             "'-NoProfile -File other.ps1 -ServiceName refill'",
-            "approved stable runner",
+            "missing required parameter -supervisorroot",
         ),
         (
             "$global:RefillAction.Arguments = "
             "$global:RefillAction.Arguments.Replace('-HostRoot', '-OtherRoot')",
-            "HostRoot",
+            "unsupported parameter -OtherRoot",
         ),
     ],
 )
@@ -2491,16 +2491,16 @@ def test_stable_bootstrap_handoff_accepts_recent_or_bounded_future_witness(
 
 
 @pytest.mark.parametrize(
-    ("started_at", "message"),
+    ("witness_case", "message"),
     [
-        ((datetime.now(UTC) + timedelta(seconds=121)).isoformat(), "future clock skew"),
-        ("2999-01-01T00:00:00+00:00", "future clock skew"),
-        ((datetime.now(UTC) - timedelta(minutes=11)).isoformat(), "fresh refill service witness"),
+        ("future", "future clock skew"),
+        ("extreme_future", "future clock skew"),
+        ("old", "fresh refill service witness"),
     ],
 )
 def test_stable_bootstrap_handoff_rejects_out_of_window_witness(
     tmp_path: Path,
-    started_at: str,
+    witness_case: str,
     message: str,
 ) -> None:
     powershell = shutil.which("powershell") or shutil.which("pwsh")
@@ -2509,6 +2509,12 @@ def test_stable_bootstrap_handoff_rejects_out_of_window_witness(
 
     fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
     _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    if witness_case == "future":
+        started_at = (datetime.now(UTC) + timedelta(seconds=121)).isoformat()
+    elif witness_case == "extreme_future":
+        started_at = "2999-01-01T00:00:00+00:00"
+    else:
+        started_at = (datetime.now(UTC) - timedelta(minutes=11)).isoformat()
     _prepare_policy_paused_refill_runtime(fixture, witness_started_at=started_at)
 
     result, _calls_path = _run_handoff_fixture(

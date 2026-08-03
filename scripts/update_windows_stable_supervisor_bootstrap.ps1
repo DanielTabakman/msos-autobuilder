@@ -625,7 +625,7 @@ function Get-ProtectedPathEvidence {
         [Parameter(Mandatory = $true)][string]$HostRoot,
         [Parameter(Mandatory = $true)][string]$RelativePath
     )
-    $HostFull = [System.IO.Path]::GetFullPath($HostRoot).TrimEnd("\\", "/")
+    $HostFull = [System.IO.Path]::GetFullPath($HostRoot).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
     $NativeRelative = $RelativePath.Replace("/", [System.IO.Path]::DirectorySeparatorChar)
     $AbsolutePath = [System.IO.Path]::GetFullPath((Join-Path $HostFull $NativeRelative))
     $HostPrefix = $HostFull + [System.IO.Path]::DirectorySeparatorChar

@@ -21,6 +21,14 @@ if (-not $EvidenceBranch -or $EvidenceBranch -in @("main", "master")) {
     throw "EvidenceBranch must be a dedicated non-default branch."
 }
 
+# Omitted -TaskNamespace keeps production names. An explicitly bound blank value is rejected
+# before any filesystem, config, Scheduled Task, or runtime mutation.
+$TaskNamespaceWasBound = $PSBoundParameters.ContainsKey("TaskNamespace")
+if ($TaskNamespaceWasBound -and ($null -eq $TaskNamespace -or [string]::IsNullOrWhiteSpace([string]$TaskNamespace))) {
+    throw "TaskNamespace was explicitly supplied but is blank. Omit -TaskNamespace for production names, or provide a valid nonblank namespace."
+}
+$EffectiveTaskNamespace = if ($TaskNamespaceWasBound) { ([string]$TaskNamespace).Trim() } else { "" }
+
 $script:MaxScheduledTaskNameLength = 238
 $script:ProductionManagedTaskRoles = @(
     @{ service = "host"; role = "Host" },
@@ -175,8 +183,8 @@ function Assert-InstallerTaskNamespaceReady {
     )
     $Namespace = [string]$ResolvedNames.namespace
     if ($ResolvedNames.isolated) {
-        if ($Namespace -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9 ._:-]{0,78}[A-Za-z0-9])?$') {
-            throw "TaskNamespace is malformed. Use 1-80 characters of letters, digits, spaces, '.', '_', ':', or '-'."
+        if ($Namespace -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9 ._-]{0,78}[A-Za-z0-9])?$') {
+            throw "TaskNamespace is malformed. Use 1-80 characters of letters, digits, spaces, '.', '_', or '-'."
         }
     }
 
@@ -193,12 +201,15 @@ function Assert-InstallerTaskNamespaceReady {
     [void]$AllNames.Add([string]$ResolvedNames.update_task_name)
 
     $Seen = @{}
+    $InvalidFileNameChars = [System.IO.Path]::GetInvalidFileNameChars()
     foreach ($Name in $AllNames) {
         if ($Name.Length -gt $script:MaxScheduledTaskNameLength) {
             throw "Scheduled task name exceeds Windows limit ($script:MaxScheduledTaskNameLength): $Name"
         }
-        if ($Name -match '[\u0000-\u001F\\/<>|"?*]') {
-            throw "Scheduled task name contains illegal characters: $Name"
+        foreach ($Character in $Name.ToCharArray()) {
+            if ($InvalidFileNameChars -contains $Character) {
+                throw "Scheduled task name contains illegal characters: $Name"
+            }
         }
         $Key = $Name.ToLowerInvariant()
         if ($Seen.ContainsKey($Key)) {
@@ -261,7 +272,7 @@ function New-ManagedTask {
 }
 
 # Resolve and validate all seven task names before any Scheduled Task mutation path can execute.
-$ResolvedTaskNames = Resolve-InstallerTaskNames -Namespace $TaskNamespace
+$ResolvedTaskNames = Resolve-InstallerTaskNames -Namespace $EffectiveTaskNamespace
 Assert-InstallerTaskNamespaceReady -ResolvedNames $ResolvedTaskNames -HostRootPath $HostRoot -SupervisorRootPath $SupervisorRoot
 $ManagedTasks = @(
     foreach ($Managed in @($ResolvedTaskNames.managed_tasks)) {
@@ -270,6 +281,23 @@ $ManagedTasks = @(
 )
 $UpdateTaskName = [string]$ResolvedTaskNames.update_task_name
 $IsolatedTaskNamespace = [bool]$ResolvedTaskNames.isolated
+
+# Test probe only: exercise real -File parameter binding and exit before mutation.
+if ($env:MSOS_INSTALLER_TASK_NAMESPACE_PROBE -eq "1") {
+    $ProbePayload = @{
+        task_namespace_was_bound = $TaskNamespaceWasBound
+        effective_namespace = $EffectiveTaskNamespace
+        isolated = $IsolatedTaskNamespace
+        update_task_name = $UpdateTaskName
+        managed_tasks = @(
+            foreach ($Managed in $ManagedTasks) {
+                @{ service = [string]$Managed.service; task = [string]$Managed.task }
+            }
+        )
+    }
+    Write-Output (($ProbePayload | ConvertTo-Json -Compress -Depth 6))
+    exit 0
+}
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Git = (Get-Command git -ErrorAction Stop).Source

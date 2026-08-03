@@ -1,1 +1,1 @@
-Trigger valid PR #118 finalizer workflow.
+Trigger the installed push finalizer workflow for PR #118.

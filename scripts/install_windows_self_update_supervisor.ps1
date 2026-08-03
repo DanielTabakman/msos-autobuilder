@@ -7,7 +7,8 @@ param(
     [string]$ManifestUrl = "https://raw.githubusercontent.com/DanielTabakman/msos-autobuilder/updates/updates/approved/latest.yaml",
     [string]$EvidenceBranch = "results",
     [int]$UpdatePollMinutes = 15,
-    [string]$MachineId = $env:COMPUTERNAME
+    [string]$MachineId = $env:COMPUTERNAME,
+    [string]$TaskNamespace = ""
 )
 
 Set-StrictMode -Version Latest
@@ -19,6 +20,28 @@ if ($RepoUrl -match '^[A-Za-z][A-Za-z0-9+.-]*://[^/]*@') {
 if (-not $EvidenceBranch -or $EvidenceBranch -in @("main", "master")) {
     throw "EvidenceBranch must be a dedicated non-default branch."
 }
+
+$script:MaxScheduledTaskNameLength = 238
+$script:ProductionManagedTaskRoles = @(
+    @{ service = "host"; role = "Host" },
+    @{ service = "relay"; role = "Result Relay" },
+    @{ service = "gate"; role = "Candidate Gate" },
+    @{ service = "revision"; role = "Revision Loop" },
+    @{ service = "publisher"; role = "Controlled Publisher" },
+    @{ service = "refill"; role = "Capacity-One Refill" }
+)
+$script:UpdateSupervisorRole = "Update Supervisor"
+$script:ProtectedProductionTaskNames = @(
+    "MSOS Autobuilder Host",
+    "MSOS Autobuilder Result Relay",
+    "MSOS Autobuilder Candidate Gate",
+    "MSOS Autobuilder Revision Loop",
+    "MSOS Autobuilder Controlled Publisher",
+    "MSOS Autobuilder Capacity-One Refill",
+    "MSOS Autobuilder Update Supervisor"
+)
+$script:ProtectedProductionHostRoot = [System.IO.Path]::GetFullPath((Join-Path $env:USERPROFILE ".msos-autobuilder"))
+$script:ProtectedProductionSupervisorRoot = [System.IO.Path]::GetFullPath((Join-Path $env:USERPROFILE ".msos-autobuilder-supervisor"))
 
 function Write-Utf8NoBom {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Value)
@@ -47,6 +70,175 @@ function Convert-ToYamlQuoted {
     return "'" + ($Value.Replace("\", "/") -replace "'", "''") + "'"
 }
 
+function Get-NormalizedTaskNamespace {
+    param([AllowNull()][string]$Namespace)
+    if ($null -eq $Namespace) { return "" }
+    return $Namespace.Trim()
+}
+
+function Get-NamespacedTaskName {
+    param(
+        [Parameter(Mandatory = $true)][string]$Role,
+        [string]$Namespace = ""
+    )
+    if ([string]::IsNullOrWhiteSpace($Namespace)) {
+        return "MSOS Autobuilder $Role"
+    }
+    return "MSOS Autobuilder $($Namespace.Trim()) $Role"
+}
+
+function Get-ProductionTaskNames {
+    return @($script:ProtectedProductionTaskNames)
+}
+
+function Resolve-InstallerTaskNames {
+    param([string]$Namespace = "")
+    $Normalized = Get-NormalizedTaskNamespace -Namespace $Namespace
+    $Managed = New-Object System.Collections.Generic.List[object]
+    foreach ($Entry in $script:ProductionManagedTaskRoles) {
+        [void]$Managed.Add(@{
+            service = $Entry.service
+            role = $Entry.role
+            task = (Get-NamespacedTaskName -Role $Entry.role -Namespace $Normalized)
+        })
+    }
+    return @{
+        namespace = $Normalized
+        isolated = -not [string]::IsNullOrWhiteSpace($Normalized)
+        managed_tasks = $Managed.ToArray()
+        update_task_name = (Get-NamespacedTaskName -Role $script:UpdateSupervisorRole -Namespace $Normalized)
+    }
+}
+
+function Test-RootPathOverlap {
+    param(
+        [Parameter(Mandatory = $true)][string]$Left,
+        [Parameter(Mandatory = $true)][string]$Right
+    )
+    $LeftFull = [System.IO.Path]::GetFullPath($Left).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $RightFull = [System.IO.Path]::GetFullPath($Right).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    if ($LeftFull.Equals($RightFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $true
+    }
+    $LeftPrefix = $LeftFull + [System.IO.Path]::DirectorySeparatorChar
+    $RightPrefix = $RightFull + [System.IO.Path]::DirectorySeparatorChar
+    return (
+        $LeftFull.StartsWith($RightPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $RightFull.StartsWith($LeftPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+    )
+}
+
+function Assert-PathHasNoReparsePoints {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+    $Full = [System.IO.Path]::GetFullPath($Path)
+    $Root = [System.IO.Path]::GetPathRoot($Full)
+    if ([string]::IsNullOrWhiteSpace($Root)) {
+        throw "$Label path is malformed: $Path"
+    }
+    $Current = $Root.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    if ($Root.EndsWith([System.IO.Path]::DirectorySeparatorChar) -or $Root.EndsWith([System.IO.Path]::AltDirectorySeparatorChar)) {
+        $Current = $Root
+    }
+    $Relative = $Full.Substring($Root.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $Parts = @()
+    if (-not [string]::IsNullOrWhiteSpace($Relative)) {
+        $Parts = $Relative.Split([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    }
+    $Probe = $Current
+    if (Test-Path -LiteralPath $Probe) {
+        $Item = Get-Item -LiteralPath $Probe -Force
+        if (($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "$Label path resolves through a reparse point: $Path"
+        }
+    }
+    foreach ($Part in $Parts) {
+        if ([string]::IsNullOrWhiteSpace($Part)) { continue }
+        $Probe = Join-Path $Probe $Part
+        if (-not (Test-Path -LiteralPath $Probe)) { break }
+        $Item = Get-Item -LiteralPath $Probe -Force
+        if (($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "$Label path resolves through a reparse point: $Path"
+        }
+    }
+}
+
+function Assert-InstallerTaskNamespaceReady {
+    param(
+        [Parameter(Mandatory = $true)]$ResolvedNames,
+        [Parameter(Mandatory = $true)][string]$HostRootPath,
+        [Parameter(Mandatory = $true)][string]$SupervisorRootPath,
+        [string]$ProtectedHostRoot = $script:ProtectedProductionHostRoot,
+        [string]$ProtectedSupervisorRoot = $script:ProtectedProductionSupervisorRoot
+    )
+    $Namespace = [string]$ResolvedNames.namespace
+    if ($ResolvedNames.isolated) {
+        if ($Namespace -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9 ._:-]{0,78}[A-Za-z0-9])?$') {
+            throw "TaskNamespace is malformed. Use 1-80 characters of letters, digits, spaces, '.', '_', ':', or '-'."
+        }
+    }
+
+    $AllNames = New-Object System.Collections.Generic.List[string]
+    foreach ($Managed in @($ResolvedNames.managed_tasks)) {
+        if ([string]::IsNullOrWhiteSpace([string]$Managed.task)) {
+            throw "Managed task name resolved empty for service $($Managed.service)."
+        }
+        [void]$AllNames.Add([string]$Managed.task)
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$ResolvedNames.update_task_name)) {
+        throw "Update supervisor task name resolved empty."
+    }
+    [void]$AllNames.Add([string]$ResolvedNames.update_task_name)
+
+    $Seen = @{}
+    foreach ($Name in $AllNames) {
+        if ($Name.Length -gt $script:MaxScheduledTaskNameLength) {
+            throw "Scheduled task name exceeds Windows limit ($script:MaxScheduledTaskNameLength): $Name"
+        }
+        if ($Name -match '[\u0000-\u001F\\/<>|"?*]') {
+            throw "Scheduled task name contains illegal characters: $Name"
+        }
+        $Key = $Name.ToLowerInvariant()
+        if ($Seen.ContainsKey($Key)) {
+            throw "Duplicate scheduled task name resolved: $Name"
+        }
+        $Seen[$Key] = $true
+    }
+
+    if ($ResolvedNames.isolated) {
+        $ProtectedNames = @(Get-ProductionTaskNames)
+        foreach ($Name in $AllNames) {
+            foreach ($Protected in $ProtectedNames) {
+                if ($Name.Equals($Protected, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    throw "Isolated task name collides with protected production task name: $Name"
+                }
+            }
+        }
+
+        $HostFull = [System.IO.Path]::GetFullPath($HostRootPath)
+        $SupervisorFull = [System.IO.Path]::GetFullPath($SupervisorRootPath)
+        $ProtectedHostFull = [System.IO.Path]::GetFullPath($ProtectedHostRoot)
+        $ProtectedSupervisorFull = [System.IO.Path]::GetFullPath($ProtectedSupervisorRoot)
+
+        if (Test-RootPathOverlap -Left $HostFull -Right $SupervisorFull) {
+            throw "Isolated HostRoot and SupervisorRoot must not overlap."
+        }
+        foreach ($Candidate in @(@{ label = "HostRoot"; path = $HostFull }, @{ label = "SupervisorRoot"; path = $SupervisorFull })) {
+            if (Test-RootPathOverlap -Left $Candidate.path -Right $ProtectedHostFull) {
+                throw "Isolated $($Candidate.label) overlaps protected Issue #50 host root: $ProtectedHostFull"
+            }
+            if (Test-RootPathOverlap -Left $Candidate.path -Right $ProtectedSupervisorFull) {
+                throw "Isolated $($Candidate.label) overlaps protected Issue #50 supervisor root: $ProtectedSupervisorFull"
+            }
+            Assert-PathHasNoReparsePoints -Path $Candidate.path -Label $Candidate.label
+        }
+        Assert-PathHasNoReparsePoints -Path $ProtectedHostFull -Label "Protected host root"
+        Assert-PathHasNoReparsePoints -Path $ProtectedSupervisorFull -Label "Protected supervisor root"
+    }
+}
+
 function New-ManagedTask {
     param(
         [Parameter(Mandatory = $true)][string]$TaskName,
@@ -67,6 +259,17 @@ function New-ManagedTask {
     $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
     Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Description "Version-routed MSOS Autobuilder service: $ServiceName" -Force | Out-Null
 }
+
+# Resolve and validate all seven task names before any Scheduled Task mutation path can execute.
+$ResolvedTaskNames = Resolve-InstallerTaskNames -Namespace $TaskNamespace
+Assert-InstallerTaskNamespaceReady -ResolvedNames $ResolvedTaskNames -HostRootPath $HostRoot -SupervisorRootPath $SupervisorRoot
+$ManagedTasks = @(
+    foreach ($Managed in @($ResolvedTaskNames.managed_tasks)) {
+        @{ task = [string]$Managed.task; service = [string]$Managed.service }
+    }
+)
+$UpdateTaskName = [string]$ResolvedTaskNames.update_task_name
+$IsolatedTaskNamespace = [bool]$ResolvedTaskNames.isolated
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Git = (Get-Command git -ErrorAction Stop).Source
@@ -158,14 +361,64 @@ if (-not (Test-Path (Join-Path $VersionPath "release.json") -PathType Leaf)) {
     }
 }
 
-# Preserve current operational plans, but replace release-coupled absolute paths with stable tokens.
+# Preserve current operational plans for production installs. Isolated namespaces get fresh
+# pilot-owned configs instead of copying historical mutable Issue #50 state.
 $CurrentPythonForward = (Join-Path $RepoRoot ".venv\Scripts\python.exe").Replace("\", "/")
 $RepoRootForward = $RepoRoot.Replace("\", "/")
-foreach ($TemplateName in @("candidate-gate.yaml", "controlled-publisher.yaml")) {
-    $SourceConfig = Join-Path $HostRoot $TemplateName
-    if (-not (Test-Path $SourceConfig -PathType Leaf)) { throw "Required managed config not found: $SourceConfig" }
-    $Template = (Get-Content -Path $SourceConfig -Raw).Replace($CurrentPythonForward, "{managed_python}").Replace($RepoRootForward, "{managed_release_root}")
-    Write-Utf8NoBom -Path (Join-Path $TemplatesRoot $TemplateName) -Value $Template
+$HostRootForward = $HostRoot.Replace("\", "/")
+$HostRootYamlForConfig = Convert-ToYamlQuoted $HostRoot
+$RepoUrlYamlForConfig = Convert-ToYamlQuoted $RepoUrl
+$EvidenceBranchYamlForConfig = Convert-ToYamlQuoted $EvidenceBranch
+$MachineIdYamlForConfig = Convert-ToYamlQuoted $MachineId
+if ($IsolatedTaskNamespace) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $HostRoot "logs"), (Join-Path $HostRoot "state"), (Join-Path $HostRoot "workspaces"), (Join-Path $HostRoot "runtime"), (Join-Path $HostRoot "artifacts") | Out-Null
+    $FreshGateYaml = @"
+version: 1
+publication_enabled: false
+host_root: $HostRootYamlForConfig
+results_repo_url: $RepoUrlYamlForConfig
+results_branch: $EvidenceBranchYamlForConfig
+machine_id: $MachineIdYamlForConfig
+poll_seconds: 30
+plans: {}
+"@
+    $FreshPublisherYaml = @"
+version: 1
+draft_pr_publication_enabled: false
+merge_enabled: false
+main_write_enabled: false
+host_root: $HostRootYamlForConfig
+evidence_repo_url: $RepoUrlYamlForConfig
+results_branch: $EvidenceBranchYamlForConfig
+product_repo_url: 'https://github.com/DanielTabakman/Probability-prediction-engine.git'
+product_repo_full_name: 'DanielTabakman/Probability-prediction-engine'
+product_base_branch: 'main'
+machine_id: $MachineIdYamlForConfig
+poll_seconds: 30
+plans: {}
+"@
+    $FreshGateTemplate = $FreshGateYaml.Replace($HostRootForward, "{host_root}")
+    $FreshPublisherTemplate = $FreshPublisherYaml.Replace($HostRootForward, "{host_root}")
+    Write-Utf8NoBom -Path (Join-Path $HostRoot "candidate-gate.yaml") -Value $FreshGateYaml
+    Write-Utf8NoBom -Path (Join-Path $HostRoot "controlled-publisher.yaml") -Value $FreshPublisherYaml
+    Write-Utf8NoBom -Path (Join-Path $TemplatesRoot "candidate-gate.yaml") -Value $FreshGateTemplate
+    Write-Utf8NoBom -Path (Join-Path $TemplatesRoot "controlled-publisher.yaml") -Value $FreshPublisherTemplate
+    Write-Utf8AtomicJson -Path (Join-Path $HostRoot "state\refill-policy.json") -Value @{
+        version = 1
+        enabled = $false
+        desired_capacity = 0
+        resume_desired_capacity = 1
+        status = "PAUSED"
+        message = "Isolated pilot refill remains paused until separately authorized."
+    }
+}
+else {
+    foreach ($TemplateName in @("candidate-gate.yaml", "controlled-publisher.yaml")) {
+        $SourceConfig = Join-Path $HostRoot $TemplateName
+        if (-not (Test-Path $SourceConfig -PathType Leaf)) { throw "Required managed config not found: $SourceConfig" }
+        $Template = (Get-Content -Path $SourceConfig -Raw).Replace($CurrentPythonForward, "{managed_python}").Replace($RepoRootForward, "{managed_release_root}")
+        Write-Utf8NoBom -Path (Join-Path $TemplatesRoot $TemplateName) -Value $Template
+    }
 }
 
 $SupervisorRootYaml = Convert-ToYamlQuoted $SupervisorRoot
@@ -176,6 +429,11 @@ $EvidenceBranchYaml = Convert-ToYamlQuoted $EvidenceBranch
 $MachineIdYaml = Convert-ToYamlQuoted $MachineId
 $TaskControlYaml = Convert-ToYamlQuoted (Join-Path $BootstrapRoot "windows_self_update_task_control.ps1")
 $ReleaseProbeYaml = Convert-ToYamlQuoted (Join-Path $BootstrapRoot "managed_release_health_probe.py")
+$ManagedTaskYamlLines = foreach ($Managed in $ManagedTasks) {
+    $TaskNameYaml = Convert-ToYamlQuoted $Managed.task
+    "  - service: $($Managed.service)`n    task_name: $TaskNameYaml"
+}
+$ManagedTasksYaml = ($ManagedTaskYamlLines -join "`n")
 $SupervisorYaml = @"
 version: 1
 supervisor_root: $SupervisorRootYaml
@@ -191,18 +449,7 @@ health_timeout_seconds: 90
 health_poll_seconds: 2
 health_stability_seconds: 10
 managed_tasks:
-  - service: host
-    task_name: 'MSOS Autobuilder Host'
-  - service: relay
-    task_name: 'MSOS Autobuilder Result Relay'
-  - service: gate
-    task_name: 'MSOS Autobuilder Candidate Gate'
-  - service: revision
-    task_name: 'MSOS Autobuilder Revision Loop'
-  - service: publisher
-    task_name: 'MSOS Autobuilder Controlled Publisher'
-  - service: refill
-    task_name: 'MSOS Autobuilder Capacity-One Refill'
+$ManagedTasksYaml
 "@
 $SupervisorConfigPath = Join-Path $BootstrapRoot "supervisor.yaml"
 Write-Utf8NoBom -Path $SupervisorConfigPath -Value $SupervisorYaml
@@ -222,19 +469,10 @@ Write-Utf8NoBom -Path (Join-Path $BootstrapRoot "managed-services.json") -Value 
 Write-Utf8AtomicJson -Path $ActivePointer -Value @{ version = 1; commit = $CurrentCommit; release_path = $VersionPath; activated_at = [DateTimeOffset]::UtcNow.ToString("o") }
 
 $Runner = Join-Path $BootstrapRoot "run_windows_managed_service.ps1"
-$ManagedTasks = @(
-    @{ task = "MSOS Autobuilder Host"; service = "host" },
-    @{ task = "MSOS Autobuilder Result Relay"; service = "relay" },
-    @{ task = "MSOS Autobuilder Candidate Gate"; service = "gate" },
-    @{ task = "MSOS Autobuilder Revision Loop"; service = "revision" },
-    @{ task = "MSOS Autobuilder Controlled Publisher"; service = "publisher" },
-    @{ task = "MSOS Autobuilder Capacity-One Refill"; service = "refill" }
-)
 foreach ($Managed in $ManagedTasks) {
     New-ManagedTask -TaskName $Managed.task -ServiceName $Managed.service -RunnerScript $Runner -PowerShellExe $PowerShellExe -UserId $UserId
 }
 
-$UpdateTaskName = "MSOS Autobuilder Update Supervisor"
 $ExistingUpdateTask = Get-ScheduledTask -TaskName $UpdateTaskName -ErrorAction SilentlyContinue
 if ($ExistingUpdateTask) {
     Stop-ScheduledTask -TaskName $UpdateTaskName -ErrorAction SilentlyContinue

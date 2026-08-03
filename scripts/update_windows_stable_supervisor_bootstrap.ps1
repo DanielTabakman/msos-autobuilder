@@ -617,7 +617,7 @@ function Split-StrictTaskArguments {
     if ($Current.Length -gt 0) {
         $Tokens.Add($Current.ToString())
     }
-    return ,$Tokens.ToArray()
+    return $Tokens.ToArray()
 }
 
 function Get-ProtectedPathEvidence {
@@ -795,7 +795,7 @@ function Compare-ProtectedRuntimeStateSnapshots {
             }
         }
     }
-    return ,$Differences.ToArray()
+    return $Differences.ToArray()
 }
 
 function Assert-InstalledScheduledTaskBaseline {

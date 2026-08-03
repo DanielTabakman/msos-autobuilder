@@ -1,0 +1,51 @@
+name: PR 118 test formatting correction
+
+on:
+  push:
+    branches:
+      - codex/issue-50-policy-paused-refill
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/issue-50-policy-paused-refill
+          fetch-depth: 0
+      - name: Wrap long regression parameters
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/test_windows_self_update_supervisor.py')
+          text = path.read_text(encoding='utf-8')
+          replacements = {
+              '''        ("queue/pending/job-a.json", "Add-Content -Path $MutationPath -Value 'changed'", "child_content_changed"),\n''': '''        (\n            "queue/pending/job-a.json",\n            "Add-Content -Path $MutationPath -Value 'changed'",\n            "child_content_changed",\n        ),\n''',
+              '''        ("state/feed-seen.json", "Add-Content -Path $MutationPath -Value 'changed'", "content_changed"),\n''': '''        (\n            "state/feed-seen.json",\n            "Add-Content -Path $MutationPath -Value 'changed'",\n            "content_changed",\n        ),\n''',
+              '''        ("state/refill-generation.json", "Add-Content -Path $MutationPath -Value 'changed'", "content_changed"),\n''': '''        (\n            "state/refill-generation.json",\n            "Add-Content -Path $MutationPath -Value 'changed'",\n            "content_changed",\n        ),\n''',
+              '''            "$global:RefillAction.Arguments = '/c echo run_windows_managed_service.ps1 -ServiceName refill'",\n''': '''            "$global:RefillAction.Arguments = "\n            "'/c echo run_windows_managed_service.ps1 -ServiceName refill'",\n''',
+              '''            "$global:RefillAction.Arguments = '-NoProfile -Command \\\"echo run_windows_managed_service.ps1\\\" '",\n''': '''            "$global:RefillAction.Arguments = "\n            "'-NoProfile -Command \\\"echo run_windows_managed_service.ps1\\\" '",\n''',
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f'missing expected formatting anchor: {old!r}')
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          rm .github/workflows/pr118-fix-ruff.yml
+          python -m py_compile tests/test_windows_self_update_supervisor.py
+          git diff --check
+      - name: Commit and push
+        shell: bash
+        run: |
+          git config user.name 'MSOS Autobuilder Review Fix'
+          git config user.email 'autobuilder-review-fix@localhost'
+          git add -A
+          git commit -m 'Wrap PR 118 regression parameters'
+          git push origin HEAD:codex/issue-50-policy-paused-refill

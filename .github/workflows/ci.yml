@@ -19,6 +19,16 @@ jobs:
       - name: Apply nested PowerShell regression correction
         shell: bash
         run: |
+          python - <<'PY'
+          from pathlib import Path
+          patch = Path('.github/pr118_nested_patch.py')
+          text = patch.read_text(encoding='utf-8')
+          old = 'throw \\"unsupported protected mutation operation: $MutationOperation\\"'
+          new = "throw 'unsupported protected mutation operation: $MutationOperation'"
+          if old not in text:
+              raise SystemExit('missing generated quoting anchor')
+          patch.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
           python .github/pr118_nested_patch.py
           rm -f .github/pr118_nested_patch.py
           rm -f .github/pr118-nested-regression-trigger.txt

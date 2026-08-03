@@ -37,6 +37,32 @@ $ExistingManagedTaskNames = @(
 
 $RefillTaskName = "MSOS Autobuilder Capacity-One Refill"
 $RefillServiceName = "refill"
+$RefillWitnessMaxAgeSeconds = 600
+$RefillWitnessMaxFutureSkewSeconds = 120
+
+$ProtectedRuntimeRelativePaths = @(
+    "queue/pending",
+    "queue/running",
+    "state/jobs",
+    "state/feed-seen.json",
+    "state/refill-generation.json",
+    "state/refill-generation-history",
+    "state/refill-generation-supersessions",
+    "state/refill-evidence/sources/dispatch-prepared",
+    "state/refill-evidence/dispatch/prepared",
+    "state/refill-evidence/dispatch/submitted",
+    "state/refill-evidence/heads/dispatch/prepared",
+    "state/refill-evidence/heads/dispatch/submitted",
+    "state/results-relay-seen.json",
+    "state/candidate-gate-seen.json",
+    "state/revision-loop-seen.json",
+    "state/controlled-publisher-seen.json",
+    "state/host-evidence",
+    "state/relay-evidence",
+    "state/gate-evidence",
+    "state/revision-evidence",
+    "state/publisher-evidence"
+)
 
 $BootstrapFileMap = @(
     @{ source = "src/msos_autobuilder/self_update_supervisor.py"; target = "self_update_supervisor.py" },
@@ -91,7 +117,8 @@ function Invoke-Checked {
 
 function Get-FileSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
-    return Get-ByteArraySha256 -Bytes ([System.IO.File]::ReadAllBytes($Path))
+    $Bytes = [System.IO.File]::ReadAllBytes($Path)
+    return Get-ByteArraySha256 -Bytes $Bytes
 }
 
 function Get-TextFileEvidence {
@@ -195,8 +222,25 @@ function Get-ActiveReleaseEvidence {
     return $Evidence
 }
 
+function Get-JsonFileEvidence {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $Evidence = Get-TextFileEvidence -Path $Path
+    if (-not $Evidence.exists) { return $Evidence }
+    try {
+        $Value = Get-Content -Path $Path -Raw | ConvertFrom-Json
+    }
+    catch {
+        throw "JSON file is malformed: $Path"
+    }
+    if ($null -eq $Value -or $Value.GetType().Name -notin @("PSCustomObject", "OrderedDictionary", "Hashtable")) {
+        throw "JSON file must contain an object: $Path"
+    }
+    $Evidence["json"] = $Value
+    return $Evidence
+}
+
 function Get-ByteArraySha256 {
-    param([Parameter(Mandatory = $true)][byte[]]$Bytes)
+    param([byte[]]$Bytes)
     $Sha256 = [System.Security.Cryptography.SHA256]::Create()
     try {
         return [System.BitConverter]::ToString($Sha256.ComputeHash($Bytes)).
@@ -525,20 +569,416 @@ function Register-DisabledRefillTask {
     }
 }
 
-function Assert-InstalledScheduledTaskBaseline {
+function Get-ApprovedPowerShellExecutable {
     param([Parameter(Mandatory = $true)][hashtable]$Evidence)
+    $AuthorityActions = @($Evidence[$ExistingManagedTaskNames[0]].actions)
+    if ($AuthorityActions.Count -ne 1) {
+        throw "Managed host Scheduled Task must expose exactly one authority action."
+    }
+    $Executable = [string]$AuthorityActions[0].execute
+    if (-not $Executable) {
+        throw "Managed host Scheduled Task does not expose an approved PowerShell executable."
+    }
+    $ExecutableName = [System.IO.Path]::GetFileName($Executable).ToLowerInvariant()
+    if ($ExecutableName -notin @("powershell.exe", "powershell", "pwsh.exe", "pwsh")) {
+        throw "Managed host Scheduled Task authority executable is not an approved PowerShell executable."
+    }
+    return $Executable
+}
+
+function Split-StrictTaskArguments {
+    param([Parameter(Mandatory = $true)][string]$Arguments)
+    if ($Arguments.IndexOf([char]0) -ge 0 -or $Arguments.Contains("`r") -or $Arguments.Contains("`n")) {
+        throw "Running refill task action contains an unsupported command form."
+    }
+    $Tokens = New-Object System.Collections.Generic.List[string]
+    $Current = New-Object System.Text.StringBuilder
+    $InQuotes = $false
+    for ($Index = 0; $Index -lt $Arguments.Length; $Index++) {
+        $Character = $Arguments[$Index]
+        if ($Character -eq '"') {
+            $InQuotes = -not $InQuotes
+            continue
+        }
+        if (-not $InQuotes -and [char]::IsWhiteSpace($Character)) {
+            if ($Current.Length -gt 0) {
+                $Tokens.Add($Current.ToString())
+                [void]$Current.Clear()
+            }
+            continue
+        }
+        if ($Character -eq '`') {
+            throw "Running refill task action contains an unsupported escape sequence."
+        }
+        [void]$Current.Append($Character)
+    }
+    if ($InQuotes) {
+        throw "Running refill task action contains an unterminated quoted value."
+    }
+    if ($Current.Length -gt 0) {
+        $Tokens.Add($Current.ToString())
+    }
+    return $Tokens.ToArray()
+}
+
+function Get-ProtectedPathEvidence {
+    param(
+        [Parameter(Mandatory = $true)][string]$HostRoot,
+        [Parameter(Mandatory = $true)][string]$RelativePath
+    )
+    $HostFull = [System.IO.Path]::GetFullPath($HostRoot).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $NativeRelative = $RelativePath.Replace("/", [System.IO.Path]::DirectorySeparatorChar)
+    $AbsolutePath = [System.IO.Path]::GetFullPath((Join-Path $HostFull $NativeRelative))
+    $HostPrefix = $HostFull + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $AbsolutePath.StartsWith($HostPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Protected runtime path escaped HostRoot: $RelativePath"
+    }
+
+    $Current = $HostFull
+    if (Test-Path -LiteralPath $Current) {
+        $HostItem = Get-Item -LiteralPath $Current -Force
+        if (($HostItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Protected runtime path traverses a reparse point: ."
+        }
+    }
+    foreach ($Part in $RelativePath.Split('/')) {
+        $Current = Join-Path $Current $Part
+        if (-not (Test-Path -LiteralPath $Current)) { break }
+        $Item = Get-Item -LiteralPath $Current -Force
+        if (($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Protected runtime path traverses a reparse point: $RelativePath"
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $AbsolutePath)) {
+        return @{
+            relative_path = $RelativePath
+            exists = $false
+            kind = "absent"
+            byte_length = $null
+            sha256 = $null
+            inventory = @()
+        }
+    }
+
+    $RootItem = Get-Item -LiteralPath $AbsolutePath -Force
+    if (($RootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Protected runtime path is a reparse point: $RelativePath"
+    }
+    if ($RootItem.PSIsContainer) {
+        $Inventory = New-Object System.Collections.ArrayList
+        $Pending = New-Object System.Collections.Stack
+        $Pending.Push(@{ absolute = $AbsolutePath; relative = "" })
+        while ($Pending.Count -gt 0) {
+            $Directory = $Pending.Pop()
+            $Children = @(Get-ChildItem -LiteralPath $Directory.absolute -Force | Sort-Object Name)
+            foreach ($Child in $Children) {
+                $ChildRelative = if ($Directory.relative) { "$($Directory.relative)/$($Child.Name)" } else { $Child.Name }
+                if (($Child.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                    throw "Protected runtime inventory contains a reparse point: $RelativePath/$ChildRelative"
+                }
+                if ($Child.PSIsContainer) {
+                    [void]$Inventory.Add(@{
+                        relative_path = $ChildRelative.Replace("\\", "/")
+                        kind = "directory"
+                        byte_length = $null
+                        sha256 = $null
+                    })
+                    $Pending.Push(@{ absolute = $Child.FullName; relative = $ChildRelative })
+                }
+                elseif ($Child -is [System.IO.FileInfo]) {
+                    [void]$Inventory.Add(@{
+                        relative_path = $ChildRelative.Replace("\\", "/")
+                        kind = "file"
+                        byte_length = [long]$Child.Length
+                        sha256 = Get-FileSha256 -Path $Child.FullName
+                    })
+                }
+                else {
+                    throw "Protected runtime inventory contains an unsupported filesystem object: $RelativePath/$ChildRelative"
+                }
+            }
+        }
+        $SortedInventory = @($Inventory | Sort-Object relative_path)
+        $Records = @($SortedInventory | ForEach-Object {
+            "{0}`t{1}`t{2}`t{3}" -f $_.relative_path, $_.kind, $_.byte_length, $_.sha256
+        })
+        $InventoryBytes = [System.Text.Encoding]::UTF8.GetBytes(($Records -join "`n"))
+        return @{
+            relative_path = $RelativePath
+            exists = $true
+            kind = "directory"
+            byte_length = $null
+            sha256 = Get-ByteArraySha256 -Bytes $InventoryBytes
+            inventory = $SortedInventory
+        }
+    }
+    if ($RootItem -is [System.IO.FileInfo]) {
+        return @{
+            relative_path = $RelativePath
+            exists = $true
+            kind = "file"
+            byte_length = [long]$RootItem.Length
+            sha256 = Get-FileSha256 -Path $AbsolutePath
+            inventory = @()
+        }
+    }
+    throw "Protected runtime path has an unsupported filesystem type: $RelativePath"
+}
+
+function Get-ProtectedRuntimeStateSnapshot {
+    param([Parameter(Mandatory = $true)][string]$HostRoot)
+    $Paths = @(
+        foreach ($RelativePath in $ProtectedRuntimeRelativePaths) {
+            Get-ProtectedPathEvidence -HostRoot $HostRoot -RelativePath $RelativePath
+        }
+    )
+    return @{
+        version = 1
+        host_root = $HostRoot
+        captured_at = [DateTimeOffset]::UtcNow.ToString("o")
+        paths = $Paths
+    }
+}
+
+function Compare-ProtectedRuntimeStateSnapshots {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Before,
+        [Parameter(Mandatory = $true)][hashtable]$After
+    )
+    $Differences = New-Object System.Collections.ArrayList
+    $BeforeByPath = @{}
+    $AfterByPath = @{}
+    foreach ($Entry in @($Before.paths)) { $BeforeByPath[[string]$Entry.relative_path] = $Entry }
+    foreach ($Entry in @($After.paths)) { $AfterByPath[[string]$Entry.relative_path] = $Entry }
+    foreach ($RelativePath in $ProtectedRuntimeRelativePaths) {
+        $Old = $BeforeByPath[$RelativePath]
+        $New = $AfterByPath[$RelativePath]
+        if ([bool]$Old.exists -ne [bool]$New.exists) {
+            [void]$Differences.Add(@{
+                relative_path = $RelativePath
+                change = if ($New.exists) { "appeared" } else { "disappeared" }
+                before = $Old
+                after = $New
+            })
+            continue
+        }
+        if (-not $Old.exists) { continue }
+        if ([string]$Old.kind -ne [string]$New.kind) {
+            [void]$Differences.Add(@{ relative_path = $RelativePath; change = "type_changed"; before = $Old; after = $New })
+            continue
+        }
+        if ($Old.kind -eq "file") {
+            if ([long]$Old.byte_length -ne [long]$New.byte_length -or [string]$Old.sha256 -ne [string]$New.sha256) {
+                [void]$Differences.Add(@{ relative_path = $RelativePath; change = "content_changed"; before = $Old; after = $New })
+            }
+            continue
+        }
+        $OldChildren = @{}
+        $NewChildren = @{}
+        foreach ($Child in @($Old.inventory)) { $OldChildren[[string]$Child.relative_path] = $Child }
+        foreach ($Child in @($New.inventory)) { $NewChildren[[string]$Child.relative_path] = $Child }
+        $ChildNames = @(@($OldChildren.Keys) + @($NewChildren.Keys) | Sort-Object -Unique)
+        foreach ($ChildName in $ChildNames) {
+            $OldChild = $OldChildren[$ChildName]
+            $NewChild = $NewChildren[$ChildName]
+            if ($null -eq $OldChild) {
+                [void]$Differences.Add(@{ relative_path = "$RelativePath/$ChildName"; change = "child_appeared"; before = $null; after = $NewChild })
+            }
+            elseif ($null -eq $NewChild) {
+                [void]$Differences.Add(@{ relative_path = "$RelativePath/$ChildName"; change = "child_disappeared"; before = $OldChild; after = $null })
+            }
+            elseif ([string]$OldChild.kind -ne [string]$NewChild.kind) {
+                [void]$Differences.Add(@{ relative_path = "$RelativePath/$ChildName"; change = "child_type_changed"; before = $OldChild; after = $NewChild })
+            }
+            elseif ($OldChild.kind -eq "file" -and ([long]$OldChild.byte_length -ne [long]$NewChild.byte_length -or [string]$OldChild.sha256 -ne [string]$NewChild.sha256)) {
+                [void]$Differences.Add(@{ relative_path = "$RelativePath/$ChildName"; change = "child_content_changed"; before = $OldChild; after = $NewChild })
+            }
+        }
+    }
+    return $Differences.ToArray()
+}
+
+function Assert-InstalledScheduledTaskBaseline {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Evidence,
+        [Parameter(Mandatory = $true)][hashtable]$ActiveRelease,
+        [Parameter(Mandatory = $true)][string]$HostRoot,
+        [Parameter(Mandatory = $true)][string]$SupervisorRoot,
+        [string]$ApprovedPowerShellExecutable
+    )
     foreach ($TaskName in $ExistingManagedTaskNames) {
         if (-not $Evidence[$TaskName].exists) {
             throw "Installed Scheduled Task baseline is incomplete: missing $TaskName."
         }
     }
     if ($Evidence[$RefillTaskName].exists) {
-        if ([string]$Evidence[$RefillTaskName].state -ne "Disabled") {
-            throw "Installed Scheduled Task baseline requires refill to be absent or exactly Disabled."
+        $RefillState = [string]$Evidence[$RefillTaskName].state
+        if ($RefillState -eq "Disabled") {
+            return "six-task-disabled-refill"
         }
-        return "six-task-disabled-refill"
+        if ($RefillState -ne "Running") {
+            throw "Installed Scheduled Task baseline requires refill to be absent, exactly Disabled, or exactly Running with a proved paused policy."
+        }
+        if (-not $ApprovedPowerShellExecutable) {
+            throw "Running refill baseline requires an approved PowerShell executable."
+        }
+        Assert-RunningPolicyPausedRefillBaseline -Evidence $Evidence -ActiveRelease $ActiveRelease -HostRoot $HostRoot -SupervisorRoot $SupervisorRoot -ApprovedPowerShellExecutable $ApprovedPowerShellExecutable
+        return "six-task-running-policy-paused"
     }
     return "five-task-refill-absent"
+}
+
+function Assert-RefillTaskActionMatchesStableRunner {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$RefillEvidence,
+        [Parameter(Mandatory = $true)][string]$HostRoot,
+        [Parameter(Mandatory = $true)][string]$SupervisorRoot,
+        [Parameter(Mandatory = $true)][string]$ApprovedPowerShellExecutable
+    )
+    $Actions = @($RefillEvidence.actions)
+    if ($Actions.Count -ne 1) {
+        throw "Running refill task must expose exactly one stable runner action."
+    }
+    $Action = $Actions[0]
+    if ((ConvertTo-ComparablePath -Path ([string]$Action.execute)) -ne (ConvertTo-ComparablePath -Path $ApprovedPowerShellExecutable)) {
+        throw "Running refill task executable does not match the approved PowerShell executable."
+    }
+
+    $Tokens = @(Split-StrictTaskArguments -Arguments ([string]$Action.arguments))
+    $Switches = @{}
+    $Values = @{}
+    $ValueParameters = @("windowstyle", "executionpolicy", "file", "servicename", "supervisorroot", "hostroot")
+    for ($Index = 0; $Index -lt $Tokens.Count; $Index++) {
+        $Token = [string]$Tokens[$Index]
+        if (-not $Token.StartsWith("-")) {
+            throw "Running refill task action contains an unsupported positional command token."
+        }
+        $Name = $Token.TrimStart("-").ToLowerInvariant()
+        if ($Name -eq "command") {
+            throw "Running refill task action may not use PowerShell -Command."
+        }
+        if ($Name -eq "noprofile") {
+            if ($Switches.ContainsKey($Name) -or $Values.ContainsKey($Name)) {
+                throw "Running refill task action contains duplicate parameter -NoProfile."
+            }
+            $Switches[$Name] = $true
+            continue
+        }
+        if ($Name -notin $ValueParameters) {
+            throw "Running refill task action contains unsupported parameter $Token."
+        }
+        if ($Values.ContainsKey($Name) -or $Switches.ContainsKey($Name)) {
+            throw "Running refill task action contains duplicate parameter $Token."
+        }
+        if ($Index + 1 -ge $Tokens.Count -or ([string]$Tokens[$Index + 1]).StartsWith("-")) {
+            throw "Running refill task action parameter $Token is missing its value."
+        }
+        $Index += 1
+        $Values[$Name] = [string]$Tokens[$Index]
+    }
+    if (-not $Switches.ContainsKey("noprofile")) {
+        throw "Running refill task action requires -NoProfile."
+    }
+    if ($Values.ContainsKey("windowstyle") -and [string]$Values["windowstyle"] -ne "Hidden") {
+        throw "Running refill task action -WindowStyle must be exactly Hidden."
+    }
+    if ($Values.ContainsKey("executionpolicy") -and [string]$Values["executionpolicy"] -ne "Bypass") {
+        throw "Running refill task action -ExecutionPolicy must be exactly Bypass."
+    }
+    foreach ($Required in @("file", "servicename", "supervisorroot", "hostroot")) {
+        if (-not $Values.ContainsKey($Required)) {
+            throw "Running refill task action is missing required parameter -$Required."
+        }
+    }
+
+    $ExpectedRunner = Join-Path $SupervisorRoot "bootstrap\run_windows_managed_service.ps1"
+    if ((ConvertTo-ComparablePath -Path ([string]$Values["file"])) -ne (ConvertTo-ComparablePath -Path $ExpectedRunner)) {
+        throw "Running refill task action -File target is not the approved stable runner."
+    }
+    if (-not ([string]$Values["servicename"]).Equals($RefillServiceName, [System.StringComparison]::Ordinal)) {
+        throw "Running refill task action -ServiceName must be exactly refill."
+    }
+    if ((ConvertTo-ComparablePath -Path ([string]$Values["supervisorroot"])) -ne (ConvertTo-ComparablePath -Path $SupervisorRoot)) {
+        throw "Running refill task action SupervisorRoot does not match the installed supervisor configuration."
+    }
+    if ((ConvertTo-ComparablePath -Path ([string]$Values["hostroot"])) -ne (ConvertTo-ComparablePath -Path $HostRoot)) {
+        throw "Running refill task action HostRoot does not match the installed supervisor configuration."
+    }
+}
+
+function Assert-RunningPolicyPausedRefillBaseline {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Evidence,
+        [Parameter(Mandatory = $true)][hashtable]$ActiveRelease,
+        [Parameter(Mandatory = $true)][string]$HostRoot,
+        [Parameter(Mandatory = $true)][string]$SupervisorRoot,
+        [Parameter(Mandatory = $true)][string]$ApprovedPowerShellExecutable
+    )
+    Assert-RefillTaskActionMatchesStableRunner -RefillEvidence $Evidence[$RefillTaskName] -HostRoot $HostRoot -SupervisorRoot $SupervisorRoot -ApprovedPowerShellExecutable $ApprovedPowerShellExecutable
+
+    $ActiveCommit = [string]$ActiveRelease.commit
+    $ReleasePath = [string]$ActiveRelease.release_path
+    if ($ActiveCommit -notmatch "^[0-9a-f]{40}$") {
+        throw "Running refill baseline requires a valid exact active release commit."
+    }
+    if (-not (Test-Path (Join-Path $ReleasePath "src\msos_autobuilder\refill_controller.py") -PathType Leaf)) {
+        throw "Running refill baseline requires active release refill-controller support."
+    }
+
+    $PolicyPath = Join-Path (Join-Path $HostRoot "state") "refill-policy.json"
+    $PolicyEvidence = Get-JsonFileEvidence -Path $PolicyPath
+    if (-not $PolicyEvidence.exists) {
+        throw "Running refill baseline requires an existing paused refill policy."
+    }
+    $Policy = $PolicyEvidence.json
+    if ([int]$Policy.version -ne 1) {
+        throw "Running refill baseline has unsupported refill policy version."
+    }
+    if ($Policy.enabled -ne $false) {
+        throw "Running refill baseline requires refill policy enabled exactly false."
+    }
+    if ([int]$Policy.desired_capacity -ne 0) {
+        throw "Running refill baseline requires refill policy desired_capacity exactly 0."
+    }
+    if ($Policy.PSObject.Properties.Name -contains "status" -and [string]$Policy.status -notin @("", "PAUSED", "paused")) {
+        throw "Running refill baseline has contradictory paused-policy state."
+    }
+
+    $WitnessPath = Join-Path (Join-Path (Join-Path $SupervisorRoot "state") "service-witnesses") "$RefillServiceName.json"
+    $WitnessEvidence = Get-JsonFileEvidence -Path $WitnessPath
+    if (-not $WitnessEvidence.exists) {
+        throw "Running refill baseline requires a fresh refill service witness."
+    }
+    $Witness = $WitnessEvidence.json
+    if ([string]$Witness.state -ne "running") {
+        throw "Running refill baseline requires refill witness state running."
+    }
+    if ([string]$Witness.release_commit -ne $ActiveCommit) {
+        throw "Running refill baseline requires refill witness to match the active release commit."
+    }
+    try {
+        $StartedAt = [DateTimeOffset]::Parse([string]$Witness.started_at)
+    }
+    catch {
+        throw "Running refill baseline requires a parseable refill witness started_at."
+    }
+    $ValidationTime = [DateTimeOffset]::UtcNow
+    $StartedAtUtc = $StartedAt.ToUniversalTime()
+    $WitnessAge = $ValidationTime - $StartedAtUtc
+    if ($WitnessAge.TotalSeconds -lt -$RefillWitnessMaxFutureSkewSeconds) {
+        throw "Running refill baseline witness timestamp exceeds the permitted future clock skew."
+    }
+    if ($WitnessAge.TotalSeconds -gt $RefillWitnessMaxAgeSeconds) {
+        throw "Running refill baseline requires a fresh refill service witness."
+    }
+    $WitnessEvidence["started_at_utc"] = $StartedAtUtc.ToString("o")
+    $WitnessEvidence["validated_at_utc"] = $ValidationTime.ToString("o")
+    $WitnessEvidence["age_seconds"] = [Math]::Round($WitnessAge.TotalSeconds, 3)
+    $WitnessEvidence["max_age_seconds"] = $RefillWitnessMaxAgeSeconds
+    $WitnessEvidence["max_future_skew_seconds"] = $RefillWitnessMaxFutureSkewSeconds
+    $Report.service_configuration["refill_policy_preflight"] = $PolicyEvidence
+    $Report.service_configuration["refill_witness_preflight"] = $WitnessEvidence
 }
 
 function Restore-RefillTask {
@@ -1132,6 +1572,7 @@ $Report = @{
     activation = @{ performed = $false }
     rollback = @{ performed = $false; refill_task_restored = $false }
     update_task = @{ name = $UpdateTaskName; restored = $false }
+    protected_runtime_state = @{ mode = "not_applicable"; allowlist = @($ProtectedRuntimeRelativePaths); before = $null; after = $null; differences = @() }
     outcome = "started"
     errors = @()
     recorded_at = $null
@@ -1160,11 +1601,16 @@ try {
     }
     $SupervisorConfigPath = Join-Path $BootstrapRoot "supervisor.yaml"
     $ManagedServicesPath = Join-Path $BootstrapRoot "managed-services.json"
-    $ActivePointerPath = Join-Path (Join-Path $SupervisorRoot "state") "active-release.json"
+    $SupervisorStateRoot = Join-Path $SupervisorRoot "state"
+    $ActivePointerPath = Join-Path $SupervisorStateRoot "active-release.json"
+    $PreviousPointerPath = Join-Path $SupervisorStateRoot "previous-release.json"
+    $RefillPolicyPath = Join-Path (Join-Path $HostRoot "state") "refill-policy.json"
     $Report.service_configuration["preflight"] = @{
         supervisor = Get-TextFileEvidence -Path $SupervisorConfigPath
         managed_services = Get-TextFileEvidence -Path $ManagedServicesPath
         active_release = Get-ActiveReleaseEvidence -Path $ActivePointerPath
+        previous_release = Get-TextFileEvidence -Path $PreviousPointerPath
+        refill_policy = Get-TextFileEvidence -Path $RefillPolicyPath
     }
     if (-not $Report.service_configuration["preflight"]["active_release"].exists) {
         throw "Installed managed release pointer is missing; refusing an unbound bootstrap handoff."
@@ -1174,8 +1620,16 @@ try {
         $TaskEvidence[$TaskName] = Get-ScheduledTaskEvidence -TaskName $TaskName
     }
     $Report.scheduled_tasks["preflight"] = $TaskEvidence
-    $InstalledTaskBaselineMode = Assert-InstalledScheduledTaskBaseline -Evidence $TaskEvidence
+    $ApprovedPowerShellExecutable = $null
+    if ($TaskEvidence[$RefillTaskName].exists -and [string]$TaskEvidence[$RefillTaskName].state -eq "Running") {
+        $ApprovedPowerShellExecutable = Get-ApprovedPowerShellExecutable -Evidence $TaskEvidence
+    }
+    $InstalledTaskBaselineMode = Assert-InstalledScheduledTaskBaseline -Evidence $TaskEvidence -ActiveRelease $Report.service_configuration["preflight"]["active_release"] -HostRoot $HostRoot -SupervisorRoot $SupervisorRoot -ApprovedPowerShellExecutable $ApprovedPowerShellExecutable
     $Report.scheduled_tasks["baseline_mode"] = $InstalledTaskBaselineMode
+    if ($InstalledTaskBaselineMode -eq "six-task-running-policy-paused") {
+        $Report.protected_runtime_state["mode"] = $InstalledTaskBaselineMode
+        $Report.protected_runtime_state["before"] = Get-ProtectedRuntimeStateSnapshot -HostRoot $HostRoot
+    }
 
     Test-ReportPathWritable -Path $ReportPath
     Get-BootstrapHashEvidence -RepoRoot $RepoRoot -BootstrapRoot $BootstrapRoot -OldCommit $ExpectedOldBootstrapCommit -NewCommit $Commit -Evidence $Report.file_hashes
@@ -1230,12 +1684,21 @@ try {
         Register-DisabledRefillTask -SupervisorRoot $SupervisorRoot -HostRoot $HostRoot -BackupXmlPath $RefillTaskBackupXml
     }
     $Report.scheduled_tasks["staged_refill"] = Get-ScheduledTaskEvidence -TaskName $RefillTaskName
-    if ([string]$Report.scheduled_tasks["staged_refill"].state -ne "Disabled") {
+    $ExpectedRefillState = if ($InstalledTaskBaselineMode -eq "six-task-running-policy-paused") { "Running" } else { "Disabled" }
+    if ([string]$Report.scheduled_tasks["staged_refill"].state -ne $ExpectedRefillState) {
+        throw "Refill task must remain exactly $ExpectedRefillState for $InstalledTaskBaselineMode."
+    }
+    if ($InstalledTaskBaselineMode -ne "six-task-running-policy-paused" -and [string]$Report.scheduled_tasks["staged_refill"].state -ne "Disabled") {
         throw "Refill task must remain exactly Disabled until a later managed-release cutover."
     }
-    $RefillAction = @($Report.scheduled_tasks["staged_refill"].actions)[0]
-    if ($null -eq $RefillAction -or [string]$RefillAction.arguments -notlike "*-HostRoot `"$HostRoot`"*") {
-        throw "Refill task HostRoot does not match the installed supervisor configuration."
+    if ($InstalledTaskBaselineMode -eq "six-task-running-policy-paused") {
+        Assert-RefillTaskActionMatchesStableRunner -RefillEvidence $Report.scheduled_tasks["staged_refill"] -HostRoot $HostRoot -SupervisorRoot $SupervisorRoot -ApprovedPowerShellExecutable $ApprovedPowerShellExecutable
+    }
+    else {
+        $RefillAction = @($Report.scheduled_tasks["staged_refill"].actions)[0]
+        if ($null -eq $RefillAction -or (ConvertTo-ComparablePath -Path ([string]$RefillAction.arguments)) -notlike ("*" + (ConvertTo-ComparablePath -Path $HostRoot) + "*")) {
+            throw "Refill task HostRoot does not match the installed supervisor configuration."
+        }
     }
     Invoke-Checked -Name "staged Python to PowerShell states transport" -Results $ValidationResults -Command {
         Test-StagedTaskTransport -BootstrapRoot $StagedBootstrap -BootstrapPython $BootstrapPython | ConvertTo-Json -Compress
@@ -1276,6 +1739,48 @@ try {
         $Report.activation["selected_services"] = @($RestartWitness.selected_services)
         $Report.activation["disabled_services"] = @($RestartWitness.disabled_services)
         $Report.activation["legacy_restart_witness"] = $RestartWitness
+        if ($InstalledTaskBaselineMode -eq "six-task-running-policy-paused") {
+            $PostRefillEvidence = Get-ScheduledTaskEvidence -TaskName $RefillTaskName
+            $Report.scheduled_tasks["post_handoff_refill"] = $PostRefillEvidence
+            Assert-RefillTaskActionMatchesStableRunner -RefillEvidence $PostRefillEvidence -HostRoot $HostRoot -SupervisorRoot $SupervisorRoot -ApprovedPowerShellExecutable $ApprovedPowerShellExecutable
+            try {
+                $ProtectedAfter = Get-ProtectedRuntimeStateSnapshot -HostRoot $HostRoot
+                $Report.protected_runtime_state["after"] = $ProtectedAfter
+                $ProtectedDifferences = @(Compare-ProtectedRuntimeStateSnapshots -Before $Report.protected_runtime_state["before"] -After $ProtectedAfter)
+                $Report.protected_runtime_state["differences"] = $ProtectedDifferences
+            }
+            catch {
+                $Report.protected_runtime_state["snapshot_error"] = $_.Exception.Message
+                throw
+            }
+            if ($ProtectedDifferences.Count -gt 0) {
+                throw "Protected runtime state changed during policy-paused bootstrap handoff."
+            }
+            $PostActiveRelease = Get-TextFileEvidence -Path $ActivePointerPath
+            $PostPreviousRelease = Get-TextFileEvidence -Path $PreviousPointerPath
+            $PostRefillPolicy = Get-TextFileEvidence -Path $RefillPolicyPath
+            if ([string]$PostActiveRelease.sha256 -ne [string]$Report.service_configuration["preflight"]["active_release"].sha256) {
+                throw "active-release.json changed during policy-paused bootstrap handoff."
+            }
+            if ([string]$PostPreviousRelease.sha256 -ne [string]$Report.service_configuration["preflight"]["previous_release"].sha256) {
+                throw "previous-release.json changed during policy-paused bootstrap handoff."
+            }
+            if ([string]$PostRefillPolicy.sha256 -ne [string]$Report.service_configuration["preflight"]["refill_policy"].sha256) {
+                throw "refill-policy.json changed during policy-paused bootstrap handoff."
+            }
+            $Report.service_configuration["post_handoff_invariants"] = @{
+                active_release = $PostActiveRelease
+                previous_release = $PostPreviousRelease
+                refill_policy = $PostRefillPolicy
+            }
+            if ([string](Get-ScheduledTask -TaskName $RefillTaskName -ErrorAction Stop).State -ne "Running") {
+                throw "Policy-paused refill task did not return to Running."
+            }
+            $RefillWitness = $RestartWitness.health.witnesses.refill
+            if ($null -eq $RefillWitness -or [string]$RefillWitness.release_commit -ne [string]$Report.service_configuration["preflight"]["active_release"].commit -or [string]$RefillWitness.state -ne "running") {
+                throw "Policy-paused refill witness is not fresh and bound to the unchanged active release."
+            }
+        }
         $Report.activation["status"] = "restart_witness_passed"
         $Report.outcome = "success"
     }

@@ -162,7 +162,6 @@ def test_cleanup_refuses_release_temp_symlink_and_preserves_target(tmp_path: Pat
     assert sentinel.read_text(encoding="utf-8") == "keep"
 
 
-
 def test_cleanup_unlinks_nested_symlink_without_traversing_target(tmp_path: Path) -> None:
     config = _config(tmp_path)
     candidate = _staging_pytest_temp_dir(config, _manifest())

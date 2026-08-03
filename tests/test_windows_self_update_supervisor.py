@@ -2596,6 +2596,56 @@ def test_stable_bootstrap_handoff_rejects_noncanonical_refill_action(
     assert report["activation"]["performed"] is False
 
 
+@pytest.mark.parametrize(
+    ("wrong_field", "message"),
+    [("host", "HostRoot"), ("supervisor", "SupervisorRoot")],
+)
+def test_stable_bootstrap_handoff_rejects_wrong_refill_root_value(
+    tmp_path: Path,
+    wrong_field: str,
+    message: str,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    _prepare_policy_paused_refill_runtime(fixture)
+    host_root = fixture["host_root"]
+    supervisor = fixture["supervisor"]
+    assert isinstance(host_root, Path)
+    assert isinstance(supervisor, Path)
+    runner = supervisor / "bootstrap" / "run_windows_managed_service.ps1"
+    action_host = "C:/wrong-host-root" if wrong_field == "host" else host_root.as_posix()
+    action_supervisor = (
+        "C:/wrong-supervisor-root"
+        if wrong_field == "supervisor"
+        else supervisor.as_posix()
+    )
+    suffix = f"""
+$global:RefillAction.Arguments = (
+    '-NoProfile -File "{runner.as_posix()}" ' +
+    '-ServiceName refill ' +
+    '-SupervisorRoot "{action_supervisor}" ' +
+    '-HostRoot "{action_host}"'
+)
+"""
+
+    result, _calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=_running_refill_before_script(fixture) + suffix,
+    )
+
+    assert result.returncode != 0
+    report = _read_handoff_report(fixture)
+    assert message in json.dumps(report)
+    assert report["activation"]["performed"] is False
+
+
+
 def test_stable_bootstrap_handoff_rejects_refill_action_changed_during_restart(
     tmp_path: Path,
 ) -> None:

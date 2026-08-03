@@ -878,7 +878,10 @@ def _stubbed_task_control_script(
             "            throw 'simulated restart witness start failure'",
             "        }",
             "    }",
-            "    if (-not $script:ProtectedMutationApplied -and $TaskName -eq 'MSOS Autobuilder Host') {",
+            (
+                "    if (-not $script:ProtectedMutationApplied -and "
+                "$TaskName -eq 'MSOS Autobuilder Host') {"
+            ),
             "        $MutationPath = $env:MSOS_STUBBED_PROTECTED_MUTATION_PATH",
             "        $MutationOperation = $env:MSOS_STUBBED_PROTECTED_MUTATION_OPERATION",
             "        if ($MutationPath -and $MutationOperation) {",
@@ -887,11 +890,17 @@ def _stubbed_task_control_script(
             "                'append' { Add-Content -Path $MutationPath -Value 'changed' }",
             "                'create' {",
             "                    $MutationParent = Split-Path -Parent $MutationPath",
-            "                    New-Item -ItemType Directory -Force -Path $MutationParent | Out-Null",
+            (
+                "                    New-Item -ItemType Directory -Force "
+                "-Path $MutationParent | Out-Null"
+            ),
             "                    New-Item -ItemType File -Force -Path $MutationPath | Out-Null",
             "                }",
             "                'delete' { Remove-Item -Force $MutationPath }",
-            "                default { throw 'unsupported protected mutation operation: $MutationOperation' }",
+            (
+                "                default { throw 'unsupported protected "
+                "mutation operation: $MutationOperation' }"
+            ),
             "            }",
             "        }",
             "    }",

@@ -1,0 +1,63 @@
+# Convenience allow-rules for read-only repository and GitHub inspection.
+# These rules reduce friction but are not a security boundary. The workspace sandbox,
+# auto-review, AGENTS.md, and explicit task envelope remain authoritative.
+
+prefix_rule(
+    pattern = ["git", "status"],
+    decision = "allow",
+    justification = "Read-only worktree inspection.",
+)
+
+prefix_rule(
+    pattern = ["git", "diff"],
+    decision = "allow",
+    justification = "Read-only diff inspection.",
+)
+
+prefix_rule(
+    pattern = ["git", "log"],
+    decision = "allow",
+    justification = "Read-only commit-history inspection.",
+)
+
+prefix_rule(
+    pattern = ["git", "show"],
+    decision = "allow",
+    justification = "Read-only Git object inspection.",
+)
+
+prefix_rule(
+    pattern = ["git", "rev-parse"],
+    decision = "allow",
+    justification = "Read-only commit and repository identity inspection.",
+)
+
+prefix_rule(
+    pattern = ["git", "merge-base"],
+    decision = "allow",
+    justification = "Read-only ancestry inspection.",
+)
+
+prefix_rule(
+    pattern = ["git", "branch", "--show-current"],
+    decision = "allow",
+    justification = "Read-only current-branch inspection.",
+)
+
+prefix_rule(
+    pattern = ["git", "ls-files"],
+    decision = "allow",
+    justification = "Read-only tracked-file inspection.",
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", ["view", "list", "checks", "diff"]],
+    decision = "allow",
+    justification = "Read-only GitHub pull-request inspection.",
+)
+
+prefix_rule(
+    pattern = ["gh", "issue", ["view", "list"]],
+    decision = "allow",
+    justification = "Read-only GitHub issue inspection.",
+)

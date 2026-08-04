@@ -1,0 +1,5 @@
+# Project-local Codex defaults.
+# This file is applied only when the repository is trusted by the local Codex client.
+
+sandbox_mode = "workspace-write"
+approvals_reviewer = "auto_review"

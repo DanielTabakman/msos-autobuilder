@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
@@ -148,6 +149,15 @@ def test_installer_preserves_external_supervisor_and_atomic_release_boundary() -
     assert "versions" in script
     assert "active-release.json" in script
     assert "Move-Item -Force -Path $Temporary -Destination $Path" in script
+    assert '[string]$TaskNamespace = ""' in script
+    assert '$PSBoundParameters.ContainsKey("TaskNamespace")' in script
+    assert "TaskNamespace was explicitly supplied but is blank" in script
+    assert "$EffectiveTaskNamespace" in script
+    assert "MSOS_INSTALLER_TASK_NAMESPACE_PROBE" in script
+    assert "Resolve-InstallerTaskNames" in script
+    assert "Assert-InstallerTaskNamespaceReady" in script
+    assert "GetInvalidFileNameChars" in script
+    assert "letters, digits, spaces, '.', '_', or '-'" in script
     assert "MSOS Autobuilder Update Supervisor" in script
     assert "MSOS Autobuilder Host" in script
     assert "MSOS Autobuilder Result Relay" in script
@@ -174,6 +184,639 @@ def test_installer_preserves_external_supervisor_and_atomic_release_boundary() -
     assert "git pull" not in script.lower()
     assert "push --force" not in script.lower()
     assert "merge_pull_request" not in script
+    assert script.index(
+        "Assert-InstallerTaskNamespaceReady -ResolvedNames $ResolvedTaskNames"
+    ) < script.index("New-ManagedTask -TaskName $Managed.task")
+    assert script.index(
+        "Assert-InstallerTaskNamespaceReady -ResolvedNames $ResolvedTaskNames"
+    ) < script.index("Register-ScheduledTask -TaskName $UpdateTaskName")
+    assert "Isolated task name collides with protected production task name" in script
+    assert "overlaps protected Issue #50" in script
+    assert "resolves through a reparse point" in script
+    assert "Duplicate scheduled task name resolved" in script
+    assert "Isolated pilot refill remains paused" in script
+    assert "plans: {}" in script
+
+
+PRODUCTION_TASK_NAMES = [
+    *MANAGED_TASK_NAMES,
+    "MSOS Autobuilder Update Supervisor",
+]
+
+
+def _powershell_test_env(*, userprofile_root: Path | None = None) -> dict[str, str]:
+    """Ensure PowerShell subprocesses have a non-null USERPROFILE.
+
+    Windows keeps the real USERPROFILE. Linux CI gets a deterministic test-owned path
+    because Ubuntu runners leave USERPROFILE unset while the installer reads it for
+    protected Issue #50 roots.
+    """
+    env = os.environ.copy()
+    existing = (env.get("USERPROFILE") or "").strip()
+    if os.name == "nt" and existing:
+        return env
+    if existing:
+        return env
+    root = userprofile_root or (
+        Path(tempfile.gettempdir()) / "msos-autobuilder-ci-userprofile"
+    )
+    root.mkdir(parents=True, exist_ok=True)
+    env["USERPROFILE"] = str(root)
+    return env
+
+
+def _installer_helper_prelude() -> str:
+    return f"""
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$InstallerPath = '{INSTALLER.as_posix()}'
+$Tokens = $null
+$Errors = $null
+$Ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $InstallerPath,
+    [ref]$Tokens,
+    [ref]$Errors
+)
+if ($Errors -and $Errors.Count -gt 0) {{
+    throw ("Installer parse failed: " + ($Errors | ForEach-Object {{ $_.ToString() }} | Out-String))
+}}
+$Wanted = @(
+    'Get-NormalizedTaskNamespace',
+    'Get-NamespacedTaskName',
+    'Get-ProductionTaskNames',
+    'Resolve-InstallerTaskNames',
+    'Test-RootPathOverlap',
+    'Assert-PathHasNoReparsePoints',
+    'Assert-InstallerTaskNamespaceReady'
+)
+foreach ($Name in $Wanted) {{
+    $FunctionAst = $Ast.Find({{
+            param($Node)
+            $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $Node.Name -eq $Name
+        }}, $true) | Select-Object -First 1
+    if (-not $FunctionAst) {{ throw "Missing installer helper: $Name" }}
+    Invoke-Expression $FunctionAst.Extent.Text
+}}
+$script:MaxScheduledTaskNameLength = 238
+$script:ProductionManagedTaskRoles = @(
+    @{{ service = 'host'; role = 'Host' }},
+    @{{ service = 'relay'; role = 'Result Relay' }},
+    @{{ service = 'gate'; role = 'Candidate Gate' }},
+    @{{ service = 'revision'; role = 'Revision Loop' }},
+    @{{ service = 'publisher'; role = 'Controlled Publisher' }},
+    @{{ service = 'refill'; role = 'Capacity-One Refill' }}
+)
+$script:UpdateSupervisorRole = 'Update Supervisor'
+$script:ProtectedProductionTaskNames = @(
+    'MSOS Autobuilder Host',
+    'MSOS Autobuilder Result Relay',
+    'MSOS Autobuilder Candidate Gate',
+    'MSOS Autobuilder Revision Loop',
+    'MSOS Autobuilder Controlled Publisher',
+    'MSOS Autobuilder Capacity-One Refill',
+    'MSOS Autobuilder Update Supervisor'
+)
+$script:ProtectedProductionHostRoot = [System.IO.Path]::GetFullPath(
+    (Join-Path $env:USERPROFILE '.msos-autobuilder')
+)
+$script:ProtectedProductionSupervisorRoot = [System.IO.Path]::GetFullPath(
+    (Join-Path $env:USERPROFILE '.msos-autobuilder-supervisor')
+)
+"""
+
+
+def _run_installer_helper_script(script: str) -> subprocess.CompletedProcess[str]:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+    command = _installer_helper_prelude() + "\n" + script
+    return subprocess.run(
+        [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        env=_powershell_test_env(),
+    )
+
+
+def _run_installer_binding_probe(
+    tmp_path: Path,
+    *,
+    task_namespace: str | None = None,
+    bind_task_namespace: bool = False,
+    host_root: Path | None = None,
+    supervisor_root: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Invoke the real installer -File path; probe exits after binding validation."""
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    host = host_root or (tmp_path / "binding-host")
+    supervisor = supervisor_root or (tmp_path / "binding-supervisor")
+    marker = tmp_path / "mutation-marker.txt"
+    argv = [
+        powershell,
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(INSTALLER),
+        "-HostRoot",
+        str(host),
+        "-SupervisorRoot",
+        str(supervisor),
+    ]
+    if bind_task_namespace:
+        argv.extend(
+            ["-TaskNamespace", task_namespace if task_namespace is not None else ""]
+        )
+
+    env = _powershell_test_env(userprofile_root=tmp_path / "ci-userprofile")
+    env["MSOS_INSTALLER_TASK_NAMESPACE_PROBE"] = "1"
+    # If validation somehow continued past the probe, later paths must not look like success.
+    env["MSOS_BINDING_MUTATION_MARKER"] = str(marker)
+    return subprocess.run(
+        argv,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        env=env,
+        cwd=str(ROOT),
+    )
+
+
+def test_installer_default_task_namespace_preserves_production_names() -> None:
+    result = _run_installer_helper_script(
+        r"""
+$Resolved = Resolve-InstallerTaskNames -Namespace ''
+Assert-InstallerTaskNamespaceReady `
+  -ResolvedNames $Resolved `
+  -HostRootPath (Join-Path $env:USERPROFILE 'msos-test-host') `
+  -SupervisorRootPath (Join-Path $env:USERPROFILE 'msos-test-supervisor')
+$Names = @($Resolved.managed_tasks | ForEach-Object { $_.task }) + @($Resolved.update_task_name)
+$Names | ConvertTo-Json -Compress
+Write-Output ("isolated=" + $Resolved.isolated)
+"""
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    payload = result.stdout.strip().splitlines()
+    names = json.loads(payload[0])
+    assert names == PRODUCTION_TASK_NAMES
+    assert payload[-1].strip() == "isolated=False"
+
+
+def test_installer_binding_omitted_task_namespace_preserves_production_names(
+    tmp_path: Path,
+) -> None:
+    host = tmp_path / "omitted-host"
+    supervisor = tmp_path / "omitted-supervisor"
+    result = _run_installer_binding_probe(
+        tmp_path,
+        bind_task_namespace=False,
+        host_root=host,
+        supervisor_root=supervisor,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["task_namespace_was_bound"] is False
+    assert payload["effective_namespace"] == ""
+    assert payload["isolated"] is False
+    names = [entry["task"] for entry in payload["managed_tasks"]]
+    names.append(payload["update_task_name"])
+    assert names == PRODUCTION_TASK_NAMES
+    assert not host.exists()
+    assert not supervisor.exists()
+
+
+@pytest.mark.parametrize(
+    ("bound_value", "expected_fragment"),
+    [
+        ("", "explicitly supplied but is blank"),
+        ("   ", "explicitly supplied but is blank"),
+        ("Pilot:Issue119", "TaskNamespace is malformed"),
+    ],
+)
+def test_installer_binding_rejects_blank_or_colon_task_namespace(
+    tmp_path: Path,
+    bound_value: str,
+    expected_fragment: str,
+) -> None:
+    host = tmp_path / "reject-host"
+    supervisor = tmp_path / "reject-supervisor"
+    result = _run_installer_binding_probe(
+        tmp_path,
+        bind_task_namespace=True,
+        task_namespace=bound_value,
+        host_root=host,
+        supervisor_root=supervisor,
+    )
+    assert result.returncode != 0
+    combined = (result.stdout or "") + (result.stderr or "")
+    assert expected_fragment in combined
+    assert not host.exists()
+    assert not supervisor.exists()
+
+
+def test_installer_binding_pilot_namespace_generates_distinct_names(
+    tmp_path: Path,
+) -> None:
+    host = tmp_path / "pilot-host"
+    supervisor = tmp_path / "pilot-supervisor"
+    protected_host = Path.home() / ".msos-autobuilder"
+    protected_supervisor = Path.home() / ".msos-autobuilder-supervisor"
+    # Keep pilot roots outside protected production defaults.
+    host_key = str(host.resolve()).lower()
+    protected_prefix = str(protected_host.resolve()).lower() + os.sep
+    assert not host_key.startswith(protected_prefix)
+    result = _run_installer_binding_probe(
+        tmp_path,
+        bind_task_namespace=True,
+        task_namespace="Pilot Issue119",
+        host_root=host,
+        supervisor_root=supervisor,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["task_namespace_was_bound"] is True
+    assert payload["effective_namespace"] == "Pilot Issue119"
+    assert payload["isolated"] is True
+    names = [entry["task"] for entry in payload["managed_tasks"]]
+    names.append(payload["update_task_name"])
+    expected = [
+        "MSOS Autobuilder Pilot Issue119 Host",
+        "MSOS Autobuilder Pilot Issue119 Result Relay",
+        "MSOS Autobuilder Pilot Issue119 Candidate Gate",
+        "MSOS Autobuilder Pilot Issue119 Revision Loop",
+        "MSOS Autobuilder Pilot Issue119 Controlled Publisher",
+        "MSOS Autobuilder Pilot Issue119 Capacity-One Refill",
+        "MSOS Autobuilder Pilot Issue119 Update Supervisor",
+    ]
+    assert names == expected
+    assert len(set(names)) == 7
+    assert set(names).isdisjoint(PRODUCTION_TASK_NAMES)
+    assert not host.exists()
+    assert not supervisor.exists()
+    del protected_supervisor
+
+
+def test_installer_pilot_task_namespace_generates_distinct_names() -> None:
+    result = _run_installer_helper_script(
+        r"""
+$Resolved = Resolve-InstallerTaskNames -Namespace 'Pilot Issue119'
+$Names = @($Resolved.managed_tasks | ForEach-Object { $_.task }) + @($Resolved.update_task_name)
+$Names | ConvertTo-Json -Compress
+"""
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    names = json.loads(result.stdout.strip().splitlines()[-1])
+    expected = [
+        "MSOS Autobuilder Pilot Issue119 Host",
+        "MSOS Autobuilder Pilot Issue119 Result Relay",
+        "MSOS Autobuilder Pilot Issue119 Candidate Gate",
+        "MSOS Autobuilder Pilot Issue119 Revision Loop",
+        "MSOS Autobuilder Pilot Issue119 Controlled Publisher",
+        "MSOS Autobuilder Pilot Issue119 Capacity-One Refill",
+        "MSOS Autobuilder Pilot Issue119 Update Supervisor",
+    ]
+    assert names == expected
+    assert len(set(names)) == 7
+    assert set(names).isdisjoint(PRODUCTION_TASK_NAMES)
+
+
+def test_installer_task_namespace_rejects_malformed_and_overlong_names(
+    tmp_path: Path,
+) -> None:
+    host = tmp_path / "pilot-host"
+    supervisor = tmp_path / "pilot-supervisor"
+    protected_host = tmp_path / "protected-host"
+    protected_supervisor = tmp_path / "protected-supervisor"
+    for path in (host, supervisor, protected_host, protected_supervisor):
+        path.mkdir()
+
+    malformed = _run_installer_helper_script(
+        f"""
+$Resolved = Resolve-InstallerTaskNames -Namespace 'bad/name'
+try {{
+  Assert-InstallerTaskNamespaceReady -ResolvedNames $Resolved `
+    -HostRootPath '{host.as_posix()}' `
+    -SupervisorRootPath '{supervisor.as_posix()}' `
+    -ProtectedHostRoot '{protected_host.as_posix()}' `
+    -ProtectedSupervisorRoot '{protected_supervisor.as_posix()}'
+  throw 'expected malformed namespace failure'
+}} catch {{
+  Write-Output $_.Exception.Message
+  exit 0
+}}
+"""
+    )
+    assert malformed.returncode == 0, malformed.stderr or malformed.stdout
+    assert "TaskNamespace is malformed" in malformed.stdout
+
+    colon = _run_installer_helper_script(
+        f"""
+$Resolved = Resolve-InstallerTaskNames -Namespace 'Pilot:Issue119'
+try {{
+  Assert-InstallerTaskNamespaceReady -ResolvedNames $Resolved `
+    -HostRootPath '{host.as_posix()}' `
+    -SupervisorRootPath '{supervisor.as_posix()}' `
+    -ProtectedHostRoot '{protected_host.as_posix()}' `
+    -ProtectedSupervisorRoot '{protected_supervisor.as_posix()}'
+  throw 'expected colon namespace failure'
+}} catch {{
+  Write-Output $_.Exception.Message
+  exit 0
+}}
+"""
+    )
+    assert colon.returncode == 0, colon.stderr or colon.stdout
+    assert "TaskNamespace is malformed" in colon.stdout
+
+    illegal_name = _run_installer_helper_script(
+        f"""
+$Resolved = [pscustomobject]@{{
+  namespace = 'Pilot'
+  isolated = $true
+  managed_tasks = @(
+    [pscustomobject]@{{
+      service = 'host'
+      # '/' is invalid on Windows and Linux; '<' is Windows-only.
+      task = 'MSOS Autobuilder Pilot/Host'
+    }},
+    [pscustomobject]@{{
+      service = 'relay'
+      task = 'MSOS Autobuilder Pilot Result Relay'
+    }},
+    [pscustomobject]@{{
+      service = 'gate'
+      task = 'MSOS Autobuilder Pilot Candidate Gate'
+    }},
+    [pscustomobject]@{{
+      service = 'revision'
+      task = 'MSOS Autobuilder Pilot Revision Loop'
+    }},
+    [pscustomobject]@{{
+      service = 'publisher'
+      task = 'MSOS Autobuilder Pilot Controlled Publisher'
+    }},
+    [pscustomobject]@{{
+      service = 'refill'
+      task = 'MSOS Autobuilder Pilot Capacity-One Refill'
+    }}
+  )
+  update_task_name = 'MSOS Autobuilder Pilot Update Supervisor'
+}}
+try {{
+  Assert-InstallerTaskNamespaceReady -ResolvedNames $Resolved `
+    -HostRootPath '{host.as_posix()}' `
+    -SupervisorRootPath '{supervisor.as_posix()}' `
+    -ProtectedHostRoot '{protected_host.as_posix()}' `
+    -ProtectedSupervisorRoot '{protected_supervisor.as_posix()}'
+  throw 'expected illegal character failure'
+}} catch {{
+  Write-Output $_.Exception.Message
+  exit 0
+}}
+"""
+    )
+    assert illegal_name.returncode == 0, illegal_name.stderr or illegal_name.stdout
+    assert "contains illegal characters" in illegal_name.stdout
+
+    overlong_name = "N" * 239
+    overlong = _run_installer_helper_script(
+        f"""
+$Resolved = [pscustomobject]@{{
+  namespace = 'Pilot'
+  isolated = $true
+  managed_tasks = @(
+    [pscustomobject]@{{ service = 'host'; task = '{overlong_name}' }},
+    [pscustomobject]@{{
+      service = 'relay'
+      task = 'MSOS Autobuilder Pilot Result Relay'
+    }},
+    [pscustomobject]@{{
+      service = 'gate'
+      task = 'MSOS Autobuilder Pilot Candidate Gate'
+    }},
+    [pscustomobject]@{{
+      service = 'revision'
+      task = 'MSOS Autobuilder Pilot Revision Loop'
+    }},
+    [pscustomobject]@{{
+      service = 'publisher'
+      task = 'MSOS Autobuilder Pilot Controlled Publisher'
+    }},
+    [pscustomobject]@{{
+      service = 'refill'
+      task = 'MSOS Autobuilder Pilot Capacity-One Refill'
+    }}
+  )
+  update_task_name = 'MSOS Autobuilder Pilot Update Supervisor'
+}}
+try {{
+  Assert-InstallerTaskNamespaceReady -ResolvedNames $Resolved `
+    -HostRootPath '{host.as_posix()}' `
+    -SupervisorRootPath '{supervisor.as_posix()}' `
+    -ProtectedHostRoot '{protected_host.as_posix()}' `
+    -ProtectedSupervisorRoot '{protected_supervisor.as_posix()}'
+  throw 'expected overlong failure'
+}} catch {{
+  Write-Output $_.Exception.Message
+  exit 0
+}}
+"""
+    )
+    assert overlong.returncode == 0, overlong.stderr or overlong.stdout
+    assert "exceeds Windows limit" in overlong.stdout
+
+
+def test_installer_task_namespace_rejects_collision_and_duplicate_names(
+    tmp_path: Path,
+) -> None:
+    host = tmp_path / "pilot-host"
+    supervisor = tmp_path / "pilot-supervisor"
+    protected_host = tmp_path / "protected-host"
+    protected_supervisor = tmp_path / "protected-supervisor"
+    for path in (host, supervisor, protected_host, protected_supervisor):
+        path.mkdir()
+
+    collision = _run_installer_helper_script(
+        f"""
+$Resolved = [pscustomobject]@{{
+  namespace = 'Pilot'
+  isolated = $true
+  managed_tasks = @(
+    [pscustomobject]@{{ service = 'host'; task = 'MSOS Autobuilder Host' }},
+    [pscustomobject]@{{
+      service = 'relay'
+      task = 'MSOS Autobuilder Pilot Result Relay'
+    }},
+    [pscustomobject]@{{
+      service = 'gate'
+      task = 'MSOS Autobuilder Pilot Candidate Gate'
+    }},
+    [pscustomobject]@{{
+      service = 'revision'
+      task = 'MSOS Autobuilder Pilot Revision Loop'
+    }},
+    [pscustomobject]@{{
+      service = 'publisher'
+      task = 'MSOS Autobuilder Pilot Controlled Publisher'
+    }},
+    [pscustomobject]@{{
+      service = 'refill'
+      task = 'MSOS Autobuilder Pilot Capacity-One Refill'
+    }}
+  )
+  update_task_name = 'MSOS Autobuilder Pilot Update Supervisor'
+}}
+try {{
+  Assert-InstallerTaskNamespaceReady -ResolvedNames $Resolved `
+    -HostRootPath '{host.as_posix()}' `
+    -SupervisorRootPath '{supervisor.as_posix()}' `
+    -ProtectedHostRoot '{protected_host.as_posix()}' `
+    -ProtectedSupervisorRoot '{protected_supervisor.as_posix()}'
+  throw 'expected collision failure'
+}} catch {{
+  Write-Output $_.Exception.Message
+  exit 0
+}}
+"""
+    )
+    assert collision.returncode == 0, collision.stderr or collision.stdout
+    assert "collides with protected production task name" in collision.stdout
+
+    duplicate = _run_installer_helper_script(
+        f"""
+$Resolved = [pscustomobject]@{{
+  namespace = 'Pilot'
+  isolated = $true
+  managed_tasks = @(
+    [pscustomobject]@{{
+      service = 'host'
+      task = 'MSOS Autobuilder Pilot Host'
+    }},
+    [pscustomobject]@{{
+      service = 'relay'
+      task = 'MSOS Autobuilder Pilot Host'
+    }},
+    [pscustomobject]@{{
+      service = 'gate'
+      task = 'MSOS Autobuilder Pilot Candidate Gate'
+    }},
+    [pscustomobject]@{{
+      service = 'revision'
+      task = 'MSOS Autobuilder Pilot Revision Loop'
+    }},
+    [pscustomobject]@{{
+      service = 'publisher'
+      task = 'MSOS Autobuilder Pilot Controlled Publisher'
+    }},
+    [pscustomobject]@{{
+      service = 'refill'
+      task = 'MSOS Autobuilder Pilot Capacity-One Refill'
+    }}
+  )
+  update_task_name = 'MSOS Autobuilder Pilot Update Supervisor'
+}}
+try {{
+  Assert-InstallerTaskNamespaceReady -ResolvedNames $Resolved `
+    -HostRootPath '{host.as_posix()}' `
+    -SupervisorRootPath '{supervisor.as_posix()}' `
+    -ProtectedHostRoot '{protected_host.as_posix()}' `
+    -ProtectedSupervisorRoot '{protected_supervisor.as_posix()}'
+  throw 'expected duplicate failure'
+}} catch {{
+  Write-Output $_.Exception.Message
+  exit 0
+}}
+"""
+    )
+    assert duplicate.returncode == 0, duplicate.stderr or duplicate.stdout
+    assert "Duplicate scheduled task name resolved" in duplicate.stdout
+
+
+def test_installer_task_namespace_rejects_protected_root_overlap_and_reparse(
+    tmp_path: Path,
+) -> None:
+    protected_host = tmp_path / "protected-host"
+    protected_supervisor = tmp_path / "protected-supervisor"
+    pilot_supervisor = tmp_path / "pilot-supervisor"
+    for path in (protected_host, protected_supervisor, pilot_supervisor):
+        path.mkdir()
+
+    overlap = _run_installer_helper_script(
+        f"""
+$Resolved = Resolve-InstallerTaskNames -Namespace 'Pilot Issue119'
+try {{
+  Assert-InstallerTaskNamespaceReady -ResolvedNames $Resolved `
+    -HostRootPath '{(protected_host / "child").as_posix()}' `
+    -SupervisorRootPath '{pilot_supervisor.as_posix()}' `
+    -ProtectedHostRoot '{protected_host.as_posix()}' `
+    -ProtectedSupervisorRoot '{protected_supervisor.as_posix()}'
+  throw 'expected overlap failure'
+}} catch {{
+  Write-Output $_.Exception.Message
+  exit 0
+}}
+"""
+    )
+    assert overlap.returncode == 0, overlap.stderr or overlap.stdout
+    assert "overlaps protected Issue #50 host root" in overlap.stdout
+
+    if os.name != "nt":
+        return
+
+    junction_parent = tmp_path / "junction-parent"
+    junction_target = tmp_path / "junction-target"
+    junction_parent.mkdir()
+    junction_target.mkdir()
+    junction = junction_parent / "linked-host"
+    created = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(junction_target)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if created.returncode != 0:
+        pytest.skip(
+            f"Could not create reparse-point fixture: {created.stderr or created.stdout}"
+        )
+
+    reparse = _run_installer_helper_script(
+        f"""
+$Resolved = Resolve-InstallerTaskNames -Namespace 'Pilot Issue119'
+try {{
+  Assert-InstallerTaskNamespaceReady -ResolvedNames $Resolved `
+    -HostRootPath '{junction.as_posix()}' `
+    -SupervisorRootPath '{pilot_supervisor.as_posix()}' `
+    -ProtectedHostRoot '{protected_host.as_posix()}' `
+    -ProtectedSupervisorRoot '{protected_supervisor.as_posix()}'
+  throw 'expected reparse failure'
+}} catch {{
+  Write-Output $_.Exception.Message
+  exit 0
+}}
+"""
+    )
+    assert reparse.returncode == 0, reparse.stderr or reparse.stdout
+    assert "resolves through a reparse point" in reparse.stdout
+
+
+def test_installer_generated_supervisor_yaml_uses_selected_task_names() -> None:
+    script = INSTALLER.read_text(encoding="utf-8")
+    assert "$ManagedTasksYaml = ($ManagedTaskYamlLines -join" in script
+    assert "managed_tasks:\n$ManagedTasksYaml" in script
+    assert "$UpdateTaskName = [string]$ResolvedTaskNames.update_task_name" in script
+    assert "if ($IsolatedTaskNamespace)" in script
+    assert 'Join-Path $HostRoot "candidate-gate.yaml"' in script
+    assert 'Join-Path $HostRoot "controlled-publisher.yaml"' in script
+    assert "state\\refill-policy.json" in script or r"state\refill-policy.json" in script
 
 
 def test_managed_runner_resolves_only_the_active_version_and_writes_witnesses() -> None:

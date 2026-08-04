@@ -545,7 +545,8 @@ $Resolved = [pscustomobject]@{{
   managed_tasks = @(
     [pscustomobject]@{{
       service = 'host'
-      task = 'MSOS Autobuilder Pilot<Host'
+      # '/' is invalid on Windows and Linux; '<' is Windows-only.
+      task = 'MSOS Autobuilder Pilot/Host'
     }},
     [pscustomobject]@{{
       service = 'relay'

@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
@@ -203,6 +204,27 @@ PRODUCTION_TASK_NAMES = [
 ]
 
 
+def _powershell_test_env(*, userprofile_root: Path | None = None) -> dict[str, str]:
+    """Ensure PowerShell subprocesses have a non-null USERPROFILE.
+
+    Windows keeps the real USERPROFILE. Linux CI gets a deterministic test-owned path
+    because Ubuntu runners leave USERPROFILE unset while the installer reads it for
+    protected Issue #50 roots.
+    """
+    env = os.environ.copy()
+    existing = (env.get("USERPROFILE") or "").strip()
+    if os.name == "nt" and existing:
+        return env
+    if existing:
+        return env
+    root = userprofile_root or (
+        Path(tempfile.gettempdir()) / "msos-autobuilder-ci-userprofile"
+    )
+    root.mkdir(parents=True, exist_ok=True)
+    env["USERPROFILE"] = str(root)
+    return env
+
+
 def _installer_helper_prelude() -> str:
     return f"""
 $ErrorActionPreference = 'Stop'
@@ -276,6 +298,7 @@ def _run_installer_helper_script(script: str) -> subprocess.CompletedProcess[str
         encoding="utf-8",
         errors="replace",
         check=False,
+        env=_powershell_test_env(),
     )
 
 
@@ -308,9 +331,11 @@ def _run_installer_binding_probe(
         str(supervisor),
     ]
     if bind_task_namespace:
-        argv.extend(["-TaskNamespace", task_namespace if task_namespace is not None else ""])
+        argv.extend(
+            ["-TaskNamespace", task_namespace if task_namespace is not None else ""]
+        )
 
-    env = os.environ.copy()
+    env = _powershell_test_env(userprofile_root=tmp_path / "ci-userprofile")
     env["MSOS_INSTALLER_TASK_NAMESPACE_PROBE"] = "1"
     # If validation somehow continued past the probe, later paths must not look like success.
     env["MSOS_BINDING_MUTATION_MARKER"] = str(marker)
@@ -332,8 +357,8 @@ def test_installer_default_task_namespace_preserves_production_names() -> None:
 $Resolved = Resolve-InstallerTaskNames -Namespace ''
 Assert-InstallerTaskNamespaceReady `
   -ResolvedNames $Resolved `
-  -HostRootPath $env:TEMP `
-  -SupervisorRootPath (Join-Path $env:TEMP 'supervisor-default')
+  -HostRootPath (Join-Path $env:USERPROFILE 'msos-test-host') `
+  -SupervisorRootPath (Join-Path $env:USERPROFILE 'msos-test-supervisor')
 $Names = @($Resolved.managed_tasks | ForEach-Object { $_.task }) + @($Resolved.update_task_name)
 $Names | ConvertTo-Json -Compress
 Write-Output ("isolated=" + $Resolved.isolated)

@@ -13,6 +13,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "install_windows_self_update_supervisor.ps1"
@@ -351,6 +352,91 @@ def _run_installer_binding_probe(
     )
 
 
+def _run_installer_config_generation_probe(
+    tmp_path: Path,
+    *,
+    task_namespace: str | None,
+    seed_production_configs: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    """Invoke the real installer -File path through isolated config generation."""
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    host = tmp_path / "isolated-host"
+    supervisor = tmp_path / "isolated-supervisor"
+    if seed_production_configs:
+        host.mkdir(parents=True)
+        for name in ("service.yaml", "host.yaml", "revision-loop.yaml"):
+            (host / name).write_text(f"sentinel {name}\n", encoding="utf-8")
+        (host / "candidate-gate.yaml").write_text(
+            "version: 1\npublication_enabled: false\nplans: {}\n",
+            encoding="utf-8",
+        )
+        (host / "controlled-publisher.yaml").write_text(
+            "version: 1\n"
+            "draft_pr_publication_enabled: false\n"
+            "merge_enabled: false\n"
+            "main_write_enabled: false\n"
+            "plans: {}\n",
+            encoding="utf-8",
+        )
+    commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        text=True,
+        encoding="utf-8",
+    ).strip()
+    release = supervisor / "versions" / commit
+    release.mkdir(parents=True)
+    (release / "release.json").write_text(
+        json.dumps({"version": 1, "commit": commit, "release_id": f"bootstrap-{commit}"})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    fake_codex = tmp_path / ("codex.cmd" if os.name == "nt" else "codex")
+    fake_codex.write_text(
+        "@echo off\r\nexit /b 0\r\n" if os.name == "nt" else "#!/bin/sh\nexit 0\n"
+    )
+    if os.name != "nt":
+        fake_codex.chmod(0o755)
+
+    env = _powershell_test_env(userprofile_root=tmp_path / "ci-userprofile")
+    env["MSOS_INSTALLER_CONFIG_GENERATION_PROBE"] = "1"
+    env["MSOS_INSTALLER_PROBE_PYTHON"] = sys.executable
+    env["MSOS_AUTOBUILDER_SOURCE_PYTHON"] = sys.executable
+    env["MSOS_AUTOBUILDER_CODEX_EXE"] = str(fake_codex)
+
+    argv = [
+        powershell,
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(INSTALLER),
+        "-HostRoot",
+        str(host),
+        "-SupervisorRoot",
+        str(supervisor),
+        "-MachineId",
+        "ci-probe",
+    ]
+    if task_namespace is not None:
+        argv.extend(["-TaskNamespace", task_namespace])
+
+    return subprocess.run(
+        argv,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        env=env,
+        cwd=str(ROOT),
+    )
+
+
 def test_installer_default_task_namespace_preserves_production_names() -> None:
     result = _run_installer_helper_script(
         r"""
@@ -421,6 +507,105 @@ def test_installer_binding_rejects_blank_or_colon_task_namespace(
     assert expected_fragment in combined
     assert not host.exists()
     assert not supervisor.exists()
+
+
+def test_isolated_installer_generates_all_managed_configs_before_task_mutation(
+    tmp_path: Path,
+) -> None:
+    result = _run_installer_config_generation_probe(
+        tmp_path,
+        task_namespace="Pilot Issue119",
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["isolated"] is True
+
+    host_root = Path(payload["host_root"])
+    supervisor_root = Path(payload["supervisor_root"])
+    generated = {key: Path(value) for key, value in payload["generated"].items()}
+    for path in generated.values():
+        assert path.exists(), path
+
+    service = yaml.safe_load(generated["service"].read_text(encoding="utf-8"))
+    host = yaml.safe_load(generated["host"].read_text(encoding="utf-8"))
+    revision = yaml.safe_load(generated["revision"].read_text(encoding="utf-8"))
+    gate = yaml.safe_load(generated["gate"].read_text(encoding="utf-8"))
+    publisher = yaml.safe_load(generated["publisher"].read_text(encoding="utf-8"))
+    refill_policy = json.loads(generated["refill_policy"].read_text(encoding="utf-8"))
+    managed_services = json.loads(generated["managed_services"].read_text(encoding="utf-8"))
+
+    assert service["version"] == 1
+    assert service["publication_enabled"] is False
+    assert Path(service["host_root"]) == host_root
+    assert Path(service["codex_host_config"]) == host_root / "host.yaml"
+    assert service["job_feed"] == {
+        "enabled": True,
+        "repo_url": "https://github.com/DanielTabakman/msos-autobuilder.git",
+        "branch": "jobs",
+        "path": "jobs/approved",
+        "refresh_seconds": 30,
+    }
+    assert not any(
+        (host_root / relative).exists() for relative in ["queue/pending", "queue/running"]
+    )
+
+    assert host["version"] == 1
+    assert host["publication_enabled"] is False
+    assert Path(host["source_repo"]).is_relative_to(host_root)
+    assert Path(host["workspace_root"]) == host_root / "workspaces"
+    assert Path(host["runtime_root"]) == host_root / "runtime"
+    assert host["codex"]["sandbox_mode"] == "workspace-write"
+    assert host["codex"]["max_concurrency"] == 2
+
+    assert revision["version"] == 1
+    assert revision["publication_enabled"] is False
+    assert Path(revision["host_root"]) == host_root
+    assert revision["results_branch"] == "results"
+    assert revision["jobs_branch"] == "jobs"
+    assert revision["jobs_path"] == "jobs/approved"
+    assert revision["max_revision_depth"] == 3
+    assert revision["plans"] == {}
+
+    assert gate["publication_enabled"] is False
+    assert gate["plans"] == {}
+    assert publisher["draft_pr_publication_enabled"] is False
+    assert publisher["merge_enabled"] is False
+    assert publisher["main_write_enabled"] is False
+    assert publisher["plans"] == {}
+    assert refill_policy["enabled"] is False
+    assert refill_policy["desired_capacity"] == 0
+    assert refill_policy["status"] == "PAUSED"
+
+    for service_config in managed_services["services"].values():
+        for arg in service_config["argv"]:
+            if arg.startswith("{host_root}/"):
+                assert (host_root / arg.removeprefix("{host_root}/")).exists()
+        if "config_template" in service_config:
+            assert Path(service_config["config_template"]).exists()
+
+    assert not (supervisor_root / "state" / "active-release.json").exists()
+
+
+def test_omitted_task_namespace_does_not_overwrite_production_host_configs(
+    tmp_path: Path,
+) -> None:
+    result = _run_installer_config_generation_probe(
+        tmp_path,
+        task_namespace=None,
+        seed_production_configs=True,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["isolated"] is False
+
+    host_root = Path(payload["host_root"])
+    assert (host_root / "service.yaml").read_text(encoding="utf-8") == "sentinel service.yaml\n"
+    assert (host_root / "host.yaml").read_text(encoding="utf-8") == "sentinel host.yaml\n"
+    assert (
+        (host_root / "revision-loop.yaml").read_text(encoding="utf-8")
+        == "sentinel revision-loop.yaml\n"
+    )
+    assert not (Path(payload["supervisor_root"]) / "state" / "active-release.json").exists()
 
 
 def test_installer_binding_pilot_namespace_generates_distinct_names(

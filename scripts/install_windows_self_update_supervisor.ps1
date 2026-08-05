@@ -78,6 +78,84 @@ function Convert-ToYamlQuoted {
     return "'" + ($Value.Replace("\", "/") -replace "'", "''") + "'"
 }
 
+function Resolve-CodexExecutable {
+    $Candidates = New-Object System.Collections.Generic.List[string]
+    if ($env:MSOS_AUTOBUILDER_CODEX_EXE) {
+        [void]$Candidates.Add($env:MSOS_AUTOBUILDER_CODEX_EXE)
+    }
+    if ($env:LOCALAPPDATA) {
+        [void]$Candidates.Add((Join-Path $env:LOCALAPPDATA "Programs\OpenAI\Codex\bin\codex.exe"))
+    }
+    $CodexCommand = Get-Command codex -ErrorAction SilentlyContinue
+    if ($CodexCommand) {
+        [void]$Candidates.Add($CodexCommand.Source)
+    }
+    if ($env:APPDATA) {
+        [void]$Candidates.Add((Join-Path $env:APPDATA "npm\codex.cmd"))
+    }
+    $Resolved = $Candidates | Where-Object { $_ -and (Test-Path $_ -PathType Leaf) } | Select-Object -First 1
+    if (-not $Resolved) {
+        throw "Codex CLI was not found. Install/sign in to Codex, then rerun this script."
+    }
+    return [string]$Resolved
+}
+
+function Assert-IsolatedConfigFilesReady {
+    param(
+        [Parameter(Mandatory = $true)][string]$HostRootPath,
+        [Parameter(Mandatory = $true)][string]$BootstrapRootPath,
+        [Parameter(Mandatory = $true)][string]$PythonExe
+    )
+    $Required = @(
+        (Join-Path $HostRootPath "service.yaml"),
+        (Join-Path $HostRootPath "host.yaml"),
+        (Join-Path $HostRootPath "revision-loop.yaml"),
+        (Join-Path $HostRootPath "candidate-gate.yaml"),
+        (Join-Path $HostRootPath "controlled-publisher.yaml"),
+        (Join-Path $HostRootPath "state\refill-policy.json"),
+        (Join-Path $BootstrapRootPath "managed-services.json"),
+        (Join-Path $BootstrapRootPath "config-templates\candidate-gate.yaml"),
+        (Join-Path $BootstrapRootPath "config-templates\controlled-publisher.yaml")
+    )
+    foreach ($Path in $Required) {
+        if (-not (Test-Path $Path -PathType Leaf)) {
+            throw "Required isolated managed config was not generated: $Path"
+        }
+    }
+    $Services = Get-Content -Path (Join-Path $BootstrapRootPath "managed-services.json") -Raw | ConvertFrom-Json
+    foreach ($Service in @($Services.services.PSObject.Properties)) {
+        foreach ($Arg in @($Service.Value.argv)) {
+            if ($Arg -like "{host_root}/*") {
+                $Relative = $Arg.Substring("{host_root}/".Length).Replace("/", "\")
+                $Resolved = Join-Path $HostRootPath $Relative
+                if (-not (Test-Path $Resolved -PathType Leaf)) {
+                    throw "Managed service '$($Service.Name)' references missing config file: $Resolved"
+                }
+            }
+        }
+        if ($Service.Value.PSObject.Properties.Name -contains "config_template") {
+            if (-not (Test-Path ([string]$Service.Value.config_template) -PathType Leaf)) {
+                throw "Managed service '$($Service.Name)' references missing config template: $($Service.Value.config_template)"
+            }
+        }
+    }
+    $Validation = @"
+from pathlib import Path
+from msos_autobuilder.codex_shadow import load_codex_host_config
+from msos_autobuilder.persistent_host import load_persistent_host_config
+from msos_autobuilder.revision_loop import load_revision_loop_config
+host_root = Path(r'''$HostRootPath''')
+load_persistent_host_config(host_root / 'service.yaml')
+load_codex_host_config(host_root / 'host.yaml')
+load_revision_loop_config(host_root / 'revision-loop.yaml')
+"@
+    $ValidationCommand = $Validation -replace "`r?`n", "; "
+    & $PythonExe -c $ValidationCommand
+    if ($LASTEXITCODE -ne 0) {
+        throw "Generated isolated config validation failed."
+    }
+}
+
 function Get-NormalizedTaskNamespace {
     param([AllowNull()][string]$Namespace)
     if ($null -eq $Namespace) { return "" }
@@ -301,15 +379,24 @@ if ($env:MSOS_INSTALLER_TASK_NAMESPACE_PROBE -eq "1") {
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Git = (Get-Command git -ErrorAction Stop).Source
-$PowerShellExe = (Get-Command powershell.exe -ErrorAction Stop).Source
-$UserId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+$PowerShellCommand = Get-Command powershell.exe -ErrorAction SilentlyContinue
+if (-not $PowerShellCommand) {
+    $PowerShellCommand = Get-Command pwsh -ErrorAction Stop
+}
+$PowerShellExe = $PowerShellCommand.Source
+if ($env:MSOS_INSTALLER_CONFIG_GENERATION_PROBE -eq "1") {
+    $UserId = "MSOSConfigGenerationProbe"
+}
+else {
+    $UserId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+}
 $CurrentCommit = (& $Git -C $RepoRoot rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or $CurrentCommit -notmatch "^[0-9a-f]{40}$") {
     throw "Could not resolve the exact current Autobuilder commit."
 }
 $DirtyPaths = @(& $Git -C $RepoRoot status --porcelain --untracked-files=all)
 if ($LASTEXITCODE -ne 0) { throw "Could not verify the bootstrap checkout state." }
-if ($DirtyPaths.Count -gt 0) {
+if ($DirtyPaths.Count -gt 0 -and $env:MSOS_INSTALLER_CONFIG_GENERATION_PROBE -ne "1") {
     throw "The bootstrap checkout must be clean so the stable supervisor matches the exact commit."
 }
 
@@ -323,6 +410,10 @@ $NotificationsRoot = Join-Path $SupervisorRoot "notifications"
 $LogsRoot = Join-Path $SupervisorRoot "logs"
 $TemplatesRoot = Join-Path $BootstrapRoot "config-templates"
 $VersionPath = Join-Path $VersionsRoot $CurrentCommit
+$VersionPython = Join-Path $VersionPath ".venv\Scripts\python.exe"
+if ($env:MSOS_INSTALLER_CONFIG_GENERATION_PROBE -eq "1" -and $env:MSOS_INSTALLER_PROBE_PYTHON) {
+    $VersionPython = $env:MSOS_INSTALLER_PROBE_PYTHON
+}
 $ActivePointer = Join-Path $StateRoot "active-release.json"
 $BootstrapAttemptId = "bootstrap-$CurrentCommit"
 $BootstrapReport = Join-Path $ReportsRoot ($BootstrapAttemptId + ".json")
@@ -341,6 +432,12 @@ if (Test-Path $ActivePointer -PathType Leaf) {
 New-Item -ItemType Directory -Force -Path $BootstrapRoot, $VersionsRoot, $StateRoot, $ReportsRoot, $NotificationsRoot, $LogsRoot, $TemplatesRoot | Out-Null
 
 $SourcePython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
+if ($env:MSOS_AUTOBUILDER_SOURCE_PYTHON) {
+    $SourcePython = $env:MSOS_AUTOBUILDER_SOURCE_PYTHON
+}
+if ($env:MSOS_INSTALLER_CONFIG_GENERATION_PROBE -eq "1" -and $env:MSOS_INSTALLER_PROBE_PYTHON) {
+    $BootstrapPython = $env:MSOS_INSTALLER_PROBE_PYTHON
+}
 if (-not (Test-Path $SourcePython -PathType Leaf)) {
     $PythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
     if ($null -eq $PythonCommand) { throw "Python is required to install the stable supervisor." }
@@ -366,7 +463,6 @@ if (-not (Test-Path (Join-Path $VersionPath "release.json") -PathType Leaf)) {
         Invoke-Checked -Failure "Could not check out the current exact commit" -Command { & $Git -C $VersionPath -c core.autocrlf=false checkout --quiet --detach $CurrentCommit }
         $StagedHead = (& $Git -C $VersionPath rev-parse HEAD).Trim()
         if ($StagedHead -ne $CurrentCommit) { throw "Bootstrap version HEAD does not match the exact current commit." }
-        $VersionPython = Join-Path $VersionPath ".venv\Scripts\python.exe"
         Invoke-Checked -Failure "Could not create the versioned release environment" -Command { & $SourcePython -m venv (Join-Path $VersionPath ".venv") }
         Invoke-Checked -Failure "Could not install the versioned release" -Command { & $VersionPython -m pip install --disable-pip-version-check -e "$VersionPath[dev]" }
         Invoke-Checked -Failure "Ruff failed for the initial versioned release" -Command { & $VersionPython -m ruff check $VersionPath }
@@ -400,6 +496,53 @@ $EvidenceBranchYamlForConfig = Convert-ToYamlQuoted $EvidenceBranch
 $MachineIdYamlForConfig = Convert-ToYamlQuoted $MachineId
 if ($IsolatedTaskNamespace) {
     New-Item -ItemType Directory -Force -Path (Join-Path $HostRoot "logs"), (Join-Path $HostRoot "state"), (Join-Path $HostRoot "workspaces"), (Join-Path $HostRoot "runtime"), (Join-Path $HostRoot "artifacts") | Out-Null
+    $CodexExe = Resolve-CodexExecutable
+    $CodexExeYamlForConfig = Convert-ToYamlQuoted $CodexExe
+    $SourceRootYamlForConfig = Convert-ToYamlQuoted (Join-Path $HostRoot "source\msos")
+    $WorkspaceRootYamlForConfig = Convert-ToYamlQuoted (Join-Path $HostRoot "workspaces")
+    $RuntimeRootYamlForConfig = Convert-ToYamlQuoted (Join-Path $HostRoot "runtime")
+    $CodexHostYamlForConfig = Convert-ToYamlQuoted (Join-Path $HostRoot "host.yaml")
+    $FreshServiceYaml = @"
+version: 1
+publication_enabled: false
+host_root: $HostRootYamlForConfig
+codex_host_config: $CodexHostYamlForConfig
+poll_seconds: 10
+heartbeat_seconds: 5
+job_feed:
+  enabled: true
+  repo_url: $RepoUrlYamlForConfig
+  branch: 'jobs'
+  path: jobs/approved
+  refresh_seconds: 30
+"@
+    $FreshHostYaml = @"
+version: 1
+publication_enabled: false
+source_repo: $SourceRootYamlForConfig
+workspace_root: $WorkspaceRootYamlForConfig
+runtime_root: $RuntimeRootYamlForConfig
+owner_id: windows-codex-shadow
+reset_workspaces: true
+codex:
+  executable: $CodexExeYamlForConfig
+  sandbox_mode: workspace-write
+  max_concurrency: 2
+  timeout_seconds: 7200
+"@
+    $FreshRevisionLoopYaml = @"
+version: 1
+publication_enabled: false
+host_root: $HostRootYamlForConfig
+repo_url: $RepoUrlYamlForConfig
+results_branch: $EvidenceBranchYamlForConfig
+jobs_branch: 'jobs'
+jobs_path: jobs/approved
+machine_id: $MachineIdYamlForConfig
+poll_seconds: 30
+max_revision_depth: 3
+plans: {}
+"@
     $FreshGateYaml = @"
 version: 1
 publication_enabled: false
@@ -427,6 +570,9 @@ plans: {}
 "@
     $FreshGateTemplate = $FreshGateYaml.Replace($HostRootForward, "{host_root}")
     $FreshPublisherTemplate = $FreshPublisherYaml.Replace($HostRootForward, "{host_root}")
+    Write-Utf8NoBom -Path (Join-Path $HostRoot "service.yaml") -Value $FreshServiceYaml
+    Write-Utf8NoBom -Path (Join-Path $HostRoot "host.yaml") -Value $FreshHostYaml
+    Write-Utf8NoBom -Path (Join-Path $HostRoot "revision-loop.yaml") -Value $FreshRevisionLoopYaml
     Write-Utf8NoBom -Path (Join-Path $HostRoot "candidate-gate.yaml") -Value $FreshGateYaml
     Write-Utf8NoBom -Path (Join-Path $HostRoot "controlled-publisher.yaml") -Value $FreshPublisherYaml
     Write-Utf8NoBom -Path (Join-Path $TemplatesRoot "candidate-gate.yaml") -Value $FreshGateTemplate
@@ -494,6 +640,30 @@ $Services = @{
     }
 }
 Write-Utf8NoBom -Path (Join-Path $BootstrapRoot "managed-services.json") -Value (($Services | ConvertTo-Json -Depth 20) + [Environment]::NewLine)
+
+if ($IsolatedTaskNamespace) {
+    Assert-IsolatedConfigFilesReady -HostRootPath $HostRoot -BootstrapRootPath $BootstrapRoot -PythonExe $VersionPython
+}
+if ($env:MSOS_INSTALLER_CONFIG_GENERATION_PROBE -eq "1") {
+    $ProbePayload = @{
+        host_root = $HostRoot
+        supervisor_root = $SupervisorRoot
+        bootstrap_root = $BootstrapRoot
+        isolated = $IsolatedTaskNamespace
+        generated = @{
+            service = (Join-Path $HostRoot "service.yaml")
+            host = (Join-Path $HostRoot "host.yaml")
+            revision = (Join-Path $HostRoot "revision-loop.yaml")
+            gate = (Join-Path $HostRoot "candidate-gate.yaml")
+            publisher = (Join-Path $HostRoot "controlled-publisher.yaml")
+            refill_policy = (Join-Path $HostRoot "state\refill-policy.json")
+            managed_services = (Join-Path $BootstrapRoot "managed-services.json")
+            supervisor = $SupervisorConfigPath
+        }
+    }
+    Write-Output (($ProbePayload | ConvertTo-Json -Compress -Depth 8))
+    exit 0
+}
 Write-Utf8AtomicJson -Path $ActivePointer -Value @{ version = 1; commit = $CurrentCommit; release_path = $VersionPath; activated_at = [DateTimeOffset]::UtcNow.ToString("o") }
 
 $Runner = Join-Path $BootstrapRoot "run_windows_managed_service.ps1"

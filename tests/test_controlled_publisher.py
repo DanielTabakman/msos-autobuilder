@@ -4,6 +4,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -605,15 +606,117 @@ def test_controlled_publisher_gate_hash_drift_prevents_verified_success(
     assert not (config.host_root / "state" / "publisher-service-success.json").exists()
 
 
-def test_config_rejects_merge_or_main_write_authority(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("flag", "error"),
+    [
+        ("merge_enabled", "merge authority"),
+        ("main_write_enabled", "product main writes"),
+    ],
+)
+def test_config_rejects_merge_or_main_write_authority(
+    tmp_path: Path,
+    flag: str,
+    error: str,
+) -> None:
     config_path, _, _, _ = make_fixture(tmp_path)
     text = config_path.read_text(encoding="utf-8")
     config_path.write_text(
-        text.replace("merge_enabled: false", "merge_enabled: true"),
+        text.replace(f"{flag}: false", f"{flag}: true"),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="merge authority"):
+    with pytest.raises(ValueError, match=error):
         load_publisher_config(config_path)
+
+
+def test_publication_disabled_config_loads_and_runs_idle_without_external_operations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path, product_bare, _, _ = make_fixture(tmp_path)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            "draft_pr_publication_enabled: true",
+            "draft_pr_publication_enabled: false",
+        ),
+        encoding="utf-8",
+    )
+    config = load_publisher_config(config_path)
+    assert config.draft_pr_publication_enabled is False
+    publisher = ControlledPublisher(config, github_client=FakeGitHubClient(product_bare))
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("disabled publisher must remain strictly idle")
+
+    monkeypatch.setattr(publisher.evidence, "prepare", forbidden)
+    monkeypatch.setattr(publisher, "_load_ledger", forbidden)
+    monkeypatch.setattr(publisher, "publish_job", forbidden)
+    monkeypatch.setattr(publisher, "_prepare_product", forbidden)
+    monkeypatch.setattr(publisher, "_client", forbidden)
+
+    assert publisher.run_once() == ()
+    assert publisher.run_once() == ()
+
+    success = publisher_success(config_path)
+    assert success["associated_jobs"] == []
+    assert success["terminal_evidence"] == {
+        "draft_pr_publication_enabled": False,
+        "main_write_enabled": False,
+        "merge_enabled": False,
+        "mode": "publication-disabled-idle",
+        "processed_jobs": [],
+        "verified_jobs": [],
+    }
+    assert not (config.host_root / "state" / "controlled-publisher-seen.json").exists()
+    assert not (config.host_root / "state" / "publisher-results-repo").exists()
+    assert not (config.host_root / "state" / "publisher-product-repo").exists()
+    assert not (config.host_root / "state" / "controlled-publisher-error.json").exists()
+    branch_probe = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(product_bare),
+            "show-ref",
+            "--verify",
+            "--quiet",
+            "refs/heads/autobuilder/candidate-revision-1",
+        ],
+        check=False,
+    )
+    assert branch_probe.returncode == 1
+
+
+def test_publication_disabled_continuous_mode_repeats_without_error_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path, product_bare, _, _ = make_fixture(tmp_path)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            "draft_pr_publication_enabled: true",
+            "draft_pr_publication_enabled: false",
+        ),
+        encoding="utf-8",
+    )
+    config = load_publisher_config(config_path)
+    publisher = ControlledPublisher(config, github_client=FakeGitHubClient(product_bare))
+    sleeps = 0
+
+    def stop_after_second_cycle(seconds: float) -> None:
+        nonlocal sleeps
+        assert seconds == config.poll_seconds
+        sleeps += 1
+        if sleeps == 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(time, "sleep", stop_after_second_cycle)
+
+    with pytest.raises(KeyboardInterrupt):
+        publisher.run_forever()
+
+    success = publisher_success(config_path)
+    assert success["terminal_evidence"]["mode"] == "publication-disabled-idle"
+    assert success["terminal_evidence"]["processed_jobs"] == []
+    assert not (config.host_root / "state" / "controlled-publisher-error.json").exists()
 
 
 def test_controlled_publisher_rejects_source_report_only_evidence(tmp_path: Path) -> None:

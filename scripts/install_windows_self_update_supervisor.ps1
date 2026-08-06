@@ -67,6 +67,56 @@ function Write-Utf8AtomicJson {
     Move-Item -Force -Path $Temporary -Destination $Path
 }
 
+function Write-IsolatedBootstrapRelayFailureEvidence {
+    param(
+        [Parameter(Mandatory = $true)][string]$ReportPath,
+        [Parameter(Mandatory = $true)][string]$NotificationPath,
+        [Parameter(Mandatory = $true)][string]$AttemptId,
+        [Parameter(Mandatory = $true)][string]$RequestedCommit,
+        [Parameter(Mandatory = $true)][string]$SupervisorRootPath,
+        [Parameter(Mandatory = $true)][int]$RelayExitCode,
+        [object]$TaskStates = $null,
+        [object]$ServiceWitnesses = $null,
+        [string]$VersionPath = "",
+        [string]$ManifestUrl = "",
+        [string]$Note = ""
+    )
+    $Message = "Isolated bootstrap evidence relay failed (exit $RelayExitCode). Setup cannot claim clean success while required evidence identity is unverified."
+    Write-Utf8NoBom -Path $ReportPath -Value ((@{
+        version = 1
+        type = "initial-bootstrap"
+        attempt_id = $AttemptId
+        outcome = "blocked"
+        requested_commit = $RequestedCommit
+        commit = $RequestedCommit
+        version_path = $VersionPath
+        stable_supervisor_root = $SupervisorRootPath
+        task_states = $TaskStates
+        service_witnesses = $ServiceWitnesses
+        manifest_url = $ManifestUrl
+        recorded_at = [DateTimeOffset]::UtcNow.ToString("o")
+        note = $Note
+        blocked_reason = "bootstrap_evidence_relay_failed"
+        relay_exit_code = $RelayExitCode
+        message = $Message
+        requires_founder_attention = $true
+    } | ConvertTo-Json -Depth 20) + [Environment]::NewLine)
+    Write-Utf8NoBom -Path $NotificationPath -Value ((@{
+        version = 1
+        type = "autobuilder-self-update"
+        attempt_id = $AttemptId
+        outcome = "blocked"
+        requested_commit = $RequestedCommit
+        report_path = $ReportPath
+        requires_founder_attention = $true
+        recorded_at = [DateTimeOffset]::UtcNow.ToString("o")
+        blocked_reason = "bootstrap_evidence_relay_failed"
+        relay_exit_code = $RelayExitCode
+        message = $Message
+    } | ConvertTo-Json -Depth 10) + [Environment]::NewLine)
+    return $Message
+}
+
 function Invoke-Checked {
     param([Parameter(Mandatory = $true)][scriptblock]$Command, [Parameter(Mandatory = $true)][string]$Failure)
     & $Command | Out-Host
@@ -113,6 +163,7 @@ function Assert-IsolatedConfigFilesReady {
         (Join-Path $HostRootPath "candidate-gate.yaml"),
         (Join-Path $HostRootPath "controlled-publisher.yaml"),
         (Join-Path $HostRootPath "state\refill-policy.json"),
+        (Join-Path (Split-Path -Parent $BootstrapRootPath) "state\update-supervisor-policy.json"),
         (Join-Path $BootstrapRootPath "managed-services.json"),
         (Join-Path $BootstrapRootPath "config-templates\candidate-gate.yaml"),
         (Join-Path $BootstrapRootPath "config-templates\controlled-publisher.yaml")
@@ -142,12 +193,19 @@ function Assert-IsolatedConfigFilesReady {
     $Validation = @"
 from pathlib import Path
 from msos_autobuilder.codex_shadow import load_codex_host_config
+from msos_autobuilder.controlled_publisher import load_publisher_config
 from msos_autobuilder.persistent_host import load_persistent_host_config
+from msos_autobuilder.refill_controller import RefillConfig
 from msos_autobuilder.revision_loop import load_revision_loop_config
 host_root = Path(r'''$HostRootPath''')
-load_persistent_host_config(host_root / 'service.yaml')
+service = load_persistent_host_config(host_root / 'service.yaml')
+assert service.feed is None
 load_codex_host_config(host_root / 'host.yaml')
 load_revision_loop_config(host_root / 'revision-loop.yaml')
+load_publisher_config(host_root / 'controlled-publisher.yaml')
+refill = RefillConfig.from_service_config(host_root / 'service.yaml', submit=False)
+assert refill.supervisor_root is not None
+assert refill.build_next.submit is False
 "@
     $ValidationCommand = $Validation -replace "`r?`n", "; "
     & $PythonExe -c $ValidationCommand
@@ -502,15 +560,17 @@ if ($IsolatedTaskNamespace) {
     $WorkspaceRootYamlForConfig = Convert-ToYamlQuoted (Join-Path $HostRoot "workspaces")
     $RuntimeRootYamlForConfig = Convert-ToYamlQuoted (Join-Path $HostRoot "runtime")
     $CodexHostYamlForConfig = Convert-ToYamlQuoted (Join-Path $HostRoot "host.yaml")
+    $SupervisorRootYamlForConfig = Convert-ToYamlQuoted $SupervisorRoot
     $FreshServiceYaml = @"
 version: 1
 publication_enabled: false
 host_root: $HostRootYamlForConfig
 codex_host_config: $CodexHostYamlForConfig
+supervisor_root: $SupervisorRootYamlForConfig
 poll_seconds: 10
 heartbeat_seconds: 5
 job_feed:
-  enabled: true
+  enabled: false
   repo_url: $RepoUrlYamlForConfig
   branch: 'jobs'
   path: jobs/approved
@@ -585,6 +645,12 @@ plans: {}
         status = "PAUSED"
         message = "Isolated pilot refill remains paused until separately authorized."
     }
+    Write-Utf8AtomicJson -Path (Join-Path $StateRoot "update-supervisor-policy.json") -Value @{
+        version = 1
+        autonomous_installation_enabled = $false
+        mode = "disabled-idle"
+        message = "Isolated pilot update supervisor remains disabled/idle; autonomous installation is off."
+    }
 }
 else {
     foreach ($TemplateName in @("candidate-gate.yaml", "controlled-publisher.yaml")) {
@@ -645,21 +711,25 @@ if ($IsolatedTaskNamespace) {
     Assert-IsolatedConfigFilesReady -HostRootPath $HostRoot -BootstrapRootPath $BootstrapRoot -PythonExe $VersionPython
 }
 if ($env:MSOS_INSTALLER_CONFIG_GENERATION_PROBE -eq "1") {
+    $Generated = @{
+        service = (Join-Path $HostRoot "service.yaml")
+        host = (Join-Path $HostRoot "host.yaml")
+        revision = (Join-Path $HostRoot "revision-loop.yaml")
+        gate = (Join-Path $HostRoot "candidate-gate.yaml")
+        publisher = (Join-Path $HostRoot "controlled-publisher.yaml")
+        refill_policy = (Join-Path $HostRoot "state\refill-policy.json")
+        managed_services = (Join-Path $BootstrapRoot "managed-services.json")
+        supervisor = $SupervisorConfigPath
+    }
+    if ($IsolatedTaskNamespace) {
+        $Generated["update_supervisor_policy"] = (Join-Path $StateRoot "update-supervisor-policy.json")
+    }
     $ProbePayload = @{
         host_root = $HostRoot
         supervisor_root = $SupervisorRoot
         bootstrap_root = $BootstrapRoot
         isolated = $IsolatedTaskNamespace
-        generated = @{
-            service = (Join-Path $HostRoot "service.yaml")
-            host = (Join-Path $HostRoot "host.yaml")
-            revision = (Join-Path $HostRoot "revision-loop.yaml")
-            gate = (Join-Path $HostRoot "candidate-gate.yaml")
-            publisher = (Join-Path $HostRoot "controlled-publisher.yaml")
-            refill_policy = (Join-Path $HostRoot "state\refill-policy.json")
-            managed_services = (Join-Path $BootstrapRoot "managed-services.json")
-            supervisor = $SupervisorConfigPath
-        }
+        generated = $Generated
     }
     Write-Output (($ProbePayload | ConvertTo-Json -Compress -Depth 8))
     exit 0
@@ -686,6 +756,9 @@ $UpdateTriggers = @(
 $UpdatePrincipal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType Interactive -RunLevel Limited
 $UpdateSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
 Register-ScheduledTask -TaskName $UpdateTaskName -Action $UpdateAction -Trigger $UpdateTriggers -Principal $UpdatePrincipal -Settings $UpdateSettings -Description "External exact-commit MSOS Autobuilder update supervisor" -Force | Out-Null
+if ($IsolatedTaskNamespace) {
+    Disable-ScheduledTask -TaskName $UpdateTaskName -ErrorAction Stop | Out-Null
+}
 
 $WitnessRoot = Join-Path $StateRoot "service-witnesses"
 New-Item -ItemType Directory -Force -Path $WitnessRoot | Out-Null
@@ -775,6 +848,23 @@ Write-Utf8NoBom -Path $BootstrapNotification -Value ((@{
 $EvidenceRelayModule = Join-Path $BootstrapRoot "self_update_evidence_relay.py"
 & $BootstrapPython $EvidenceRelayModule --config $SupervisorConfigPath | Out-Host
 if ($LASTEXITCODE -ne 0) {
+    if ($IsolatedTaskNamespace) {
+        # Relay consumes the local report/notification pair. On isolated failure, rewrite those
+        # immutable local files so no clean-success claim remains before fail-closed exit.
+        $RelayFailureMessage = Write-IsolatedBootstrapRelayFailureEvidence `
+            -ReportPath $BootstrapReport `
+            -NotificationPath $BootstrapNotification `
+            -AttemptId $BootstrapAttemptId `
+            -RequestedCommit $CurrentCommit `
+            -SupervisorRootPath $SupervisorRoot `
+            -RelayExitCode ([int]$LASTEXITCODE) `
+            -TaskStates $TaskStates `
+            -ServiceWitnesses $ServiceWitnesses `
+            -VersionPath $VersionPath `
+            -ManifestUrl $ManifestUrl `
+            -Note "Isolated bootstrap remained blocked because required results-branch evidence relay failed."
+        throw $RelayFailureMessage
+    }
     Write-Warning "The supervisor is installed and healthy, but its bootstrap evidence has not reached the results branch yet. The scheduled updater will retry the durable local evidence automatically."
 }
 

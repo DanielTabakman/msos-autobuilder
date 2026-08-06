@@ -17,6 +17,35 @@ $LogRoot = Join-Path $SupervisorRoot "logs"
 $LogPath = Join-Path $LogRoot "self-update.log"
 New-Item -ItemType Directory -Force -Path $Inbox, $StateRoot, $LogRoot | Out-Null
 
+$UpdatePolicyPath = Join-Path $StateRoot "update-supervisor-policy.json"
+if (Test-Path -LiteralPath $UpdatePolicyPath -PathType Leaf) {
+    try {
+        $UpdatePolicy = Get-Content -LiteralPath $UpdatePolicyPath -Raw | ConvertFrom-Json
+    }
+    catch {
+        throw "Update supervisor policy is malformed at $UpdatePolicyPath"
+    }
+    $AutonomousEnabled = $false
+    if ($null -ne $UpdatePolicy.PSObject.Properties["autonomous_installation_enabled"]) {
+        $AutonomousEnabled = [bool]$UpdatePolicy.autonomous_installation_enabled
+    }
+    $Mode = [string]($UpdatePolicy.mode)
+    if (-not $AutonomousEnabled -or $Mode -eq "disabled-idle") {
+        $IdlePayload = @{
+            version = 1
+            status = "completed"
+            mode = "disabled-idle"
+            autonomous_installation_enabled = $false
+            update_attempted = $false
+            installation_attempted = $false
+            message = "Update supervisor is intentionally disabled/idle; no update or installation was attempted."
+        } | ConvertTo-Json -Compress
+        Add-Content -LiteralPath $LogPath -Value $IdlePayload -Encoding utf8
+        Write-Output $IdlePayload
+        exit 0
+    }
+}
+
 if (-not (Test-Path $BootstrapPython -PathType Leaf)) {
     throw "Stable supervisor Python not found at $BootstrapPython"
 }

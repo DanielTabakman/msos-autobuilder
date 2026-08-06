@@ -409,6 +409,7 @@ def _run_installer_config_generation_probe(
     env["MSOS_INSTALLER_PROBE_PYTHON"] = sys.executable
     env["MSOS_AUTOBUILDER_SOURCE_PYTHON"] = sys.executable
     env["MSOS_AUTOBUILDER_CODEX_EXE"] = str(fake_codex)
+    env["PYTHONPATH"] = str(ROOT / "src")
 
     argv = [
         powershell,
@@ -540,8 +541,9 @@ def test_isolated_installer_generates_all_managed_configs_before_task_mutation(
     assert service["publication_enabled"] is False
     assert Path(service["host_root"]) == host_root
     assert Path(service["codex_host_config"]) == host_root / "host.yaml"
+    assert Path(service["supervisor_root"]) == supervisor_root
     assert service["job_feed"] == {
-        "enabled": True,
+        "enabled": False,
         "repo_url": "https://github.com/DanielTabakman/msos-autobuilder.git",
         "branch": "jobs",
         "path": "jobs/approved",
@@ -623,6 +625,41 @@ def test_isolated_installer_generates_all_managed_configs_before_task_mutation(
     assert refill_policy["enabled"] is False
     assert refill_policy["desired_capacity"] == 0
     assert refill_policy["status"] == "PAUSED"
+    update_policy = json.loads(
+        generated["update_supervisor_policy"].read_text(encoding="utf-8")
+    )
+    assert update_policy["autonomous_installation_enabled"] is False
+    assert update_policy["mode"] == "disabled-idle"
+
+    from msos_autobuilder.persistent_host import (
+        HostPaths,
+        PersistentHost,
+        load_persistent_host_config,
+    )
+    from msos_autobuilder.refill_controller import RefillConfig, _supervisor_root
+
+    loaded_service = load_persistent_host_config(generated["service"])
+    assert loaded_service.feed is None
+    host_paths = HostPaths.from_root(host_root)
+    host_paths.ensure()
+    assert not host_paths.feed_ledger.exists()
+    assert list(host_paths.pending.iterdir()) == []
+    assert list(host_paths.running.iterdir()) == []
+    assert list(host_paths.failed.iterdir()) == []
+    once = PersistentHost(loaded_service).run_once(sync_feed=True)
+    assert once.processed is False
+    assert not host_paths.feed_ledger.exists()
+    assert list(host_paths.pending.iterdir()) == []
+    assert list(host_paths.running.iterdir()) == []
+    assert list(host_paths.failed.iterdir()) == []
+
+    refill = RefillConfig.from_service_config(generated["service"])
+    assert refill.supervisor_root == supervisor_root.resolve()
+    assert refill.build_next.submit is False
+    assert _supervisor_root(refill, host_paths) == supervisor_root.resolve()
+    production_default = Path.home() / ".msos-autobuilder-supervisor"
+    assert _supervisor_root(refill, host_paths) != production_default.resolve()
+    assert str(production_default) not in str(_supervisor_root(refill, host_paths))
 
     for service_config in managed_services["services"].values():
         for arg in service_config["argv"]:
@@ -632,6 +669,231 @@ def test_isolated_installer_generates_all_managed_configs_before_task_mutation(
             assert Path(service_config["config_template"]).exists()
 
     assert not (supervisor_root / "state" / "active-release.json").exists()
+
+
+def _run_bootstrap_evidence_helper_script(script: str) -> subprocess.CompletedProcess[str]:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+    prelude = f"""
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$InstallerPath = '{INSTALLER.as_posix()}'
+$Tokens = $null
+$Errors = $null
+$Ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $InstallerPath,
+    [ref]$Tokens,
+    [ref]$Errors
+)
+if ($Errors -and $Errors.Count -gt 0) {{
+    throw ("Installer parse failed: " + ($Errors | ForEach-Object {{ $_.ToString() }} | Out-String))
+}}
+$Wanted = @('Write-Utf8NoBom', 'Write-IsolatedBootstrapRelayFailureEvidence')
+foreach ($Name in $Wanted) {{
+    $FunctionAst = $Ast.Find({{
+            param($Node)
+            $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $Node.Name -eq $Name
+        }}, $true) | Select-Object -First 1
+    if (-not $FunctionAst) {{ throw "Missing installer helper: $Name" }}
+    Invoke-Expression $FunctionAst.Extent.Text
+}}
+"""
+    return subprocess.run(
+        [
+            powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            prelude + "\n" + script,
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        env=_powershell_test_env(),
+    )
+
+
+def test_isolated_pilot_bootstrap_boundaries_are_empty_self_contained_and_update_idle() -> None:
+    script = INSTALLER.read_text(encoding="utf-8")
+    invoker = INVOKER.read_text(encoding="utf-8")
+    assert "job_feed:\n  enabled: false" in script.replace("\r\n", "\n")
+    assert "supervisor_root: $SupervisorRootYamlForConfig" in script
+    assert "update-supervisor-policy.json" in script
+    assert 'mode = "disabled-idle"' in script
+    assert "autonomous_installation_enabled = $false" in script
+    assert "Disable-ScheduledTask -TaskName $UpdateTaskName" in script
+    assert "Write-IsolatedBootstrapRelayFailureEvidence" in script
+    assert 'outcome = "blocked"' in script
+    assert "requires_founder_attention = $true" in script
+    assert "Isolated bootstrap evidence relay failed" in script
+    assert script.index("Write-IsolatedBootstrapRelayFailureEvidence") < script.index(
+        "throw $RelayFailureMessage"
+    )
+    assert script.index("throw $RelayFailureMessage") < script.index(
+        'Write-Host "Fail-safe Autobuilder self-update supervisor installed."'
+    )
+    assert (
+        "The scheduled updater will retry the durable local evidence automatically."
+        in script
+    )
+    assert "disabled-idle" in invoker
+    assert "update_attempted = $false" in invoker
+    assert "installation_attempted = $false" in invoker
+    assert script.index("Disable-ScheduledTask -TaskName $UpdateTaskName") > script.index(
+        "Register-ScheduledTask -TaskName $UpdateTaskName"
+    )
+    assert "$script:ProductionManagedTaskRoles" in script
+    assert len(PRODUCTION_TASK_NAMES) == 7
+
+
+def test_isolated_bootstrap_relay_failure_rewrites_clean_success_evidence(
+    tmp_path: Path,
+) -> None:
+    reports = tmp_path / "reports"
+    notifications = tmp_path / "notifications"
+    report = reports / "bootstrap-abc.json"
+    notification = notifications / "bootstrap-abc.json"
+    commit = "a" * 40
+    supervisor = tmp_path / "isolated-supervisor"
+    # Mirror installer: write success evidence first, then apply isolated fail-closed rewrite.
+    seed = _run_bootstrap_evidence_helper_script(
+        f"""
+$Report = '{report.as_posix()}'
+$Notification = '{notification.as_posix()}'
+Write-Utf8NoBom -Path $Report -Value ((@{{
+  version = 1
+  type = 'initial-bootstrap'
+  attempt_id = 'bootstrap-abc'
+  outcome = 'success'
+  requested_commit = '{commit}'
+  commit = '{commit}'
+  stable_supervisor_root = '{supervisor.as_posix()}'
+  recorded_at = [DateTimeOffset]::UtcNow.ToString('o')
+}} | ConvertTo-Json -Depth 10) + [Environment]::NewLine)
+Write-Utf8NoBom -Path $Notification -Value ((@{{
+  version = 1
+  type = 'autobuilder-self-update'
+  attempt_id = 'bootstrap-abc'
+  outcome = 'success'
+  requested_commit = '{commit}'
+  report_path = $Report
+  requires_founder_attention = $false
+  recorded_at = [DateTimeOffset]::UtcNow.ToString('o')
+}} | ConvertTo-Json -Depth 10) + [Environment]::NewLine)
+$Message = Write-IsolatedBootstrapRelayFailureEvidence `
+  -ReportPath $Report `
+  -NotificationPath $Notification `
+  -AttemptId 'bootstrap-abc' `
+  -RequestedCommit '{commit}' `
+  -SupervisorRootPath '{supervisor.as_posix()}' `
+  -RelayExitCode 7 `
+  -TaskStates @{{ update = 'Ready' }} `
+  -ServiceWitnesses @{{ host = @{{ state = 'running' }} }} `
+  -VersionPath '{(supervisor / "versions" / commit).as_posix()}' `
+  -ManifestUrl 'https://example.test/latest.yaml' `
+  -Note 'Isolated bootstrap remained blocked because required results-branch evidence relay failed.'
+Write-Output $Message
+$ReportJson = Get-Content -LiteralPath $Report -Raw | ConvertFrom-Json
+$NotificationJson = Get-Content -LiteralPath $Notification -Raw | ConvertFrom-Json
+@{{
+  report_outcome = [string]$ReportJson.outcome
+  notification_outcome = [string]$NotificationJson.outcome
+  report_attention = [bool]$ReportJson.requires_founder_attention
+  notification_attention = [bool]$NotificationJson.requires_founder_attention
+  blocked_reason = [string]$ReportJson.blocked_reason
+  relay_exit_code = [int]$ReportJson.relay_exit_code
+  message = [string]$ReportJson.message
+}} | ConvertTo-Json -Compress
+"""
+    )
+    assert seed.returncode == 0, seed.stderr or seed.stdout
+    lines = [line for line in seed.stdout.strip().splitlines() if line.strip()]
+    assert "Isolated bootstrap evidence relay failed (exit 7)" in lines[0]
+    payload = json.loads(lines[-1])
+    assert payload["report_outcome"] == "blocked"
+    assert payload["notification_outcome"] == "blocked"
+    assert payload["report_attention"] is True
+    assert payload["notification_attention"] is True
+    assert payload["blocked_reason"] == "bootstrap_evidence_relay_failed"
+    assert payload["relay_exit_code"] == 7
+    assert "evidence relay failed" in payload["message"].lower()
+
+    report_data = json.loads(report.read_text(encoding="utf-8"))
+    notification_data = json.loads(notification.read_text(encoding="utf-8"))
+    assert report_data["outcome"] != "success"
+    assert notification_data["outcome"] != "success"
+    assert notification_data["requires_founder_attention"] is True
+    assert report_data["requires_founder_attention"] is True
+
+
+def test_isolated_bootstrap_relay_failure_exits_nonzero_before_success_output(
+    tmp_path: Path,
+) -> None:
+    report = tmp_path / "reports" / "bootstrap-abc.json"
+    notification = tmp_path / "notifications" / "bootstrap-abc.json"
+    result = _run_bootstrap_evidence_helper_script(
+        f"""
+$Report = '{report.as_posix()}'
+$Notification = '{notification.as_posix()}'
+Write-Utf8NoBom -Path $Report -Value ((@{{
+  version = 1; type = 'initial-bootstrap'; attempt_id = 'bootstrap-abc'
+  outcome = 'success'; requested_commit = '{'b' * 40}'; commit = '{'b' * 40}'
+}} | ConvertTo-Json -Compress) + [Environment]::NewLine)
+Write-Utf8NoBom -Path $Notification -Value ((@{{
+  version = 1; type = 'autobuilder-self-update'; attempt_id = 'bootstrap-abc'
+  outcome = 'success'; report_path = $Report; requires_founder_attention = $false
+}} | ConvertTo-Json -Compress) + [Environment]::NewLine)
+$IsolatedTaskNamespace = $true
+$LASTEXITCODE = 9
+if ($LASTEXITCODE -ne 0) {{
+  if ($IsolatedTaskNamespace) {{
+    $RelayFailureMessage = Write-IsolatedBootstrapRelayFailureEvidence `
+      -ReportPath $Report `
+      -NotificationPath $Notification `
+      -AttemptId 'bootstrap-abc' `
+      -RequestedCommit '{'b' * 40}' `
+      -SupervisorRootPath '{(tmp_path / "supervisor").as_posix()}' `
+      -RelayExitCode ([int]$LASTEXITCODE)
+    throw $RelayFailureMessage
+  }}
+  Write-Warning 'production retry path'
+}}
+Write-Output 'Fail-safe Autobuilder self-update supervisor installed.'
+"""
+    )
+    assert result.returncode != 0
+    combined = (result.stdout or "") + (result.stderr or "")
+    assert "Fail-safe Autobuilder self-update supervisor installed." not in combined
+    assert "Isolated bootstrap evidence relay failed (exit 9)" in combined
+    report_data = json.loads(report.read_text(encoding="utf-8"))
+    notification_data = json.loads(notification.read_text(encoding="utf-8"))
+    assert report_data["outcome"] == "blocked"
+    assert notification_data["outcome"] == "blocked"
+    assert notification_data["requires_founder_attention"] is True
+
+
+def test_successful_isolated_bootstrap_evidence_remains_success_contract() -> None:
+    script = INSTALLER.read_text(encoding="utf-8").replace("\r\n", "\n")
+    success_report_write = script.index(
+        'outcome = "success"\n    requested_commit = $CurrentCommit\n    commit = $CurrentCommit'
+    )
+    relay_invoke = script.index(
+        "& $BootstrapPython $EvidenceRelayModule --config $SupervisorConfigPath"
+    )
+    isolated_failure = script.index("Write-IsolatedBootstrapRelayFailureEvidence `")
+    production_warning = script.index(
+        "The scheduled updater will retry the durable local evidence automatically."
+    )
+    assert success_report_write < relay_invoke < isolated_failure
+    assert "requires_founder_attention = $false" in script
+    assert production_warning > isolated_failure
+    assert "Write-Warning" in script[isolated_failure:production_warning + 20]
+    assert "if ($IsolatedTaskNamespace)" in script[relay_invoke:production_warning]
 
 
 def test_omitted_task_namespace_does_not_overwrite_production_host_configs(
@@ -653,7 +915,10 @@ def test_omitted_task_namespace_does_not_overwrite_production_host_configs(
         (host_root / "revision-loop.yaml").read_text(encoding="utf-8")
         == "sentinel revision-loop.yaml\n"
     )
-    assert not (Path(payload["supervisor_root"]) / "state" / "active-release.json").exists()
+    supervisor_root = Path(payload["supervisor_root"])
+    assert not (supervisor_root / "state" / "active-release.json").exists()
+    assert not (supervisor_root / "state" / "update-supervisor-policy.json").exists()
+    assert "update_supervisor_policy" not in payload.get("generated", {})
 
 
 def test_installer_binding_pilot_namespace_generates_distinct_names(

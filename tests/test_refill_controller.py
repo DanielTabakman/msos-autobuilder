@@ -92,7 +92,11 @@ def _write_exact_release_witnesses(
 ) -> None:
     host_root = config.build_next.host_root
     assert host_root is not None
-    supervisor = host_root.parent / ".msos-autobuilder-supervisor"
+    supervisor = (
+        config.supervisor_root.expanduser().resolve()
+        if config.supervisor_root is not None
+        else (host_root.parent / ".msos-autobuilder-supervisor")
+    )
     release = supervisor / "versions" / release_commit
     release.mkdir(parents=True, exist_ok=True)
     (release / "release.json").write_text(
@@ -5301,3 +5305,80 @@ def test_malformed_targeted_revision_descendant_blocks_without_dispatching_b(
     assert generation is not None
     assert generation["item_scoped_terminal_exclusions"] == []
     assert generation["last_attempt_classification"]["stage"] == "revision_lineage"
+
+def test_refill_from_service_config_uses_isolated_supervisor_root_and_disabled_feed(
+    tmp_path: Path,
+) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    host_root = tmp_path / "isolated-host"
+    supervisor_root = tmp_path / "isolated-supervisor"
+    codex_config = host_root / "host.yaml"
+    host_root.mkdir(parents=True)
+    supervisor_root.mkdir(parents=True)
+    codex_config.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "publication_enabled": False,
+                "source_repo": str(ppe),
+                "workspace_root": str(host_root / "workspaces"),
+                "runtime_root": str(host_root / "runtime"),
+                "owner_id": "isolated-host",
+                "codex": {"sandbox_mode": "workspace-write", "max_concurrency": 1},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    service_config = host_root / "service.yaml"
+    service_config.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "publication_enabled": False,
+                "host_root": str(host_root),
+                "codex_host_config": str(codex_config),
+                "supervisor_root": str(supervisor_root),
+                "job_feed": {
+                    "enabled": False,
+                    "repo_url": "https://github.com/DanielTabakman/msos-autobuilder.git",
+                    "branch": "jobs",
+                    "path": "jobs/approved",
+                    "refresh_seconds": 30,
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    config = RefillConfig.from_service_config(service_config)
+    paths = refill_controller._host_paths(config)
+
+    assert config.supervisor_root == supervisor_root.resolve()
+    assert config.build_next.submit is False
+    assert refill_controller._supervisor_root(config, paths) == supervisor_root.resolve()
+    production_default = (Path.home() / ".msos-autobuilder-supervisor").resolve()
+    assert refill_controller._supervisor_root(config, paths) != production_default
+
+    save_refill_policy(config, RefillPolicy(enabled=False, desired_capacity=0))
+    _write_host_status(config)
+
+    report = reconcile_refill(config)
+    assert report.status == "PAUSED"
+    assert report.enabled is False
+    assert report.desired_capacity == 0
+    health = report.decision_evidence["health"]
+    assert health["checks"]["active_release"]["ok"] is True
+    assert health["checks"]["managed_services"]["ok"] is True
+    assert health["checks"]["feed_checkout"].get("skipped") == "feed submission disabled"
+    # Witnesses were written under the isolated supervisor root, not the production default.
+    production_witness = (
+        Path.home() / ".msos-autobuilder-supervisor" / "state" / "service-witnesses"
+    )
+    isolated_witness = supervisor_root / "state" / "service-witnesses" / "host.json"
+    assert isolated_witness.exists()
+    assert (
+        not production_witness.exists()
+        or production_witness.resolve() != isolated_witness.parent.resolve()
+    )

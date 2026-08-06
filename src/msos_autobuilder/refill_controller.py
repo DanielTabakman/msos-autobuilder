@@ -27,6 +27,7 @@ from .build_next import (
     _source_identity,
     build_next,
 )
+from .codex_shadow import load_codex_host_config
 from .lifecycle_evidence import (
     EvidenceHeadsLock,
     LifecycleEvidenceError,
@@ -37,7 +38,13 @@ from .lifecycle_evidence import (
     record_producer_evidence_error,
 )
 from .managed_source import ManagedSourceSyncError, ensure_managed_source_fresh
-from .persistent_host import HostPaths, HostProcessLock, _pid_alive, parse_host_job
+from .persistent_host import (
+    HostPaths,
+    HostProcessLock,
+    _pid_alive,
+    load_persistent_host_config,
+    parse_host_job,
+)
 from .service_error_lifecycle import (
     GATE_ERROR_SPEC,
     PUBLISHER_ERROR_SPEC,
@@ -280,15 +287,72 @@ class RefillConfig:
         max_snapshot_age_seconds: int = 600,
         requested_by: str = "capacity-one refill controller",
         submit: bool = True,
+        policy_path: Path | None = None,
+        max_host_heartbeat_age_seconds: int = 300,
     ) -> RefillConfig:
-        build_config = BuildNextConfig.from_service_config(
-            service_config,
-            checkout_root=checkout_root,
-            max_snapshot_age_seconds=max_snapshot_age_seconds,
-            requested_by=requested_by,
-            submit=submit,
+        config_path = Path(service_config).expanduser().resolve()
+        try:
+            raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as exc:
+            raise RefillControllerError(f"invalid service config YAML: {config_path}") from exc
+        if not isinstance(raw, dict):
+            raise RefillControllerError("service config must be a mapping")
+
+        service = load_persistent_host_config(config_path)
+        supervisor_root: Path | None = None
+        root_text = str(raw.get("supervisor_root") or "").strip()
+        if root_text:
+            supervisor_root = Path(root_text).expanduser()
+            if not supervisor_root.is_absolute():
+                supervisor_root = (config_path.parent / supervisor_root).resolve()
+            else:
+                supervisor_root = supervisor_root.resolve()
+
+        if service.feed is None:
+            feed_raw = raw.get("job_feed")
+            if not isinstance(feed_raw, dict):
+                raise RefillControllerError(
+                    "paused/disabled job feed still requires a job_feed mapping with "
+                    "repo_url/branch/path metadata for refill health"
+                )
+            if bool(feed_raw.get("enabled", False)):
+                raise RefillControllerError(
+                    "job feed metadata is inconsistent with host feed state"
+                )
+            feed_repo_url = str(feed_raw.get("repo_url") or "").strip()
+            jobs_branch = str(feed_raw.get("branch") or "jobs").strip()
+            jobs_path = str(feed_raw.get("path") or "jobs/approved").strip().replace("\\", "/")
+            if not feed_repo_url:
+                raise RefillControllerError(
+                    "job_feed.repo_url is required even when feed is disabled"
+                )
+            host_config = load_codex_host_config(service.codex_host_config)
+            build_config = BuildNextConfig(
+                ppe_repo=host_config.source_repo,
+                feed_repo_url=feed_repo_url,
+                jobs_branch=jobs_branch,
+                jobs_path=jobs_path,
+                checkout_root=checkout_root,
+                host_root=service.host_root,
+                max_snapshot_age_seconds=max_snapshot_age_seconds,
+                requested_by=requested_by,
+                # Disabled feed must not clone or count the live jobs branch.
+                submit=False,
+            )
+        else:
+            build_config = BuildNextConfig.from_service_config(
+                config_path,
+                checkout_root=checkout_root,
+                max_snapshot_age_seconds=max_snapshot_age_seconds,
+                requested_by=requested_by,
+                submit=submit,
+            )
+        return cls(
+            build_next=build_config,
+            policy_path=policy_path,
+            max_host_heartbeat_age_seconds=max_host_heartbeat_age_seconds,
+            supervisor_root=supervisor_root,
         )
-        return cls(build_next=build_config)
 
 
 @dataclass(frozen=True)

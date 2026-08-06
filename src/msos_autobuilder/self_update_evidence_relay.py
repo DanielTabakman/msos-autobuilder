@@ -61,7 +61,13 @@ class EvidenceRelayConfig:
 
     @property
     def checkout(self) -> Path:
-        return self.state_root / "self-update-evidence-repo"
+        short = self.state_root / "ev-repo"
+        legacy = self.state_root / "self-update-evidence-repo"
+        if (short / ".git").exists():
+            return short
+        if (legacy / ".git").exists():
+            return legacy
+        return short
 
     @property
     def ledger_path(self) -> Path:
@@ -143,9 +149,11 @@ def load_evidence_relay_config(path: str | Path) -> EvidenceRelayConfig:
 def _git_environment() -> dict[str, str]:
     environment = dict(os.environ)
     environment["GIT_TERMINAL_PROMPT"] = "0"
-    environment["GIT_CONFIG_COUNT"] = "1"
+    environment["GIT_CONFIG_COUNT"] = "2"
     environment["GIT_CONFIG_KEY_0"] = "core.autocrlf"
     environment["GIT_CONFIG_VALUE_0"] = "false"
+    environment["GIT_CONFIG_KEY_1"] = "core.longpaths"
+    environment["GIT_CONFIG_VALUE_1"] = "true"
     return environment
 
 

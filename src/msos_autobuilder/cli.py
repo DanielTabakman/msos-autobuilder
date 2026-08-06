@@ -203,15 +203,12 @@ def _build_next_command(args: argparse.Namespace) -> int:
 
 
 def _refill_config(args: argparse.Namespace, *, submit: bool = True) -> RefillConfig:
-    build_config = BuildNextConfig.from_service_config(
+    return RefillConfig.from_service_config(
         args.service_config,
         checkout_root=Path(args.checkout_root) if args.checkout_root else None,
         max_snapshot_age_seconds=args.max_snapshot_age_seconds,
         requested_by=args.requested_by,
         submit=submit,
-    )
-    return RefillConfig(
-        build_next=build_config,
         policy_path=Path(args.policy_path) if args.policy_path else None,
         max_host_heartbeat_age_seconds=args.max_host_heartbeat_age_seconds,
     )

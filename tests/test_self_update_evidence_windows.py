@@ -15,6 +15,7 @@ def test_installer_copies_and_configures_external_evidence_relay() -> None:
     assert "requires_founder_attention = $false" in script
     assert "The scheduled updater will retry" in script
     assert 'EvidenceBranch -in @("main", "master")' in script
+    assert "Isolated bootstrap evidence relay failed" in script
 
 
 def test_update_invoker_relays_before_dedupe_and_after_every_attempt() -> None:
@@ -26,3 +27,7 @@ def test_update_invoker_relays_before_dedupe_and_after_every_attempt() -> None:
     assert script.count("Invoke-EvidenceRelay") >= 3
     assert "$ApplyExitCode -eq 0 -and $RelayExitCode -eq 0" in script
     assert "exit $InitialRelayExitCode" in script
+    assert "update-supervisor-policy.json" in script
+    assert "disabled-idle" in script
+    assert "update_attempted = $false" in script
+    assert "installation_attempted = $false" in script

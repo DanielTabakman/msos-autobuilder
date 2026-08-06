@@ -409,6 +409,7 @@ def _run_installer_config_generation_probe(
     env["MSOS_INSTALLER_PROBE_PYTHON"] = sys.executable
     env["MSOS_AUTOBUILDER_SOURCE_PYTHON"] = sys.executable
     env["MSOS_AUTOBUILDER_CODEX_EXE"] = str(fake_codex)
+    env["PYTHONPATH"] = str(ROOT / "src")
 
     argv = [
         powershell,
@@ -540,8 +541,9 @@ def test_isolated_installer_generates_all_managed_configs_before_task_mutation(
     assert service["publication_enabled"] is False
     assert Path(service["host_root"]) == host_root
     assert Path(service["codex_host_config"]) == host_root / "host.yaml"
+    assert Path(service["supervisor_root"]) == supervisor_root
     assert service["job_feed"] == {
-        "enabled": True,
+        "enabled": False,
         "repo_url": "https://github.com/DanielTabakman/msos-autobuilder.git",
         "branch": "jobs",
         "path": "jobs/approved",
@@ -623,6 +625,41 @@ def test_isolated_installer_generates_all_managed_configs_before_task_mutation(
     assert refill_policy["enabled"] is False
     assert refill_policy["desired_capacity"] == 0
     assert refill_policy["status"] == "PAUSED"
+    update_policy = json.loads(
+        generated["update_supervisor_policy"].read_text(encoding="utf-8")
+    )
+    assert update_policy["autonomous_installation_enabled"] is False
+    assert update_policy["mode"] == "disabled-idle"
+
+    from msos_autobuilder.persistent_host import (
+        HostPaths,
+        PersistentHost,
+        load_persistent_host_config,
+    )
+    from msos_autobuilder.refill_controller import RefillConfig, _supervisor_root
+
+    loaded_service = load_persistent_host_config(generated["service"])
+    assert loaded_service.feed is None
+    host_paths = HostPaths.from_root(host_root)
+    host_paths.ensure()
+    assert not host_paths.feed_ledger.exists()
+    assert list(host_paths.pending.iterdir()) == []
+    assert list(host_paths.running.iterdir()) == []
+    assert list(host_paths.failed.iterdir()) == []
+    once = PersistentHost(loaded_service).run_once(sync_feed=True)
+    assert once.processed is False
+    assert not host_paths.feed_ledger.exists()
+    assert list(host_paths.pending.iterdir()) == []
+    assert list(host_paths.running.iterdir()) == []
+    assert list(host_paths.failed.iterdir()) == []
+
+    refill = RefillConfig.from_service_config(generated["service"])
+    assert refill.supervisor_root == supervisor_root.resolve()
+    assert refill.build_next.submit is False
+    assert _supervisor_root(refill, host_paths) == supervisor_root.resolve()
+    production_default = Path.home() / ".msos-autobuilder-supervisor"
+    assert _supervisor_root(refill, host_paths) != production_default.resolve()
+    assert str(production_default) not in str(_supervisor_root(refill, host_paths))
 
     for service_config in managed_services["services"].values():
         for arg in service_config["argv"]:
@@ -632,6 +669,26 @@ def test_isolated_installer_generates_all_managed_configs_before_task_mutation(
             assert Path(service_config["config_template"]).exists()
 
     assert not (supervisor_root / "state" / "active-release.json").exists()
+
+
+def test_isolated_pilot_bootstrap_boundaries_are_empty_self_contained_and_update_idle() -> None:
+    script = INSTALLER.read_text(encoding="utf-8")
+    invoker = INVOKER.read_text(encoding="utf-8")
+    assert "job_feed:\n  enabled: false" in script.replace("\r\n", "\n")
+    assert "supervisor_root: $SupervisorRootYamlForConfig" in script
+    assert "update-supervisor-policy.json" in script
+    assert 'mode = "disabled-idle"' in script
+    assert "autonomous_installation_enabled = $false" in script
+    assert "Disable-ScheduledTask -TaskName $UpdateTaskName" in script
+    assert "Isolated bootstrap evidence relay failed" in script
+    assert "disabled-idle" in invoker
+    assert "update_attempted = $false" in invoker
+    assert "installation_attempted = $false" in invoker
+    assert script.index("Disable-ScheduledTask -TaskName $UpdateTaskName") > script.index(
+        "Register-ScheduledTask -TaskName $UpdateTaskName"
+    )
+    assert "$script:ProductionManagedTaskRoles" in script
+    assert len(PRODUCTION_TASK_NAMES) == 7
 
 
 def test_omitted_task_namespace_does_not_overwrite_production_host_configs(
@@ -653,7 +710,10 @@ def test_omitted_task_namespace_does_not_overwrite_production_host_configs(
         (host_root / "revision-loop.yaml").read_text(encoding="utf-8")
         == "sentinel revision-loop.yaml\n"
     )
-    assert not (Path(payload["supervisor_root"]) / "state" / "active-release.json").exists()
+    supervisor_root = Path(payload["supervisor_root"])
+    assert not (supervisor_root / "state" / "active-release.json").exists()
+    assert not (supervisor_root / "state" / "update-supervisor-policy.json").exists()
+    assert "update_supervisor_policy" not in payload.get("generated", {})
 
 
 def test_installer_binding_pilot_namespace_generates_distinct_names(

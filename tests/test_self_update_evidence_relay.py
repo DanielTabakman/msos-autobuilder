@@ -160,3 +160,33 @@ def test_relay_rejects_default_branch_and_escaping_report_path(tmp_path: Path) -
     )
     with pytest.raises(EvidenceRelayError, match="escapes reports root"):
         SelfUpdateEvidenceRelay(config).run_once()
+
+
+def test_relay_prefers_short_checkout_and_enables_longpaths(tmp_path: Path) -> None:
+    remote = _results_remote(tmp_path)
+    config = load_evidence_relay_config(_config(tmp_path, remote))
+    assert config.checkout == config.state_root / "ev-repo"
+    _evidence(config.supervisor_root)
+    relay = SelfUpdateEvidenceRelay(config)
+    assert relay.run_once() == ("attempt-1",)
+    assert (config.state_root / "ev-repo" / ".git").exists()
+    assert not (config.state_root / "self-update-evidence-repo").exists()
+
+    from msos_autobuilder.self_update_evidence_relay import _git_environment
+
+    env = _git_environment()
+    assert env["GIT_CONFIG_COUNT"] == "2"
+    assert env["GIT_CONFIG_KEY_1"] == "core.longpaths"
+    assert env["GIT_CONFIG_VALUE_1"] == "true"
+
+
+def test_relay_reuses_legacy_checkout_path_when_present(tmp_path: Path) -> None:
+    remote = _results_remote(tmp_path)
+    config = load_evidence_relay_config(_config(tmp_path, remote))
+    legacy = config.state_root / "self-update-evidence-repo"
+    legacy.mkdir(parents=True)
+    _git("clone", "--branch", "results", str(remote), str(legacy))
+    assert config.checkout == legacy
+    _evidence(config.supervisor_root)
+    assert SelfUpdateEvidenceRelay(config).run_once() == ("attempt-1",)
+    assert not (config.state_root / "ev-repo" / ".git").exists()

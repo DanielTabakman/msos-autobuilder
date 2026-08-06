@@ -32,10 +32,42 @@ function Convert-ToForwardSlash {
 
 function Invoke-GitChecked {
     param([Parameter(Mandatory = $true)][string[]]$Arguments)
-    & $Git.Source @Arguments | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        throw "Git command failed ($LASTEXITCODE): git $($Arguments -join ' ')"
+    $previousCount = $env:GIT_CONFIG_COUNT
+    $previousKey0 = $env:GIT_CONFIG_KEY_0
+    $previousValue0 = $env:GIT_CONFIG_VALUE_0
+    $previousKey1 = $env:GIT_CONFIG_KEY_1
+    $previousValue1 = $env:GIT_CONFIG_VALUE_1
+    $env:GIT_CONFIG_COUNT = "2"
+    $env:GIT_CONFIG_KEY_0 = "core.autocrlf"
+    $env:GIT_CONFIG_VALUE_0 = "false"
+    $env:GIT_CONFIG_KEY_1 = "core.longpaths"
+    $env:GIT_CONFIG_VALUE_1 = "true"
+    try {
+        & $Git.Source @Arguments | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            throw "Git command failed ($LASTEXITCODE): git $($Arguments -join ' ')"
+        }
     }
+    finally {
+        if ($null -eq $previousCount) { Remove-Item Env:GIT_CONFIG_COUNT -ErrorAction SilentlyContinue } else { $env:GIT_CONFIG_COUNT = $previousCount }
+        if ($null -eq $previousKey0) { Remove-Item Env:GIT_CONFIG_KEY_0 -ErrorAction SilentlyContinue } else { $env:GIT_CONFIG_KEY_0 = $previousKey0 }
+        if ($null -eq $previousValue0) { Remove-Item Env:GIT_CONFIG_VALUE_0 -ErrorAction SilentlyContinue } else { $env:GIT_CONFIG_VALUE_0 = $previousValue0 }
+        if ($null -eq $previousKey1) { Remove-Item Env:GIT_CONFIG_KEY_1 -ErrorAction SilentlyContinue } else { $env:GIT_CONFIG_KEY_1 = $previousKey1 }
+        if ($null -eq $previousValue1) { Remove-Item Env:GIT_CONFIG_VALUE_1 -ErrorAction SilentlyContinue } else { $env:GIT_CONFIG_VALUE_1 = $previousValue1 }
+    }
+}
+
+function Resolve-PreferredCheckout {
+    param(
+        [Parameter(Mandatory = $true)][string]$StateRoot,
+        [Parameter(Mandatory = $true)][string]$ShortName,
+        [Parameter(Mandatory = $true)][string]$LegacyName
+    )
+    $short = Join-Path $StateRoot $ShortName
+    $legacy = Join-Path $StateRoot $LegacyName
+    if (Test-Path (Join-Path $short ".git")) { return $short }
+    if (Test-Path (Join-Path $legacy ".git")) { return $legacy }
+    return $short
 }
 
 function Prepare-BranchCheckout {
@@ -44,7 +76,6 @@ function Prepare-BranchCheckout {
         [Parameter(Mandatory = $true)][string]$Branch
     )
     if (Test-Path (Join-Path $Path ".git")) {
-        Invoke-GitChecked -Arguments @("-C", $Path, "config", "core.autocrlf", "false")
         Invoke-GitChecked -Arguments @("-C", $Path, "fetch", "--no-tags", "origin", $Branch)
         Invoke-GitChecked -Arguments @("-C", $Path, "checkout", "-B", $Branch, "origin/$Branch")
         Invoke-GitChecked -Arguments @("-C", $Path, "reset", "--hard", "origin/$Branch")
@@ -56,7 +87,7 @@ function Prepare-BranchCheckout {
         }
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
         Invoke-GitChecked -Arguments @(
-            "-c", "core.autocrlf=false", "clone", "--single-branch", "--branch", $Branch,
+            "clone", "--single-branch", "--branch", $Branch,
             "--no-tags", $RepoUrl, $Path
         )
     }
@@ -71,7 +102,7 @@ $LogFile = Join-Path $LogRoot "revision-loop.log"
 $RunnerScript = Join-Path $HostRoot "run-revision-loop.ps1"
 $StateRoot = Join-Path $HostRoot "state"
 $LedgerPath = Join-Path $StateRoot "revision-loop-seen.json"
-$ResultsCheckout = Join-Path $StateRoot "revision-loop-results-repo"
+$ResultsCheckout = Resolve-PreferredCheckout -StateRoot $StateRoot -ShortName "rl-repo" -LegacyName "revision-loop-results-repo"
 $JobsCheckout = Join-Path $StateRoot "revision-loop-jobs-repo"
 $Git = Get-Command git -ErrorAction Stop
 
@@ -155,9 +186,11 @@ Set-StrictMode -Version Latest
 `$ErrorActionPreference = "Continue"
 `$env:PYTHONUTF8 = "1"
 `$env:GIT_TERMINAL_PROMPT = "0"
-`$env:GIT_CONFIG_COUNT = "1"
+`$env:GIT_CONFIG_COUNT = "2"
 `$env:GIT_CONFIG_KEY_0 = "core.autocrlf"
 `$env:GIT_CONFIG_VALUE_0 = "false"
+`$env:GIT_CONFIG_KEY_1 = "core.longpaths"
+`$env:GIT_CONFIG_VALUE_1 = "true"
 New-Item -ItemType Directory -Force -Path "$LogRoot" | Out-Null
 & "$VenvPython" -m msos_autobuilder.revision_loop --config "$ConfigPath" *>> "$LogFile"
 exit `$LASTEXITCODE

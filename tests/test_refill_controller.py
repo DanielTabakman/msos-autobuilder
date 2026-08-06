@@ -58,7 +58,7 @@ def _write_host_status(config: RefillConfig) -> None:
     host_root = config.build_next.host_root
     assert host_root is not None
     _write_exact_release_witnesses(config)
-    (host_root / "state" / "candidate-gate-results-repo").mkdir(parents=True, exist_ok=True)
+    (host_root / "state" / "cg-repo").mkdir(parents=True, exist_ok=True)
     status = host_root / "state" / "host-status.json"
     status.parent.mkdir(parents=True, exist_ok=True)
     status.write_text(
@@ -241,7 +241,7 @@ def test_queue_and_review_backpressure_fail_closed_before_dispatch(tmp_path: Pat
         report = (
             host_root
             / "state"
-            / "candidate-gate-results-repo"
+            / "cg-repo"
             / "results"
             / "test-host"
             / f"job-{index}"
@@ -1721,7 +1721,7 @@ def test_published_and_failed_candidates_do_not_count_as_review_pressure(tmp_pat
     root = (
         config.build_next.host_root
         / "state"
-        / "candidate-gate-results-repo"
+        / "cg-repo"
         / "results"
         / "test-host"
     )
@@ -2142,7 +2142,7 @@ def _write_gate_report(
     root = (
         config.build_next.host_root
         / "state"
-        / "candidate-gate-results-repo"
+        / "cg-repo"
         / "results"
         / "test-host"
         / job_id

@@ -14,7 +14,18 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $VenvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 $GateConfig = Join-Path $HostRoot "candidate-gate.yaml"
 $LedgerPath = Join-Path $HostRoot "state\candidate-gate-seen.json"
-$ResultsCheckout = Join-Path $HostRoot "state\candidate-gate-results-repo"
+$StateRoot = Join-Path $HostRoot "state"
+$ShortCheckout = Join-Path $StateRoot "cg-repo"
+$LegacyCheckout = Join-Path $StateRoot "candidate-gate-results-repo"
+if (Test-Path (Join-Path $ShortCheckout ".git")) {
+    $ResultsCheckout = $ShortCheckout
+}
+elseif (Test-Path (Join-Path $LegacyCheckout ".git")) {
+    $ResultsCheckout = $LegacyCheckout
+}
+else {
+    $ResultsCheckout = $ShortCheckout
+}
 $GateReportPath = Join-Path $ResultsCheckout "results\$MachineId\$JobId\gate-report.json"
 
 if (-not (Test-Path $VenvPython)) { throw "Autobuilder Python not found at $VenvPython" }

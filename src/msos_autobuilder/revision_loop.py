@@ -31,6 +31,7 @@ from .lifecycle_evidence import (
     record_producer_evidence_error,
 )
 from .service_error_lifecycle import record_service_cycle_success, write_service_error_marker
+from .windows_git_checkout import git_environment, revision_results_checkout
 
 
 class RevisionLoopError(RuntimeError):
@@ -146,6 +147,7 @@ def _run_git(
         encoding="utf-8",
         errors="replace",
         shell=False,
+        env=git_environment(),
         check=False,
     )
     if proc.returncode not in accepted:
@@ -430,8 +432,6 @@ class BranchCheckout:
             self.root.parent.mkdir(parents=True, exist_ok=True)
             _run_git(
                 None,
-                "-c",
-                "core.autocrlf=false",
                 "clone",
                 "--single-branch",
                 "--branch",
@@ -441,12 +441,10 @@ class BranchCheckout:
                 str(self.root),
             )
         else:
-            _run_git(self.root, "config", "core.autocrlf", "false")
             _run_git(self.root, "fetch", "--no-tags", "origin", self.branch)
             _run_git(self.root, "checkout", "-B", self.branch, f"origin/{self.branch}")
             _run_git(self.root, "reset", "--hard", f"origin/{self.branch}")
             _run_git(self.root, "clean", "-fd")
-        _run_git(self.root, "config", "core.autocrlf", "false")
         if self.writable:
             _run_git(self.root, "config", "user.name", "MSOS Autobuilder Revision Loop")
             _run_git(self.root, "config", "user.email", "autobuilder-revision@localhost")
@@ -459,7 +457,7 @@ class RevisionLoop:
         self.state = self.host_root / "state"
         self.ledger_path = self.state / "revision-loop-seen.json"
         self.results = BranchCheckout(
-            self.state / "revision-loop-results-repo",
+            revision_results_checkout(self.state),
             config.repo_url,
             config.results_branch,
             writable=False,

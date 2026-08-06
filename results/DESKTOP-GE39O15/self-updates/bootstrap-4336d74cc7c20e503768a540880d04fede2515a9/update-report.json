@@ -1,0 +1,77 @@
+{
+    "version":  1,
+    "version_path":  "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-4336d74-20260806T0514Z-a-supervisor\\versions\\4336d74cc7c20e503768a540880d04fede2515a9",
+    "stable_supervisor_root":  "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-4336d74-20260806T0514Z-a-supervisor",
+    "requested_commit":  "4336d74cc7c20e503768a540880d04fede2515a9",
+    "type":  "initial-bootstrap",
+    "task_states":  {
+                        "MSOS Autobuilder Pilot Issue119 Controlled Publisher":  "Running",
+                        "MSOS Autobuilder Pilot Issue119 Result Relay":  "Running",
+                        "MSOS Autobuilder Pilot Issue119 Revision Loop":  "Running",
+                        "MSOS Autobuilder Pilot Issue119 Capacity-One Refill":  "Running",
+                        "MSOS Autobuilder Pilot Issue119 Host":  "Running",
+                        "MSOS Autobuilder Pilot Issue119 Candidate Gate":  "Running"
+                    },
+    "manifest_url":  "https://raw.githubusercontent.com/DanielTabakman/msos-autobuilder/updates/updates/approved/latest.yaml",
+    "outcome":  "success",
+    "recorded_at":  "2026-08-06T13:17:20.6234905+00:00",
+    "note":  "Future managed releases cannot replace the executing stable supervisor in the same transaction.",
+    "attempt_id":  "bootstrap-4336d74cc7c20e503768a540880d04fede2515a9",
+    "service_witnesses":  {
+                              "gate":  {
+                                           "release_commit":  "4336d74cc7c20e503768a540880d04fede2515a9",
+                                           "version":  1,
+                                           "service":  "gate",
+                                           "release_path":  "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-4336d74-20260806T0514Z-a-supervisor\\versions\\4336d74cc7c20e503768a540880d04fede2515a9",
+                                           "started_at":  "2026-08-06T13:16:59.9024158+00:00",
+                                           "state":  "running",
+                                           "child_pid":  19608
+                                       },
+                              "relay":  {
+                                            "release_commit":  "4336d74cc7c20e503768a540880d04fede2515a9",
+                                            "version":  1,
+                                            "service":  "relay",
+                                            "release_path":  "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-4336d74-20260806T0514Z-a-supervisor\\versions\\4336d74cc7c20e503768a540880d04fede2515a9",
+                                            "started_at":  "2026-08-06T13:16:59.8204175+00:00",
+                                            "state":  "running",
+                                            "child_pid":  8836
+                                        },
+                              "refill":  {
+                                             "release_commit":  "4336d74cc7c20e503768a540880d04fede2515a9",
+                                             "version":  1,
+                                             "service":  "refill",
+                                             "release_path":  "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-4336d74-20260806T0514Z-a-supervisor\\versions\\4336d74cc7c20e503768a540880d04fede2515a9",
+                                             "started_at":  "2026-08-06T13:16:59.9394158+00:00",
+                                             "state":  "running",
+                                             "child_pid":  34680
+                                         },
+                              "host":  {
+                                           "release_commit":  "4336d74cc7c20e503768a540880d04fede2515a9",
+                                           "version":  1,
+                                           "service":  "host",
+                                           "release_path":  "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-4336d74-20260806T0514Z-a-supervisor\\versions\\4336d74cc7c20e503768a540880d04fede2515a9",
+                                           "started_at":  "2026-08-06T13:16:59.7894171+00:00",
+                                           "state":  "running",
+                                           "child_pid":  29740
+                                       },
+                              "publisher":  {
+                                                "release_commit":  "4336d74cc7c20e503768a540880d04fede2515a9",
+                                                "version":  1,
+                                                "service":  "publisher",
+                                                "release_path":  "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-4336d74-20260806T0514Z-a-supervisor\\versions\\4336d74cc7c20e503768a540880d04fede2515a9",
+                                                "started_at":  "2026-08-06T13:16:59.9434168+00:00",
+                                                "state":  "running",
+                                                "child_pid":  15620
+                                            },
+                              "revision":  {
+                                               "release_commit":  "4336d74cc7c20e503768a540880d04fede2515a9",
+                                               "version":  1,
+                                               "service":  "revision",
+                                               "release_path":  "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-4336d74-20260806T0514Z-a-supervisor\\versions\\4336d74cc7c20e503768a540880d04fede2515a9",
+                                               "started_at":  "2026-08-06T13:16:59.8784171+00:00",
+                                               "state":  "running",
+                                               "child_pid":  24592
+                                           }
+                          },
+    "commit":  "4336d74cc7c20e503768a540880d04fede2515a9"
+}

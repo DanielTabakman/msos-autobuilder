@@ -13,9 +13,18 @@ def test_installer_copies_and_configures_external_evidence_relay() -> None:
     assert "machine_id:" in script
     assert "BootstrapNotification" in script
     assert "requires_founder_attention = $false" in script
+    assert "Write-IsolatedBootstrapRelayFailureEvidence" in script
+    assert 'outcome = "blocked"' in script
+    assert "requires_founder_attention = $true" in script
     assert "The scheduled updater will retry" in script
     assert 'EvidenceBranch -in @("main", "master")' in script
     assert "Isolated bootstrap evidence relay failed" in script
+    assert script.index("Write-IsolatedBootstrapRelayFailureEvidence") < script.index(
+        "throw $RelayFailureMessage"
+    )
+    assert script.index("throw $RelayFailureMessage") < script.index(
+        'Write-Host "Fail-safe Autobuilder self-update supervisor installed."'
+    )
 
 
 def test_update_invoker_relays_before_dedupe_and_after_every_attempt() -> None:

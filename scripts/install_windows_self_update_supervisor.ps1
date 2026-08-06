@@ -67,6 +67,56 @@ function Write-Utf8AtomicJson {
     Move-Item -Force -Path $Temporary -Destination $Path
 }
 
+function Write-IsolatedBootstrapRelayFailureEvidence {
+    param(
+        [Parameter(Mandatory = $true)][string]$ReportPath,
+        [Parameter(Mandatory = $true)][string]$NotificationPath,
+        [Parameter(Mandatory = $true)][string]$AttemptId,
+        [Parameter(Mandatory = $true)][string]$RequestedCommit,
+        [Parameter(Mandatory = $true)][string]$SupervisorRootPath,
+        [Parameter(Mandatory = $true)][int]$RelayExitCode,
+        [object]$TaskStates = $null,
+        [object]$ServiceWitnesses = $null,
+        [string]$VersionPath = "",
+        [string]$ManifestUrl = "",
+        [string]$Note = ""
+    )
+    $Message = "Isolated bootstrap evidence relay failed (exit $RelayExitCode). Setup cannot claim clean success while required evidence identity is unverified."
+    Write-Utf8NoBom -Path $ReportPath -Value ((@{
+        version = 1
+        type = "initial-bootstrap"
+        attempt_id = $AttemptId
+        outcome = "blocked"
+        requested_commit = $RequestedCommit
+        commit = $RequestedCommit
+        version_path = $VersionPath
+        stable_supervisor_root = $SupervisorRootPath
+        task_states = $TaskStates
+        service_witnesses = $ServiceWitnesses
+        manifest_url = $ManifestUrl
+        recorded_at = [DateTimeOffset]::UtcNow.ToString("o")
+        note = $Note
+        blocked_reason = "bootstrap_evidence_relay_failed"
+        relay_exit_code = $RelayExitCode
+        message = $Message
+        requires_founder_attention = $true
+    } | ConvertTo-Json -Depth 20) + [Environment]::NewLine)
+    Write-Utf8NoBom -Path $NotificationPath -Value ((@{
+        version = 1
+        type = "autobuilder-self-update"
+        attempt_id = $AttemptId
+        outcome = "blocked"
+        requested_commit = $RequestedCommit
+        report_path = $ReportPath
+        requires_founder_attention = $true
+        recorded_at = [DateTimeOffset]::UtcNow.ToString("o")
+        blocked_reason = "bootstrap_evidence_relay_failed"
+        relay_exit_code = $RelayExitCode
+        message = $Message
+    } | ConvertTo-Json -Depth 10) + [Environment]::NewLine)
+    return $Message
+}
+
 function Invoke-Checked {
     param([Parameter(Mandatory = $true)][scriptblock]$Command, [Parameter(Mandatory = $true)][string]$Failure)
     & $Command | Out-Host
@@ -799,7 +849,21 @@ $EvidenceRelayModule = Join-Path $BootstrapRoot "self_update_evidence_relay.py"
 & $BootstrapPython $EvidenceRelayModule --config $SupervisorConfigPath | Out-Host
 if ($LASTEXITCODE -ne 0) {
     if ($IsolatedTaskNamespace) {
-        throw "Isolated bootstrap evidence relay failed (exit $LASTEXITCODE). Setup cannot claim clean success while required evidence identity is unverified."
+        # Relay consumes the local report/notification pair. On isolated failure, rewrite those
+        # immutable local files so no clean-success claim remains before fail-closed exit.
+        $RelayFailureMessage = Write-IsolatedBootstrapRelayFailureEvidence `
+            -ReportPath $BootstrapReport `
+            -NotificationPath $BootstrapNotification `
+            -AttemptId $BootstrapAttemptId `
+            -RequestedCommit $CurrentCommit `
+            -SupervisorRootPath $SupervisorRoot `
+            -RelayExitCode ([int]$LASTEXITCODE) `
+            -TaskStates $TaskStates `
+            -ServiceWitnesses $ServiceWitnesses `
+            -VersionPath $VersionPath `
+            -ManifestUrl $ManifestUrl `
+            -Note "Isolated bootstrap remained blocked because required results-branch evidence relay failed."
+        throw $RelayFailureMessage
     }
     Write-Warning "The supervisor is installed and healthy, but its bootstrap evidence has not reached the results branch yet. The scheduled updater will retry the durable local evidence automatically."
 }

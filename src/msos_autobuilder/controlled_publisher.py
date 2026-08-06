@@ -78,8 +78,6 @@ class PublisherConfig:
     main_write_enabled: bool
 
     def __post_init__(self) -> None:
-        if not self.draft_pr_publication_enabled:
-            raise ValueError("controlled publisher requires draft_pr_publication_enabled=true")
         if self.merge_enabled:
             raise ValueError("controlled publisher may not enable merge authority")
         if self.main_write_enabled:
@@ -1501,6 +1499,23 @@ class ControlledPublisher:
         self._last_error_marker_written = False
         self.state.mkdir(parents=True, exist_ok=True)
         cycle_started_at = _utc_now()
+        if not self.config.draft_pr_publication_enabled:
+            record_service_cycle_success(
+                state_root=self.state,
+                host_root=self.host_root,
+                service="publisher",
+                cycle_started_at=cycle_started_at,
+                associated_jobs=[],
+                terminal_evidence={
+                    "mode": "publication-disabled-idle",
+                    "processed_jobs": [],
+                    "verified_jobs": [],
+                    "draft_pr_publication_enabled": False,
+                    "merge_enabled": False,
+                    "main_write_enabled": False,
+                },
+            )
+            return ()
         with PublisherLock(self.lock_path):
             self.evidence.prepare()
             ledger = self._load_ledger()
@@ -1645,9 +1660,9 @@ class ControlledPublisher:
             message=str(exc),
             associated=associated,
             extra={
-                "draft_pr_publication_enabled": True,
-                "merge_enabled": False,
-                "main_write_enabled": False,
+                "draft_pr_publication_enabled": self.config.draft_pr_publication_enabled,
+                "merge_enabled": self.config.merge_enabled,
+                "main_write_enabled": self.config.main_write_enabled,
             },
             exception=exc,
         )
@@ -1680,9 +1695,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 {
                     "status": "completed",
                     "processed_jobs": list(processed),
-                    "draft_pr_publication_enabled": True,
-                    "merge_enabled": False,
-                    "main_write_enabled": False,
+                    "draft_pr_publication_enabled": publisher.config.draft_pr_publication_enabled,
+                    "merge_enabled": publisher.config.merge_enabled,
+                    "main_write_enabled": publisher.config.main_write_enabled,
                 },
                 indent=2,
                 sort_keys=True,

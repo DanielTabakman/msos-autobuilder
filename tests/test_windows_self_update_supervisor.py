@@ -15,6 +15,8 @@ from types import ModuleType
 import pytest
 import yaml
 
+from msos_autobuilder.controlled_publisher import load_publisher_config
+
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "install_windows_self_update_supervisor.ps1"
 RUNNER = ROOT / "scripts" / "run_windows_managed_service.ps1"
@@ -572,6 +574,52 @@ def test_isolated_installer_generates_all_managed_configs_before_task_mutation(
     assert publisher["merge_enabled"] is False
     assert publisher["main_write_enabled"] is False
     assert publisher["plans"] == {}
+    loaded_publisher = load_publisher_config(generated["publisher"])
+    assert loaded_publisher.draft_pr_publication_enabled is False
+    assert loaded_publisher.merge_enabled is False
+    assert loaded_publisher.main_write_enabled is False
+    assert loaded_publisher.plans == {}
+    publisher_entry = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "msos_autobuilder.controlled_publisher",
+            "--config",
+            str(generated["publisher"]),
+            "--once",
+        ],
+        cwd=ROOT,
+        env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    assert publisher_entry.returncode == 0, publisher_entry.stderr or publisher_entry.stdout
+    publisher_entry_payload = json.loads(publisher_entry.stdout)
+    assert publisher_entry_payload == {
+        "draft_pr_publication_enabled": False,
+        "main_write_enabled": False,
+        "merge_enabled": False,
+        "processed_jobs": [],
+        "status": "completed",
+    }
+    publisher_success = json.loads(
+        (host_root / "state" / "publisher-service-success.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert publisher_success["associated_jobs"] == []
+    assert publisher_success["terminal_evidence"] == {
+        "draft_pr_publication_enabled": False,
+        "main_write_enabled": False,
+        "merge_enabled": False,
+        "mode": "publication-disabled-idle",
+        "processed_jobs": [],
+        "verified_jobs": [],
+    }
+    assert not (host_root / "state" / "controlled-publisher-error.json").exists()
     assert refill_policy["enabled"] is False
     assert refill_policy["desired_capacity"] == 0
     assert refill_policy["status"] == "PAUSED"

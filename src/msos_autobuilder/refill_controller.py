@@ -51,6 +51,7 @@ from .service_error_lifecycle import (
     REVISION_ERROR_SPEC,
     evaluate_service_error_marker,
 )
+from .windows_git_checkout import candidate_results_checkout
 
 
 class RefillControllerError(RuntimeError):
@@ -1172,7 +1173,7 @@ def _publisher_dispositions(paths: HostPaths) -> set[str]:
 def _awaiting_review_counts(paths: HostPaths) -> dict[str, int]:
     counts: dict[str, int] = {}
     disposed = _publisher_dispositions(paths)
-    results_root = paths.state / "candidate-gate-results-repo" / "results"
+    results_root = candidate_results_checkout(paths.state) / "results"
     if not results_root.exists():
         return counts
     for report_path in sorted(results_root.glob("*/*/gate-report.json")):
@@ -1427,7 +1428,7 @@ def _publisher_seen(paths: HostPaths, job_id: str) -> dict[str, Any] | None:
 
 
 def _gate_report(paths: HostPaths, job_id: str) -> dict[str, Any] | None:
-    root = paths.state / "candidate-gate-results-repo" / "results"
+    root = candidate_results_checkout(paths.state) / "results"
     if not root.exists():
         return None
     for path in root.glob(f"*/{job_id}/gate-report.json"):
@@ -2498,7 +2499,7 @@ def _health_snapshot(config: RefillConfig, paths: HostPaths) -> dict[str, Any]:
     }
     if not checks["feed_configuration"]["ok"]:
         health["ok"] = False
-    results_checkout = paths.state / "candidate-gate-results-repo"
+    results_checkout = candidate_results_checkout(paths.state)
     checks["results_checkout"] = {"ok": results_checkout.exists(), "path": str(results_checkout)}
     if not checks["results_checkout"]["ok"]:
         health["ok"] = False

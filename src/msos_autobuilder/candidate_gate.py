@@ -37,6 +37,7 @@ from .validation_contract import (
     canonical_dependency_source_sha256,
     load_validation_contract,
 )
+from .windows_git_checkout import candidate_results_checkout, git_environment
 
 
 class CandidateGateError(RuntimeError):
@@ -139,6 +140,7 @@ def _run_git(
         encoding="utf-8",
         errors="replace",
         shell=False,
+        env=git_environment(),
         check=False,
     )
     if proc.returncode not in accepted:
@@ -463,7 +465,8 @@ class ResultsBranch:
 
     def __init__(self, config: CandidateGateConfig) -> None:
         self.config = config
-        self.checkout = config.host_root / "state" / "candidate-gate-results-repo"
+        host_root = config.host_root.expanduser().resolve()
+        self.checkout = candidate_results_checkout(host_root / "state")
 
     def prepare(self) -> None:
         if not (self.checkout / ".git").exists():

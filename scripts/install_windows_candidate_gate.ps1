@@ -49,6 +49,19 @@ function Invoke-GitChecked {
     }
 }
 
+function Resolve-PreferredCheckout {
+    param(
+        [Parameter(Mandatory = $true)][string]$StateRoot,
+        [Parameter(Mandatory = $true)][string]$ShortName,
+        [Parameter(Mandatory = $true)][string]$LegacyName
+    )
+    $short = Join-Path $StateRoot $ShortName
+    $legacy = Join-Path $StateRoot $LegacyName
+    if (Test-Path (Join-Path $short ".git")) { return $short }
+    if (Test-Path (Join-Path $legacy ".git")) { return $legacy }
+    return $short
+}
+
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Bootstrap = Join-Path $PSScriptRoot "bootstrap_windows_codex_host_auto.ps1"
 $VenvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
@@ -58,7 +71,7 @@ $LogRoot = Join-Path $HostRoot "logs"
 $LogFile = Join-Path $LogRoot "candidate-gate.log"
 $RunnerScript = Join-Path $HostRoot "run-candidate-gate.ps1"
 $IntegrityWitness = Join-Path $RepoRoot "scripts\check_frozen_evaluation_candidate.py"
-$ResultsCheckout = Join-Path $HostRoot "state\candidate-gate-results-repo"
+$ResultsCheckout = Resolve-PreferredCheckout -StateRoot (Join-Path $HostRoot "state") -ShortName "cg-repo" -LegacyName "candidate-gate-results-repo"
 $LedgerPath = Join-Path $HostRoot "state\candidate-gate-seen.json"
 $Git = Get-Command git -ErrorAction Stop
 
@@ -137,17 +150,20 @@ if ($ExistingTask) {
 Write-Host "Running the candidate gate once in the foreground..." -ForegroundColor Cyan
 $PreviousPrompt = $env:GIT_TERMINAL_PROMPT
 $PreviousGitConfigCount = $env:GIT_CONFIG_COUNT
-$PreviousGitConfigKey = $env:GIT_CONFIG_KEY_0
-$PreviousGitConfigValue = $env:GIT_CONFIG_VALUE_0
+$PreviousGitConfigKey0 = $env:GIT_CONFIG_KEY_0
+$PreviousGitConfigValue0 = $env:GIT_CONFIG_VALUE_0
+$PreviousGitConfigKey1 = $env:GIT_CONFIG_KEY_1
+$PreviousGitConfigValue1 = $env:GIT_CONFIG_VALUE_1
 $env:GIT_TERMINAL_PROMPT = "1"
-$env:GIT_CONFIG_COUNT = "1"
+$env:GIT_CONFIG_COUNT = "2"
 $env:GIT_CONFIG_KEY_0 = "core.autocrlf"
 $env:GIT_CONFIG_VALUE_0 = "false"
+$env:GIT_CONFIG_KEY_1 = "core.longpaths"
+$env:GIT_CONFIG_VALUE_1 = "true"
 try {
     # Git patch hashes are calculated over canonical LF bytes. Force the results checkout
     # to preserve those bytes rather than applying the Windows core.autocrlf conversion.
     if (Test-Path (Join-Path $ResultsCheckout ".git")) {
-        Invoke-GitChecked -Arguments @("-C", $ResultsCheckout, "config", "core.autocrlf", "false")
         Invoke-GitChecked -Arguments @("-C", $ResultsCheckout, "checkout-index", "-a", "-f")
     }
 
@@ -193,8 +209,10 @@ try {
 finally {
     Restore-EnvironmentValue -Name "GIT_TERMINAL_PROMPT" -Value $PreviousPrompt
     Restore-EnvironmentValue -Name "GIT_CONFIG_COUNT" -Value $PreviousGitConfigCount
-    Restore-EnvironmentValue -Name "GIT_CONFIG_KEY_0" -Value $PreviousGitConfigKey
-    Restore-EnvironmentValue -Name "GIT_CONFIG_VALUE_0" -Value $PreviousGitConfigValue
+    Restore-EnvironmentValue -Name "GIT_CONFIG_KEY_0" -Value $PreviousGitConfigKey0
+    Restore-EnvironmentValue -Name "GIT_CONFIG_VALUE_0" -Value $PreviousGitConfigValue0
+    Restore-EnvironmentValue -Name "GIT_CONFIG_KEY_1" -Value $PreviousGitConfigKey1
+    Restore-EnvironmentValue -Name "GIT_CONFIG_VALUE_1" -Value $PreviousGitConfigValue1
 }
 
 $RunnerContent = @"
@@ -202,9 +220,11 @@ Set-StrictMode -Version Latest
 `$ErrorActionPreference = "Continue"
 `$env:PYTHONUTF8 = "1"
 `$env:GIT_TERMINAL_PROMPT = "0"
-`$env:GIT_CONFIG_COUNT = "1"
+`$env:GIT_CONFIG_COUNT = "2"
 `$env:GIT_CONFIG_KEY_0 = "core.autocrlf"
 `$env:GIT_CONFIG_VALUE_0 = "false"
+`$env:GIT_CONFIG_KEY_1 = "core.longpaths"
+`$env:GIT_CONFIG_VALUE_1 = "true"
 New-Item -ItemType Directory -Force -Path "$LogRoot" | Out-Null
 & "$VenvPython" -m msos_autobuilder.candidate_gate --config "$GateConfig" *>> "$LogFile"
 exit `$LASTEXITCODE

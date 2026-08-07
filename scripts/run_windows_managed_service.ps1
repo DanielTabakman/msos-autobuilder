@@ -11,9 +11,11 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $env:PYTHONUTF8 = "1"
 $env:GIT_TERMINAL_PROMPT = "0"
-$env:GIT_CONFIG_COUNT = "1"
+$env:GIT_CONFIG_COUNT = "2"
 $env:GIT_CONFIG_KEY_0 = "core.autocrlf"
 $env:GIT_CONFIG_VALUE_0 = "false"
+$env:GIT_CONFIG_KEY_1 = "core.longpaths"
+$env:GIT_CONFIG_VALUE_1 = "true"
 
 function Write-Utf8AtomicText {
     param(

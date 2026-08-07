@@ -108,6 +108,16 @@ def test_git_environment_enables_longpaths() -> None:
     assert env["GIT_CONFIG_VALUE_1"] == "true"
 
 
+def test_git_environment_preserves_inherited_foreground_prompt(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "1")
+    env = git_environment()
+    assert env["GIT_TERMINAL_PROMPT"] == "1"
+    assert env["GIT_CONFIG_KEY_1"] == "core.longpaths"
+    assert env["GIT_CONFIG_VALUE_1"] == "true"
+
+
 def test_revision_loop_prefers_short_results_checkout_on_long_host_root(
     tmp_path: Path,
 ) -> None:

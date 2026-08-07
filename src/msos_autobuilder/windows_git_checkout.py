@@ -43,10 +43,13 @@ def candidate_results_checkout(state_root: Path) -> Path:
 
 
 def git_environment() -> dict[str, str]:
-    """Process environment for git with autocrlf disabled and longpaths enabled."""
+    """Process environment for git with autocrlf disabled and longpaths enabled.
+
+    Inherited ``GIT_TERMINAL_PROMPT`` is preserved so foreground installers can
+    keep prompting enabled while scheduled wrappers keep prompting disabled.
+    """
 
     environment = dict(os.environ)
-    environment["GIT_TERMINAL_PROMPT"] = "0"
     environment["GIT_CONFIG_COUNT"] = "2"
     environment["GIT_CONFIG_KEY_0"] = "core.autocrlf"
     environment["GIT_CONFIG_VALUE_0"] = "false"

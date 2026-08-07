@@ -1,0 +1,157 @@
+version: 1
+job_id: useful-ppe-5316-token-audit-readonly-8d6c7119ec7a
+approved: true
+publication_enabled: false
+requested_by: first-useful-job-gate:ppe-5316-comment-5218473502
+submitted_at: '2026-08-07T15:20:03Z'
+approved_at: '2026-08-07T15:20:03Z'
+expected_source_head: 8d6c7119ec7a77abcfd766443222d347313c75a2
+founder_build_next:
+  version: 1
+  pipeline_id: ppe-useful-job-5316
+  work_item_id: ppe-issue-5316
+  repository: DanielTabakman/Probability-prediction-engine
+  registered_adapter: ppe_operator
+  source:
+    repository: DanielTabakman/Probability-prediction-engine
+    ref: main
+    commit: 8d6c7119ec7a77abcfd766443222d347313c75a2
+  selection_packet:
+    github_issue: 5316
+    comment_id: 5218473502
+    comment_url: https://github.com/DanielTabakman/Probability-prediction-engine/issues/5316#issuecomment-5218473502
+  authority:
+    publication_enabled: false
+    merge_enabled: false
+    product_main_write_enabled: false
+    refill_enabled: false
+    second_job_admission_enabled: false
+    autonomous_installation_enabled: false
+candidate_validation:
+  version: 1
+  pipeline_id: ppe-useful-job-5316
+  adapter: ppe_operator
+  target_repository: DanielTabakman/Probability-prediction-engine
+  source_commit: 8d6c7119ec7a77abcfd766443222d347313c75a2
+  job_id: useful-ppe-5316-token-audit-readonly-8d6c7119ec7a
+  work_item_id: ppe-issue-5316
+  native_slice_id: token-audit-readonly-v1
+  allowed_changed_paths:
+  - scripts/ppe_ide_build_starter.py
+  - scripts/ppe_token_audit.py
+  - tests/test_ppe_token_audit.py
+  dependency_policy:
+    version: 1
+    adapter: ppe_operator
+    profile_id: ppe-ci-pytest-v1
+    source: accepted_ppe_ci_bootstrap
+    source_commit: 8d6c7119ec7a77abcfd766443222d347313c75a2
+    dependency_source_path: requirements.txt
+    dependency_source_sha256: "\uFEFF47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394"
+    network_allowed: true
+    candidate_environment_required: true
+    strategy: candidate_local_venv_requirements_test_tooling_editable_install
+    test_tooling:
+    - pytest
+    - pytest-xdist
+    - ruff
+  bootstrap:
+  - name: upgrade-pip
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - --upgrade
+    - pip
+    cwd: .
+    timeout_seconds: 600
+    required: true
+  - name: install-requirements
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - -r
+    - requirements.txt
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  - name: install-test-tooling
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - pytest
+    - pytest-xdist
+    - ruff
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  - name: install-candidate-package
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - -e
+    - .
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  checks:
+  - name: repository-pytest
+    argv:
+    - python
+    - -m
+    - pytest
+    - -q
+    cwd: .
+    timeout_seconds: 1800
+    required: true
+  publication_enabled: false
+  merge_enabled: false
+  product_main_write_enabled: false
+  contract_sha256: 77630e91754d84a1f9f99e378eb06c2db08e3e07c7c844675b212882cc709ee7
+manifest:
+  version: 1
+  publication_enabled: false
+  lanes:
+  - task_id: token-audit-readonly-v1
+    lane_id: token-audit-readonly-v1
+    chapter_id: PPE-ISSUE-5316
+    branch: autobuilder/useful-ppe-5316-token-audit-readonly
+    layer: scripts
+    allowed_paths:
+    - scripts/ppe_token_audit.py
+    - scripts/ppe_ide_build_starter.py
+    - tests/test_ppe_token_audit.py
+    forbidden_paths:
+    - docs/SOP/PPE_BILLING_GATE_V1.md
+    - ppe_autobuilder.cmd
+    - scripts/ppe_billing_gate.py
+    - tests/test_ppe_billing_gate.py
+    - artifacts/**
+    - docs/SOP/**
+    allow_changes: true
+    instruction: "PPE issue #5316 / comment 5218473502 \u2014 first useful Autobuilder\
+      \ job.\n\nExact source: PPE main 8d6c7119ec7a77abcfd766443222d347313c75a2.\n\
+      \nGoal: make normal token-audit/report paths read-only while preserving explicit\
+      \ --prune-stale deletion.\n\nImplement the smallest coherent fix:\n1. Add find_starters_for_completed_chapters(repo)\
+      \ -> list[str] using the same completed-chapter/starter semantics as the current\
+      \ pruner.\n2. Make prune_starters_for_completed_chapters() delete only after/through\
+      \ that discovery path.\n3. Make ppe_token_audit.audit_stale_starters() use the\
+      \ read-only finder (not the pruner).\n4. Add regression coverage proving:\n\
+      \   - ordinary build_token_audit() reports a stale starter but leaves bytes/path\
+      \ intact;\n   - explicit prune behavior removes that same starter;\n   - no\
+      \ unrelated audit behavior changes.\n\nWritable paths only:\n- scripts/ppe_token_audit.py\n\
+      - scripts/ppe_ide_build_starter.py\n- tests/test_ppe_token_audit.py\n\nForbidden/non-goals:\n\
+      - no product application code;\n- no Autobuilder source/runtime changes;\n-\
+      \ no queue/refill/feed/publisher changes;\n- no merge, deploy, product-main\
+      \ write, or autonomous install;\n- no broad token-economy redesign;\n- no edits\
+      \ to open PR #5314 paths (docs/SOP/PPE_BILLING_GATE_V1.md, ppe_autobuilder.cmd,\
+      \ scripts/ppe_billing_gate.py, tests/test_ppe_billing_gate.py).\n\nDo not commit,\
+      \ push, publish, open a PR, merge, or write product main.\nStop after implementation\
+      \ + focused tests/ruff on touched paths; Autobuilder candidate gate will validate.\n"

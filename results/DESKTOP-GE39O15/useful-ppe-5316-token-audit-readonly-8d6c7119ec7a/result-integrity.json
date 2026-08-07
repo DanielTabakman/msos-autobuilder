@@ -1,0 +1,9 @@
+{
+  "canonical_patch_sha256_by_task": {
+    "token-audit-readonly-v1": "da63cd785f5e8b32a15125f89c2c31dc911cbe8da82ba4b20046626589597fab"
+  },
+  "corrected_report_sha256": "b074a4622abf10d18a4bcb83bef9445c9efecc2a1e874e0cc8b8646f77463503",
+  "publication_enabled": false,
+  "source_report_sha256": "35f952fb9b02c4a2c3264ae201a1bc7fc28d4f447fb87d269d5e6f759dae30fc",
+  "version": 1
+}

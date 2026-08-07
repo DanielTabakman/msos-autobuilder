@@ -1,0 +1,63 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "scripts/ppe_ide_build_starter.py",
+          "scripts/ppe_token_audit.py",
+          "tests/test_ppe_token_audit.py"
+        ],
+        "metadata": {
+          "output_tail": "f.repo)\n+\n+        self.assertEqual(report.stale_starter_ids, [\"Test-Slice001\"])\n+        self.assertTrue(starter.is_file())\n+        self.assertEqual(starter.read_bytes(), before)\n+        data = report.to_dict()\n+        self.assertEqual(len(data[\"starters\"]), 1)\n+        self.assertEqual(data[\"starters\"][0][\"slice_id\"], \"Test-Slice001\")\n+        self.assertEqual(data[\"always_on_total_chars\"], sum(row.chars for row in report.rules if row.always_apply))\n+\n+    def test_explicit_prune_removes_completed_chapter_starter(self) -> None:\n+        starter = self.write_completed_chapter_plan()\n+\n+        removed = prune_starters_for_completed_chapters(self.repo)\n+\n+        self.assertEqual(removed, [\"Test-Slice001\"])\n+        self.assertFalse(starter.exists())\n+\n \n if __name__ == \"__main__\":\n     unittest.main()\n\ntokens used\n57,506\nImplemented the read-only token audit fix and did not commit/push.\n\nChanged:\n- [scripts/ppe_ide_build_starter.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/token-audit-readonly-v1/scripts/ppe_ide_build_starter.py): added `find_starters_for_completed_chapters(repo)`, and made `prune_starters_for_completed_chapters()` delete only from that discovery result.\n- [scripts/ppe_token_audit.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/token-audit-readonly-v1/scripts/ppe_token_audit.py): `audit_stale_starters()` now uses the read-only finder.\n- [tests/test_ppe_token_audit.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/token-audit-readonly-v1/tests/test_ppe_token_audit.py): added regressions for read-only audit behavior, explicit prune deletion, and unchanged surrounding audit data.\n\nVerification:\n- `python -m pytest tests/test_ppe_token_audit.py` \u2192 5 passed\n- `python -m ruff check scripts/ppe_token_audit.py scripts/ppe_ide_build_starter.py tests/test_ppe_token_audit.py` \u2192 passed\n\nWorking tree only has the three allowed files modified.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\workspaces\\token-audit-readonly-v1"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 3 changed path(s)",
+        "task_id": "token-audit-readonly-v1"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "8d6c7119ec7a77abcfd766443222d347313c75a2",
+    "status": "completed"
+  },
+  "completed_at": "2026-08-07T15:22:07.420367+00:00",
+  "job_id": "useful-ppe-5316-token-audit-readonly-8d6c7119ec7a",
+  "job_sha256": "d8196ac765a44129d0f0cca4f05eb4438a19d7328fefa3b8d208fc3b3d6c116f",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "changed_paths": [
+        "scripts/ppe_ide_build_starter.py",
+        "scripts/ppe_token_audit.py",
+        "tests/test_ppe_token_audit.py"
+      ],
+      "complete_patch": true,
+      "lane_id": "token-audit-readonly-v1",
+      "patch_file": "patches/token-audit-readonly-v1.patch",
+      "patch_sha256": "da63cd785f5e8b32a15125f89c2c31dc911cbe8da82ba4b20046626589597fab",
+      "task_id": "token-audit-readonly-v1"
+    }
+  ],
+  "publication_enabled": false,
+  "relay": {
+    "canonical_patch_sha256_by_task": {
+      "token-audit-readonly-v1": "da63cd785f5e8b32a15125f89c2c31dc911cbe8da82ba4b20046626589597fab"
+    },
+    "canonical_report_role": "relay-corrected-canonical-downstream-report",
+    "complete_patch_reconstruction": true,
+    "machine_id": "DESKTOP-GE39O15",
+    "publication_enabled": false,
+    "relayed_at": "2026-08-07T15:22:30.788075+00:00",
+    "source_report_role": "original-worker-report-noncanonical-for-patch-identity",
+    "source_report_sha256": "35f952fb9b02c4a2c3264ae201a1bc7fc28d4f447fb87d269d5e6f759dae30fc",
+    "version": 1
+  },
+  "requested_by": "first-useful-job-gate:ppe-5316-comment-5218473502",
+  "source": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\queue\\pending\\useful-ppe-5316-token-audit-readonly-8d6c7119ec7a.yaml",
+  "version": 1
+}

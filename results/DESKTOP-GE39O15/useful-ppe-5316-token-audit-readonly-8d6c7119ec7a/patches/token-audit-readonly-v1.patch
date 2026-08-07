@@ -1,0 +1,138 @@
+diff --git a/scripts/ppe_ide_build_starter.py b/scripts/ppe_ide_build_starter.py
+index c26b4bfb..cfd3a2a4 100644
+--- a/scripts/ppe_ide_build_starter.py
++++ b/scripts/ppe_ide_build_starter.py
+@@ -527,20 +527,40 @@ def prune_starters_for_plan(repo: Path, phase_plan: str) -> list[str]:
+     return removed
+ 
+ 
+-def prune_starters_for_completed_chapters(repo: Path) -> list[str]:
++def find_starters_for_completed_chapters(repo: Path) -> list[str]:
+     from scripts.ppe_queue_health import chapter_marked_complete_in_repo
+ 
+     sop = repo / "docs" / "SOP" / "PHASE_PLANS"
+     if not sop.is_dir():
+         return []
+-    removed: list[str] = []
++    stale: list[str] = []
+     for plan_file in sorted(sop.glob("*_relay.json")):
+         rel = str(plan_file.relative_to(repo)).replace("\\", "/")
+         if not chapter_marked_complete_in_repo(repo, rel):
+             continue
+-        for sid in prune_starters_for_plan(repo, rel):
+-            if sid not in removed:
+-                removed.append(sid)
++        try:
++            plan = load_phase_plan(repo, rel)
++        except (FileNotFoundError, OSError):
++            continue
++        for sl in plan.get("slices") or []:
++            if not isinstance(sl, dict):
++                continue
++            sid = str(sl.get("sliceId") or "").strip()
++            if not sid:
++                continue
++            path = repo / starter_path(sid)
++            if path.is_file() and sid not in stale:
++                stale.append(sid)
++    return stale
++
++
++def prune_starters_for_completed_chapters(repo: Path) -> list[str]:
++    removed: list[str] = []
++    for sid in find_starters_for_completed_chapters(repo):
++        path = repo / starter_path(sid)
++        if path.is_file():
++            path.unlink()
++            removed.append(sid)
+     return removed
+ 
+ 
+diff --git a/scripts/ppe_token_audit.py b/scripts/ppe_token_audit.py
+index a6a0b19e..80706371 100644
+--- a/scripts/ppe_token_audit.py
++++ b/scripts/ppe_token_audit.py
+@@ -150,9 +150,9 @@ def audit_starters(repo: Path) -> list[StarterAuditRow]:
+ 
+ 
+ def audit_stale_starters(repo: Path) -> list[str]:
+-    from scripts.ppe_ide_build_starter import prune_starters_for_completed_chapters
++    from scripts.ppe_ide_build_starter import find_starters_for_completed_chapters
+ 
+-    return prune_starters_for_completed_chapters(repo)
++    return find_starters_for_completed_chapters(repo)
+ 
+ 
+ def audit_build_worker(repo: Path) -> dict[str, Any]:
+diff --git a/tests/test_ppe_token_audit.py b/tests/test_ppe_token_audit.py
+index 51c102ae..2dc93ce3 100644
+--- a/tests/test_ppe_token_audit.py
++++ b/tests/test_ppe_token_audit.py
+@@ -7,6 +7,7 @@ import tempfile
+ import unittest
+ from pathlib import Path
+ 
++from scripts.ppe_ide_build_starter import prune_starters_for_completed_chapters
+ from scripts.ppe_token_audit import (
+     ALWAYS_ON_CHAR_TARGET,
+     append_history_snapshot,
+@@ -32,6 +33,30 @@ class TestPpeTokenAudit(unittest.TestCase):
+         orch.mkdir(parents=True)
+         (orch / "IDE_BUILD_STARTER_Test-Slice001.md").write_text("\n".join(["line"] * 50), encoding="utf-8")
+ 
++    def write_completed_chapter_plan(self) -> Path:
++        plan_rel = Path("docs/SOP/PHASE_PLANS/Completed_relay.json")
++        evidence_rel = Path("docs/SOP/CHAPTER_EVIDENCE/Completed.md")
++        plan_path = self.repo / plan_rel
++        evidence_path = self.repo / evidence_rel
++        plan_path.parent.mkdir(parents=True, exist_ok=True)
++        evidence_path.parent.mkdir(parents=True, exist_ok=True)
++        plan_path.write_text(
++            json.dumps(
++                {
++                    "slices": [
++                        {"sliceId": "Test-Slice001"},
++                        {
++                            "sliceId": "Completed-Closeout",
++                            "closeout": {"evidenceDoc": evidence_rel.as_posix()},
++                        },
++                    ]
++                }
++            ),
++            encoding="utf-8",
++        )
++        evidence_path.write_text("## Chapter status\n\n**COMPLETE**\n", encoding="utf-8")
++        return self.repo / "artifacts" / "orchestrator" / "IDE_BUILD_STARTER_Test-Slice001.md"
++
+     def tearDown(self) -> None:
+         self._tmp.cleanup()
+ 
+@@ -53,6 +78,28 @@ class TestPpeTokenAudit(unittest.TestCase):
+         self.assertEqual(len(rows), 1)
+         self.assertEqual(rows[0]["verdict"], report.verdict)
+ 
++    def test_build_token_audit_reports_stale_starter_read_only(self) -> None:
++        starter = self.write_completed_chapter_plan()
++        before = starter.read_bytes()
++
++        report = build_token_audit(self.repo)
++
++        self.assertEqual(report.stale_starter_ids, ["Test-Slice001"])
++        self.assertTrue(starter.is_file())
++        self.assertEqual(starter.read_bytes(), before)
++        data = report.to_dict()
++        self.assertEqual(len(data["starters"]), 1)
++        self.assertEqual(data["starters"][0]["slice_id"], "Test-Slice001")
++        self.assertEqual(data["always_on_total_chars"], sum(row.chars for row in report.rules if row.always_apply))
++
++    def test_explicit_prune_removes_completed_chapter_starter(self) -> None:
++        starter = self.write_completed_chapter_plan()
++
++        removed = prune_starters_for_completed_chapters(self.repo)
++
++        self.assertEqual(removed, ["Test-Slice001"])
++        self.assertFalse(starter.exists())
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

@@ -1334,6 +1334,17 @@ def test_managed_runner_resolves_only_the_active_version_and_writes_witnesses() 
     assert "{runtime_config}" in script
 
 
+def test_managed_runner_substitutes_every_template_placeholder() -> None:
+    script = RUNNER.read_text(encoding="utf-8")
+    render = next(line for line in script.splitlines() if "$Rendered = $Template" in line)
+
+    assert '.Replace("{managed_release_root}"' in render
+    assert '.Replace("{managed_python}"' in render
+    assert '.Replace("{host_root}", $HostRoot.Replace("\\", "/"))' in render
+    assert '.Replace("{machine_id}", $env:COMPUTERNAME)' in render
+    assert "unsubstituted placeholder" in script
+
+
 def test_stable_probe_requires_modules_to_resolve_inside_selected_release(
     tmp_path: Path,
 ) -> None:

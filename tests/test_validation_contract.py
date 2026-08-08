@@ -16,7 +16,11 @@ SOURCE = "0123456789abcdef0123456789abcdef01234567"
 REQ_SHA = hashlib.sha256(b"").hexdigest()
 
 
-def _contract() -> dict:
+def _contract(
+    *,
+    dependency_source_sha256: str = REQ_SHA,
+    target_repository: str = "DanielTabakman/Probability-prediction-engine",
+) -> dict:
     return build_ppe_validation_contract(
         pipeline_id="ppe",
         job_id="build-next-ppe-work-Slice002-0123456789ab",
@@ -24,8 +28,8 @@ def _contract() -> dict:
         native_slice_id="Slice002",
         source_commit=SOURCE,
         allowed_changed_paths=["src/app.py", "tests/test_app.py"],
-        target_repository="DanielTabakman/Probability-prediction-engine",
-        dependency_source_sha256=REQ_SHA,
+        target_repository=target_repository,
+        dependency_source_sha256=dependency_source_sha256,
     )
 
 
@@ -78,6 +82,25 @@ def test_validation_contract_parses_required_fields() -> None:
     assert all(command.required is True for command in contract.bootstrap)
     assert contract.checks[0].required is True
     assert contract.publication_enabled is False
+
+
+def test_contract_builder_normalizes_a_bom_wrapped_dependency_digest() -> None:
+    contract = _contract(dependency_source_sha256=f"\ufeff  {REQ_SHA.upper()}  ")
+
+    assert contract["dependency_policy"]["dependency_source_sha256"] == REQ_SHA
+    loaded = load_validation_contract(contract)
+    assert loaded.dependency_policy["dependency_source_sha256"] == REQ_SHA
+
+
+@pytest.mark.parametrize("digest", ["", "not-a-digest", REQ_SHA[:-1], f"{REQ_SHA}0"])
+def test_contract_builder_rejects_an_unusable_dependency_digest(digest: str) -> None:
+    with pytest.raises(ValidationContractError, match="dependency_source_sha256"):
+        _contract(dependency_source_sha256=digest)
+
+
+def test_contract_builder_refuses_to_emit_a_contract_its_own_loader_rejects() -> None:
+    with pytest.raises(ValidationContractError, match="target_repository"):
+        _contract(target_repository="not-a-repository")
 
 
 @pytest.mark.parametrize(

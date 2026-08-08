@@ -205,6 +205,41 @@ PRODUCTION_TASK_NAMES = [
     *MANAGED_TASK_NAMES,
     "MSOS Autobuilder Update Supervisor",
 ]
+PILOT_TASK_NAMESPACE = "Pilot Issue119"
+MANAGED_TASK_ROLES = [
+    ("host", "Host"),
+    ("relay", "Result Relay"),
+    ("gate", "Candidate Gate"),
+    ("revision", "Revision Loop"),
+    ("publisher", "Controlled Publisher"),
+    ("refill", "Capacity-One Refill"),
+]
+
+
+def _resolved_task_names(namespace: str = "") -> dict[str, str]:
+    """Mirror the installer/handoff naming convention: service -> Scheduled Task name."""
+    prefix = "MSOS Autobuilder" if not namespace else f"MSOS Autobuilder {namespace}"
+    return {service: f"{prefix} {role}" for service, role in MANAGED_TASK_ROLES}
+
+
+def _resolved_update_task_name(namespace: str = "") -> str:
+    prefix = "MSOS Autobuilder" if not namespace else f"MSOS Autobuilder {namespace}"
+    return f"{prefix} Update Supervisor"
+
+
+def _service_name_function(namespace: str = "", *, include_production: bool = False) -> str:
+    """Render the stub task-name -> service map used by both handoff stub layers."""
+    mapping = {task: service for service, task in _resolved_task_names(namespace).items()}
+    if include_production and namespace:
+        for service, task in _resolved_task_names().items():
+            mapping.setdefault(task, service)
+    lines = ["function Get-ServiceName([string]$TaskName) {"]
+    lines.extend(
+        f"    if ($TaskName -eq '{task}') {{ return '{service}' }}"
+        for task, service in mapping.items()
+    )
+    lines.extend(["    return $null", "}"])
+    return "\n".join(lines)
 
 
 def _powershell_test_env(*, userprofile_root: Path | None = None) -> dict[str, str]:
@@ -1497,6 +1532,8 @@ def _build_stable_bootstrap_handoff_fixture(
     health_timeout_seconds: float = 5,
     health_poll_seconds: float = 0.1,
     health_stability_seconds: float = 0,
+    task_namespace: str = "",
+    config_task_namespace: str | None = None,
 ) -> dict[str, object]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     repo = tmp_path / "repo"
@@ -1527,6 +1564,7 @@ def _build_stable_bootstrap_handoff_fixture(
                     stderr_failure=task_control_stderr_failure,
                     stderr_repeat=task_control_stderr_repeat,
                     legacy_interface=True,
+                    task_namespace=task_namespace,
                 ),
                 encoding="utf-8",
             )
@@ -1554,6 +1592,7 @@ def _build_stable_bootstrap_handoff_fixture(
         _stubbed_task_control_script(
             stderr_failure=task_control_stderr_failure,
             stderr_repeat=task_control_stderr_repeat,
+            task_namespace=task_namespace,
         ),
         encoding="utf-8",
     )
@@ -1580,6 +1619,10 @@ def _build_stable_bootstrap_handoff_fixture(
     for source, target in target_names.items():
         shutil.copy2(repo / source, live_bootstrap / target)
     host_root = tmp_path / "host"
+    installed_namespace = (
+        task_namespace if config_task_namespace is None else config_task_namespace
+    )
+    installed_task_names = _resolved_task_names(installed_namespace)
     (live_bootstrap / "supervisor.yaml").write_text(
         "\n".join(
             [
@@ -1597,15 +1640,15 @@ def _build_stable_bootstrap_handoff_fixture(
                 f"health_stability_seconds: {health_stability_seconds}",
                 "managed_tasks:",
                 "  - service: host",
-                "    task_name: 'MSOS Autobuilder Host'",
+                f"    task_name: '{installed_task_names['host']}'",
                 "  - service: relay",
-                "    task_name: 'MSOS Autobuilder Result Relay'",
+                f"    task_name: '{installed_task_names['relay']}'",
                 "  - service: gate",
-                "    task_name: 'MSOS Autobuilder Candidate Gate'",
+                f"    task_name: '{installed_task_names['gate']}'",
                 "  - service: revision",
-                "    task_name: 'MSOS Autobuilder Revision Loop'",
+                f"    task_name: '{installed_task_names['revision']}'",
                 "  - service: publisher",
-                "    task_name: 'MSOS Autobuilder Controlled Publisher'",
+                f"    task_name: '{installed_task_names['publisher']}'",
                 "",
             ]
         ),
@@ -1665,6 +1708,8 @@ def _build_stable_bootstrap_handoff_fixture(
         "new_commit": new_commit,
         "host_root": host_root,
         "target_names": target_names,
+        "task_namespace": task_namespace,
+        "installed_task_namespace": installed_namespace,
     }
 
 
@@ -1683,14 +1728,17 @@ def _convert_installed_bootstrap_to_crlf(fixture: dict[str, object]) -> None:
 def _convert_installed_bootstrap_to_six_service_baseline(fixture: dict[str, object]) -> None:
     live_bootstrap = fixture["live_bootstrap"]
     assert isinstance(live_bootstrap, Path)
+    installed_namespace = fixture.get("installed_task_namespace", "")
+    assert isinstance(installed_namespace, str)
+    installed_task_names = _resolved_task_names(installed_namespace)
     supervisor_yaml = live_bootstrap / "supervisor.yaml"
     supervisor_text = supervisor_yaml.read_text(encoding="utf-8")
     supervisor_text = supervisor_text.replace(
-        "  - service: publisher\n    task_name: 'MSOS Autobuilder Controlled Publisher'\n",
+        f"  - service: publisher\n    task_name: '{installed_task_names['publisher']}'\n",
         "  - service: publisher\n"
-        "    task_name: 'MSOS Autobuilder Controlled Publisher'\n"
+        f"    task_name: '{installed_task_names['publisher']}'\n"
         "  - service: refill\n"
-        "    task_name: 'MSOS Autobuilder Capacity-One Refill'\n",
+        f"    task_name: '{installed_task_names['refill']}'\n",
     )
     supervisor_yaml.write_text(supervisor_text, encoding="utf-8")
 
@@ -1891,7 +1939,11 @@ def _stubbed_task_control_script(
     stderr_failure: str | None = None,
     stderr_repeat: int = 0,
     legacy_interface: bool = False,
+    task_namespace: str = "",
 ) -> str:
+    resolved = _resolved_task_names(task_namespace)
+    host_task = resolved["host"]
+    refill_task = resolved["refill"]
     if legacy_interface:
         script = _legacy_task_control_source()
     else:
@@ -1928,15 +1980,7 @@ def _stubbed_task_control_script(
             "        ConvertTo-Json -Compress |",
             "        Add-Content -Path $CallsPath -Encoding UTF8",
             "}",
-            "function Get-ServiceName([string]$TaskName) {",
-            "    if ($TaskName -eq 'MSOS Autobuilder Host') { return 'host' }",
-            "    if ($TaskName -eq 'MSOS Autobuilder Result Relay') { return 'relay' }",
-            "    if ($TaskName -eq 'MSOS Autobuilder Candidate Gate') { return 'gate' }",
-            "    if ($TaskName -eq 'MSOS Autobuilder Revision Loop') { return 'revision' }",
-            "    if ($TaskName -eq 'MSOS Autobuilder Controlled Publisher') { return 'publisher' }",
-            "    if ($TaskName -eq 'MSOS Autobuilder Capacity-One Refill') { return 'refill' }",
-            "    return $null",
-            "}",
+            _service_name_function(task_namespace),
             "function Get-RefillDisabledMarker {",
             "    if (-not $StubbedSupervisorRoot) { return $null }",
             "    $StateRoot = Join-Path $StubbedSupervisorRoot 'state'",
@@ -1969,7 +2013,7 @@ def _stubbed_task_control_script(
             "    param([string]$TaskName, [object]$ErrorAction)",
             "    $Marker = Get-RefillDisabledMarker",
             "    if (",
-            "        $TaskName -eq 'MSOS Autobuilder Capacity-One Refill' -and",
+            f"        $TaskName -eq '{refill_task}' -and",
             "        $Marker -and",
             "        (Test-Path $Marker -PathType Leaf)",
             "    ) {",
@@ -1991,7 +2035,7 @@ def _stubbed_task_control_script(
             "    param([string]$TaskName, [object]$ErrorAction)",
             "    Add-Call -Action 'disable' -Name $TaskName",
             "    $Marker = Get-RefillDisabledMarker",
-            "    if ($TaskName -eq 'MSOS Autobuilder Capacity-One Refill' -and $Marker) {",
+            f"    if ($TaskName -eq '{refill_task}' -and $Marker) {{",
             "        $MarkerParent = Split-Path -Parent $Marker",
             "        New-Item -ItemType Directory -Force -Path $MarkerParent | Out-Null",
             "        Set-Content -Path $Marker -Value 'disabled' -Encoding UTF8",
@@ -2019,7 +2063,7 @@ def _stubbed_task_control_script(
             "        $ShouldFailStart = $false",
             "    }",
             "    if ($ShouldFailStart -and $FailAfter -gt 0 -and (Get-ServiceName $TaskName) -and "
-            "$TaskName -ne 'MSOS Autobuilder Capacity-One Refill') {",
+            f"$TaskName -ne '{refill_task}') {{",
             "        $script:StubbedStartCount += 1",
             "        if ($script:StubbedStartCount -ge $FailAfter) {",
             "            if ($FailOnceMarker) {",
@@ -2032,7 +2076,7 @@ def _stubbed_task_control_script(
             "    }",
             (
                 "    if (-not $script:ProtectedMutationApplied -and "
-                "$TaskName -eq 'MSOS Autobuilder Host') {"
+                f"$TaskName -eq '{host_task}') {{"
             ),
             "        $MutationPath = $env:MSOS_STUBBED_PROTECTED_MUTATION_PATH",
             "        $MutationOperation = $env:MSOS_STUBBED_PROTECTED_MUTATION_OPERATION",
@@ -2057,7 +2101,7 @@ def _stubbed_task_control_script(
             "        }",
             "    }",
             "    $ActionChangeMarker = $env:MSOS_STUBBED_ACTION_CHANGE_MARKER",
-            "    if ($ActionChangeMarker -and $TaskName -eq 'MSOS Autobuilder Host') {",
+            f"    if ($ActionChangeMarker -and $TaskName -eq '{host_task}') {{",
             "        $MarkerParent = Split-Path -Parent $ActionChangeMarker",
             "        New-Item -ItemType Directory -Force -Path $MarkerParent | Out-Null",
             "        Set-Content -Path $ActionChangeMarker -Value 'changed' -Encoding UTF8",
@@ -2080,6 +2124,7 @@ def _run_handoff_fixture(
     *,
     before_script: str = "",
     capture_output: bool = True,
+    extra_arguments: str = "",
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     repo = fixture["repo"]
@@ -2087,11 +2132,29 @@ def _run_handoff_fixture(
     host_root = fixture["host_root"]
     old_commit = fixture["old_commit"]
     new_commit = fixture["new_commit"]
+    task_namespace = fixture.get("task_namespace", "")
     assert isinstance(repo, Path)
     assert isinstance(supervisor, Path)
     assert isinstance(host_root, Path)
     assert isinstance(old_commit, str)
     assert isinstance(new_commit, str)
+    assert isinstance(task_namespace, str)
+
+    resolved = _resolved_task_names(task_namespace)
+    refill_task = resolved["refill"]
+    update_task = _resolved_update_task_name(task_namespace)
+    # An isolated run must not reach production names even though they answer in this fixture.
+    executables = ""
+    if task_namespace:
+        production = _resolved_task_names()
+        executables = "; ".join(
+            f"'{name}' = 'powershell.exe'" for name in production.values()
+        )
+    namespace_argument = ""
+    if task_namespace:
+        namespace_argument = f"`\n    -TaskNamespace '{task_namespace}' "
+    if extra_arguments:
+        namespace_argument = f"{namespace_argument}`\n    {extra_arguments} "
 
     calls_path = tmp_path / "scheduled-task-calls.jsonl"
     nested_calls_path = tmp_path / "nested-scheduled-task-calls.jsonl"
@@ -2102,15 +2165,7 @@ function Add-Call([string]$Action, [string]$Name) {{
         ConvertTo-Json -Compress |
         Add-Content -Path $CallsPath -Encoding UTF8
 }}
-function Get-ServiceName([string]$TaskName) {{
-    if ($TaskName -eq 'MSOS Autobuilder Host') {{ return 'host' }}
-    if ($TaskName -eq 'MSOS Autobuilder Result Relay') {{ return 'relay' }}
-    if ($TaskName -eq 'MSOS Autobuilder Candidate Gate') {{ return 'gate' }}
-    if ($TaskName -eq 'MSOS Autobuilder Revision Loop') {{ return 'revision' }}
-    if ($TaskName -eq 'MSOS Autobuilder Controlled Publisher') {{ return 'publisher' }}
-    if ($TaskName -eq 'MSOS Autobuilder Capacity-One Refill') {{ return 'refill' }}
-    return $null
-}}
+{_service_name_function(task_namespace, include_production=True)}
 function Write-OuterStubbedWitness([string]$TaskName) {{
     $Service = Get-ServiceName $TaskName
     if (-not $Service) {{ return }}
@@ -2134,10 +2189,10 @@ function Write-OuterStubbedWitness([string]$TaskName) {{
 function Get-ScheduledTask {{
     param([string]$TaskName, [object]$ErrorAction)
     Add-Call -Action 'get' -Name $TaskName
-    if ($TaskName -eq 'MSOS Autobuilder Capacity-One Refill' -and -not $global:RefillRegistered) {{
+    if ($TaskName -eq '{refill_task}' -and -not $global:RefillRegistered) {{
         return $null
     }}
-    if ($TaskName -eq 'MSOS Autobuilder Capacity-One Refill') {{
+    if ($TaskName -eq '{refill_task}') {{
         $State = $global:RefillState
         if (
             -not $global:RefillActionChanged -and
@@ -2154,7 +2209,7 @@ function Get-ScheduledTask {{
             $Execute = 'powershell.exe'
             $Arguments = '-stub'
         }}
-    }} elseif ($TaskName -eq 'MSOS Autobuilder Update Supervisor') {{
+    }} elseif ($TaskName -eq '{update_task}') {{
         $State = $global:UpdateTaskState
         $Execute = 'pwsh'
         $Arguments = '-NoProfile -File invoke_windows_self_update.ps1'
@@ -2164,6 +2219,9 @@ function Get-ScheduledTask {{
         }}
         $State = $global:ManagedTaskStates[$TaskName]
         $Execute = 'pwsh'
+        if ($global:TaskExecutables.ContainsKey($TaskName)) {{
+            $Execute = $global:TaskExecutables[$TaskName]
+        }}
         $Arguments = '-NoProfile -File run_windows_managed_service.ps1 -ServiceName host'
     }}
     [pscustomobject]@{{
@@ -2192,7 +2250,7 @@ function Get-ScheduledTask {{
 function Stop-ScheduledTask {{
     param([string]$TaskName, [object]$ErrorAction)
     Add-Call -Action 'stop' -Name $TaskName
-    if ($TaskName -eq 'MSOS Autobuilder Update Supervisor') {{ $global:UpdateTaskState = 'Ready' }}
+    if ($TaskName -eq '{update_task}') {{ $global:UpdateTaskState = 'Ready' }}
     if (Get-ServiceName $TaskName) {{
         $global:ManagedTaskStates[$TaskName] = 'Ready'
     }}
@@ -2200,14 +2258,14 @@ function Stop-ScheduledTask {{
 function Disable-ScheduledTask {{
     param([string]$TaskName, [object]$ErrorAction)
     Add-Call -Action 'disable' -Name $TaskName
-    if ($TaskName -eq 'MSOS Autobuilder Capacity-One Refill') {{
+    if ($TaskName -eq '{refill_task}') {{
         $global:RefillState = 'Disabled'
         $Marker = Join-Path (Join-Path '{supervisor.as_posix()}' 'state') 'refill-disabled.marker'
         $MarkerParent = Split-Path -Parent $Marker
         New-Item -ItemType Directory -Force -Path $MarkerParent | Out-Null
         Set-Content -Path $Marker -Value 'disabled' -Encoding UTF8
     }}
-    if ($TaskName -eq 'MSOS Autobuilder Update Supervisor') {{
+    if ($TaskName -eq '{update_task}') {{
         $global:UpdateTaskState = 'Disabled'
     }}
     [pscustomobject]@{{ TaskName = $TaskName; State = 'Disabled' }}
@@ -2215,7 +2273,7 @@ function Disable-ScheduledTask {{
 function Enable-ScheduledTask {{
     param([string]$TaskName, [object]$ErrorAction)
     Add-Call -Action 'enable' -Name $TaskName
-    if ($TaskName -eq 'MSOS Autobuilder Update Supervisor') {{ $global:UpdateTaskState = 'Ready' }}
+    if ($TaskName -eq '{update_task}') {{ $global:UpdateTaskState = 'Ready' }}
     if (Get-ServiceName $TaskName) {{
         $global:ManagedTaskStates[$TaskName] = 'Ready'
     }}
@@ -2235,19 +2293,20 @@ $global:RefillAction = $null
 $global:RefillActionChanged = $false
 $global:UpdateTaskState = 'Ready'
 $global:ManagedTaskStates = @{{}}
-$global:UpdateTaskXml = @'
-<Task><RegistrationInfo><URI>\\MSOS Autobuilder Update Supervisor</URI></RegistrationInfo></Task>
-'@
+$global:TaskExecutables = @{{ {executables} }}
+$global:UpdateTaskXml = @"
+<Task><RegistrationInfo><URI>\\{update_task}</URI></RegistrationInfo></Task>
+"@
 function Export-ScheduledTask {{
     param([string]$TaskName)
     Add-Call -Action 'export' -Name $TaskName
-    if ($TaskName -eq 'MSOS Autobuilder Update Supervisor') {{ return $global:UpdateTaskXml }}
+    if ($TaskName -eq '{update_task}') {{ return $global:UpdateTaskXml }}
     '<Task></Task>'
 }}
 function Unregister-ScheduledTask {{
     param([string]$TaskName, [switch]$Confirm)
     Add-Call -Action 'unregister' -Name $TaskName
-    if ($TaskName -eq 'MSOS Autobuilder Capacity-One Refill') {{
+    if ($TaskName -eq '{refill_task}') {{
         $global:RefillRegistered = $false
     }}
 }}
@@ -2288,12 +2347,16 @@ function Register-ScheduledTask {{
         [string]$Xml,
         [switch]$Force
     )
-    Add-Call -Action 'register' -Name $TaskName
-    if ($TaskName -eq 'MSOS Autobuilder Capacity-One Refill') {{
+    $RegisteredExecute = ''
+    if ($null -ne $Action) {{ $RegisteredExecute = [string]$Action.Execute }}
+    [pscustomobject]@{{ action = 'register'; name = $TaskName; execute = $RegisteredExecute }} |
+        ConvertTo-Json -Compress |
+        Add-Content -Path $CallsPath -Encoding UTF8
+    if ($TaskName -eq '{refill_task}') {{
         $global:RefillRegistered = $true
         $global:RefillAction = $Action
     }}
-    if ($TaskName -eq 'MSOS Autobuilder Update Supervisor') {{
+    if ($TaskName -eq '{update_task}') {{
         $global:UpdateTaskXml = $Xml
         $global:UpdateTaskState = 'Ready'
     }}
@@ -2306,10 +2369,11 @@ $env:MSOS_STUBBED_SUPERVISOR_ROOT = '{supervisor.as_posix()}'
     -ExpectedOldBootstrapCommit '{old_commit}' `
     -RepoRoot '{repo.as_posix()}' `
     -HostRoot '{host_root.as_posix()}' `
-    -SupervisorRoot '{supervisor.as_posix()}' `
+    -SupervisorRoot '{supervisor.as_posix()}' {namespace_argument}`
     -BootstrapPython '{Path(sys.executable).as_posix()}'
 """
     argv = [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command]
+    env = _powershell_test_env(userprofile_root=tmp_path / "ci-userprofile")
     if capture_output:
         result = subprocess.run(
             argv,
@@ -2319,6 +2383,7 @@ $env:MSOS_STUBBED_SUPERVISOR_ROOT = '{supervisor.as_posix()}'
             errors="replace",
             check=False,
             timeout=60,
+            env=env,
         )
     else:
         stdout_path = tmp_path / "outer-handoff-stdout.txt"
@@ -2336,6 +2401,7 @@ $env:MSOS_STUBBED_SUPERVISOR_ROOT = '{supervisor.as_posix()}'
                 errors="replace",
                 check=False,
                 timeout=60,
+                env=env,
             )
         result = subprocess.CompletedProcess(
             completed.args,
@@ -3440,6 +3506,686 @@ def test_stable_bootstrap_handoff_fails_closed_when_refill_task_preexists_enable
         if call["name"] == "MSOS Autobuilder Capacity-One Refill"
     ]
     assert refill_actions == ["get", "export"]
+
+
+def _bootstrap_handoff_helper_prelude() -> str:
+    """Load the handoff's namespace resolution helpers without running the transaction."""
+    return f"""
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$HandoffPath = '{BOOTSTRAP_HANDOFF.as_posix()}'
+$Tokens = $null
+$Errors = $null
+$Ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $HandoffPath,
+    [ref]$Tokens,
+    [ref]$Errors
+)
+if ($Errors -and $Errors.Count -gt 0) {{
+    throw ("Handoff parse failed: " + ($Errors | ForEach-Object {{ $_.ToString() }} | Out-String))
+}}
+$Wanted = @(
+    'Get-NormalizedTaskNamespace',
+    'Get-NamespacedTaskName',
+    'Get-ProductionTaskNames',
+    'Resolve-HandoffTaskNames',
+    'Test-RootPathOverlap',
+    'Assert-PathHasNoReparsePoints',
+    'Assert-HandoffTaskNamespaceReady'
+)
+foreach ($Name in $Wanted) {{
+    $FunctionAst = $Ast.Find({{
+            param($Node)
+            $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $Node.Name -eq $Name
+        }}, $true) | Select-Object -First 1
+    if (-not $FunctionAst) {{ throw "Missing handoff helper: $Name" }}
+    Invoke-Expression $FunctionAst.Extent.Text
+}}
+$script:MaxScheduledTaskNameLength = 238
+$script:ProductionManagedTaskRoles = @(
+    @{{ service = 'host'; role = 'Host' }},
+    @{{ service = 'relay'; role = 'Result Relay' }},
+    @{{ service = 'gate'; role = 'Candidate Gate' }},
+    @{{ service = 'revision'; role = 'Revision Loop' }},
+    @{{ service = 'publisher'; role = 'Controlled Publisher' }},
+    @{{ service = 'refill'; role = 'Capacity-One Refill' }}
+)
+$script:UpdateSupervisorRole = 'Update Supervisor'
+$script:ProtectedProductionTaskNames = @(
+{chr(10).join(f"    '{name}'," for name in PRODUCTION_TASK_NAMES[:-1])}
+    '{PRODUCTION_TASK_NAMES[-1]}'
+)
+"""
+
+
+def _run_bootstrap_handoff_helper_script(
+    script: str,
+    *,
+    userprofile_root: Path | None = None,
+    forced_userprofile: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+    command = _bootstrap_handoff_helper_prelude() + "\n" + script
+    env = _powershell_test_env(userprofile_root=userprofile_root)
+    if forced_userprofile is not None:
+        forced_userprofile.mkdir(parents=True, exist_ok=True)
+        env["USERPROFILE"] = str(forced_userprofile)
+    return subprocess.run(
+        [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        env=env,
+    )
+
+
+def test_stable_bootstrap_handoff_declares_the_reviewed_namespace_contract() -> None:
+    script = BOOTSTRAP_HANDOFF.read_text(encoding="utf-8")
+
+    assert "[string]$TaskNamespace" in script
+    assert 'ContainsKey("TaskNamespace")' in script
+    assert 'ContainsKey("UpdateTaskName")' in script
+    assert "Resolve-HandoffTaskNames" in script
+    assert "Assert-HandoffTaskNamespaceReady" in script
+    for name in PRODUCTION_TASK_NAMES:
+        assert f'"{name}"' in script
+    # The handoff must not add supervisor self-replacement to managed-release apply.
+    assert "supervisor_update" not in script
+
+
+def test_stable_bootstrap_handoff_default_namespace_resolves_production_task_names() -> None:
+    result = _run_bootstrap_handoff_helper_script(
+        """
+$Resolved = Resolve-HandoffTaskNames
+$Payload = @{
+    isolated = [bool]$Resolved.isolated
+    namespace = [string]$Resolved.namespace
+    update_task_name = [string]$Resolved.update_task_name
+    managed = @(
+        foreach ($Entry in @($Resolved.managed_tasks)) {
+            @{ service = [string]$Entry.service; task = [string]$Entry.task }
+        }
+    )
+}
+$Payload | ConvertTo-Json -Depth 5 -Compress
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["isolated"] is False
+    assert payload["namespace"] == ""
+    assert payload["update_task_name"] == "MSOS Autobuilder Update Supervisor"
+    assert [entry["task"] for entry in payload["managed"]] == MANAGED_TASK_NAMES
+    assert [entry["service"] for entry in payload["managed"]] == [
+        service for service, _ in MANAGED_TASK_ROLES
+    ]
+
+
+def test_stable_bootstrap_handoff_pilot_namespace_resolves_all_seven_roles() -> None:
+    result = _run_bootstrap_handoff_helper_script(
+        f"""
+$Resolved = Resolve-HandoffTaskNames -Namespace '{PILOT_TASK_NAMESPACE}'
+$Payload = @{{
+    isolated = [bool]$Resolved.isolated
+    namespace = [string]$Resolved.namespace
+    update_task_name = [string]$Resolved.update_task_name
+    managed = @(
+        foreach ($Entry in @($Resolved.managed_tasks)) {{
+            @{{ service = [string]$Entry.service; task = [string]$Entry.task }}
+        }}
+    )
+}}
+$Payload | ConvertTo-Json -Depth 5 -Compress
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    expected = _resolved_task_names(PILOT_TASK_NAMESPACE)
+    assert payload["isolated"] is True
+    assert payload["namespace"] == PILOT_TASK_NAMESPACE
+    assert payload["update_task_name"] == _resolved_update_task_name(PILOT_TASK_NAMESPACE)
+    assert payload["update_task_name"] == "MSOS Autobuilder Pilot Issue119 Update Supervisor"
+    assert [entry["task"] for entry in payload["managed"]] == list(expected.values())
+    resolved_seven = {*expected.values(), payload["update_task_name"]}
+    assert len(resolved_seven) == 7
+    assert resolved_seven.isdisjoint(PRODUCTION_TASK_NAMES)
+
+
+@pytest.mark.parametrize(
+    ("namespace", "expected_error"),
+    [
+        ("Pilot:Issue119", "TaskNamespace is malformed"),
+        ("Pilot/Issue119", "TaskNamespace is malformed"),
+        ("-Pilot", "TaskNamespace is malformed"),
+        ("P" * 81, "TaskNamespace is malformed"),
+    ],
+)
+def test_stable_bootstrap_handoff_rejects_malformed_task_namespace(
+    tmp_path: Path,
+    namespace: str,
+    expected_error: str,
+) -> None:
+    escaped = namespace.replace("'", "''")
+    result = _run_bootstrap_handoff_helper_script(
+        f"""
+$Resolved = Resolve-HandoffTaskNames -Namespace '{escaped}'
+Assert-HandoffTaskNamespaceReady `
+    -ResolvedNames $Resolved `
+    -HostRootPath '{(tmp_path / "pilot-host").as_posix()}' `
+    -SupervisorRootPath '{(tmp_path / "pilot-supervisor").as_posix()}'
+'UNEXPECTED SUCCESS'
+""",
+        userprofile_root=tmp_path / "ci-userprofile",
+    )
+
+    assert result.returncode != 0
+    assert "UNEXPECTED SUCCESS" not in result.stdout
+    assert expected_error in (result.stderr + result.stdout)
+
+
+def test_stable_bootstrap_handoff_rejects_duplicate_or_empty_resolved_task_names(
+    tmp_path: Path,
+) -> None:
+    duplicate = _run_bootstrap_handoff_helper_script(
+        f"""
+$Resolved = Resolve-HandoffTaskNames -Namespace '{PILOT_TASK_NAMESPACE}'
+$Managed = @($Resolved.managed_tasks)
+$Managed[1].task = $Managed[0].task
+Assert-HandoffTaskNamespaceReady `
+    -ResolvedNames $Resolved `
+    -HostRootPath '{(tmp_path / "pilot-host").as_posix()}' `
+    -SupervisorRootPath '{(tmp_path / "pilot-supervisor").as_posix()}'
+'UNEXPECTED SUCCESS'
+""",
+        userprofile_root=tmp_path / "ci-userprofile",
+    )
+    empty = _run_bootstrap_handoff_helper_script(
+        f"""
+$Resolved = Resolve-HandoffTaskNames -Namespace '{PILOT_TASK_NAMESPACE}'
+$Managed = @($Resolved.managed_tasks)
+$Managed[2].task = ''
+Assert-HandoffTaskNamespaceReady `
+    -ResolvedNames $Resolved `
+    -HostRootPath '{(tmp_path / "pilot-host").as_posix()}' `
+    -SupervisorRootPath '{(tmp_path / "pilot-supervisor").as_posix()}'
+'UNEXPECTED SUCCESS'
+""",
+        userprofile_root=tmp_path / "ci-userprofile",
+    )
+
+    assert duplicate.returncode != 0
+    assert "UNEXPECTED SUCCESS" not in duplicate.stdout
+    assert "Duplicate scheduled task name resolved" in (duplicate.stderr + duplicate.stdout)
+    assert empty.returncode != 0
+    assert "UNEXPECTED SUCCESS" not in empty.stdout
+    assert "resolved empty" in (empty.stderr + empty.stdout)
+
+
+def test_stable_bootstrap_handoff_isolated_namespace_may_not_name_production_tasks(
+    tmp_path: Path,
+) -> None:
+    result = _run_bootstrap_handoff_helper_script(
+        f"""
+$Resolved = Resolve-HandoffTaskNames -Namespace '{PILOT_TASK_NAMESPACE}'
+$Managed = @($Resolved.managed_tasks)
+$Managed[0].task = 'MSOS Autobuilder Host'
+Assert-HandoffTaskNamespaceReady `
+    -ResolvedNames $Resolved `
+    -HostRootPath '{(tmp_path / "pilot-host").as_posix()}' `
+    -SupervisorRootPath '{(tmp_path / "pilot-supervisor").as_posix()}'
+'UNEXPECTED SUCCESS'
+""",
+        userprofile_root=tmp_path / "ci-userprofile",
+    )
+
+    assert result.returncode != 0
+    assert "UNEXPECTED SUCCESS" not in result.stdout
+    assert "collides with protected production task name" in (result.stderr + result.stdout)
+
+
+def test_stable_bootstrap_handoff_isolated_roots_must_not_overlap_protected_roots(
+    tmp_path: Path,
+) -> None:
+    userprofile = tmp_path / "ci-userprofile"
+    userprofile.mkdir(parents=True, exist_ok=True)
+    protected_host = userprofile / ".msos-autobuilder"
+    protected_supervisor = userprofile / ".msos-autobuilder-supervisor"
+
+    def probe(host_root: Path, supervisor_root: Path, *, namespace: str) -> tuple[int, str]:
+        namespace_argument = f" -Namespace '{namespace}'" if namespace else ""
+        completed = _run_bootstrap_handoff_helper_script(
+            f"""
+$Resolved = Resolve-HandoffTaskNames{namespace_argument}
+Assert-HandoffTaskNamespaceReady `
+    -ResolvedNames $Resolved `
+    -HostRootPath '{host_root.as_posix()}' `
+    -SupervisorRootPath '{supervisor_root.as_posix()}'
+'ACCEPTED'
+""",
+            forced_userprofile=userprofile,
+        )
+        return completed.returncode, completed.stderr + completed.stdout
+
+    isolated_host = tmp_path / "pilot-host"
+    isolated_supervisor = tmp_path / "pilot-supervisor"
+
+    code, output = probe(isolated_host, isolated_supervisor, namespace=PILOT_TASK_NAMESPACE)
+    assert code == 0, output
+    assert "ACCEPTED" in output
+
+    code, output = probe(protected_host, isolated_supervisor, namespace=PILOT_TASK_NAMESPACE)
+    assert code != 0
+    assert "overlaps protected Issue #50 host root" in output
+
+    code, output = probe(
+        isolated_host,
+        protected_supervisor / "bootstrap",
+        namespace=PILOT_TASK_NAMESPACE,
+    )
+    assert code != 0
+    assert "overlaps protected Issue #50 supervisor root" in output
+
+    code, output = probe(isolated_host, isolated_host, namespace=PILOT_TASK_NAMESPACE)
+    assert code != 0
+    assert "must not overlap" in output
+
+    # Default production behavior keeps using the protected production roots.
+    code, output = probe(protected_host, protected_supervisor, namespace="")
+    assert code == 0, output
+    assert "ACCEPTED" in output
+
+
+def test_stable_bootstrap_handoff_rejects_blank_bound_task_namespace(tmp_path: Path) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    before = _live_bootstrap_bytes(fixture)
+    repo = fixture["repo"]
+    supervisor = fixture["supervisor"]
+    host_root = fixture["host_root"]
+    assert isinstance(repo, Path)
+    assert isinstance(supervisor, Path)
+    assert isinstance(host_root, Path)
+
+    result = subprocess.run(
+        [
+            powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(BOOTSTRAP_HANDOFF),
+            "-Commit",
+            str(fixture["new_commit"]),
+            "-ExpectedOldBootstrapCommit",
+            str(fixture["old_commit"]),
+            "-RepoRoot",
+            str(repo),
+            "-HostRoot",
+            str(host_root),
+            "-SupervisorRoot",
+            str(supervisor),
+            "-TaskNamespace",
+            "   ",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=60,
+        env=_powershell_test_env(userprofile_root=tmp_path / "ci-userprofile"),
+    )
+
+    assert result.returncode != 0
+    assert "TaskNamespace was explicitly supplied but is blank" in (
+        result.stderr + result.stdout
+    )
+    assert not (supervisor / "reports").exists()
+    assert _live_bootstrap_bytes(fixture) == before
+
+
+def test_stable_bootstrap_handoff_rejects_conflicting_namespace_and_update_task_name(
+    tmp_path: Path,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(
+        tmp_path,
+        task_namespace=PILOT_TASK_NAMESPACE,
+    )
+    before = _live_bootstrap_bytes(fixture)
+    supervisor = fixture["supervisor"]
+    assert isinstance(supervisor, Path)
+
+    result, calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        extra_arguments="-UpdateTaskName 'MSOS Autobuilder Update Supervisor'",
+    )
+
+    assert result.returncode != 0
+    assert "conflicts with the namespaced update supervisor task" in (
+        result.stderr + result.stdout
+    )
+    # Fail closed before any Scheduled Task, bootstrap, or report mutation.
+    assert not calls_path.exists()
+    assert not (supervisor / "reports").exists()
+    assert _live_bootstrap_bytes(fixture) == before
+
+
+def test_stable_bootstrap_handoff_accepts_matching_namespaced_update_task_override(
+    tmp_path: Path,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(
+        tmp_path,
+        task_namespace=PILOT_TASK_NAMESPACE,
+    )
+    update_task = _resolved_update_task_name(PILOT_TASK_NAMESPACE)
+    result, _ = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        extra_arguments=f"-UpdateTaskName '{update_task}'",
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    report = _read_handoff_report(fixture)
+    assert report["outcome"] == "success"
+    assert report["task_namespace"]["update_task_name"] == update_task
+    assert report["update_task"]["name"] == update_task
+
+
+def test_stable_bootstrap_handoff_transacts_the_isolated_pilot_namespace(
+    tmp_path: Path,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(
+        tmp_path,
+        task_namespace=PILOT_TASK_NAMESPACE,
+    )
+    _convert_installed_bootstrap_to_crlf(fixture)
+    live_bootstrap = fixture["live_bootstrap"]
+    assert isinstance(live_bootstrap, Path)
+    pilot_names = _resolved_task_names(PILOT_TASK_NAMESPACE)
+    pilot_update_task = _resolved_update_task_name(PILOT_TASK_NAMESPACE)
+
+    result, calls_path = _run_handoff_fixture(fixture, powershell, tmp_path)
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert (live_bootstrap / "self_update_evidence_relay.py").read_text(encoding="utf-8") == (
+        "print('relay fixture v2')\n"
+    )
+    report = _read_handoff_report(fixture)
+    assert report["outcome"] == "success"
+    assert report["rollback"]["performed"] is False
+    assert report["update_task"]["restored"] is True
+    assert report["task_namespace"]["supplied"] is True
+    assert report["task_namespace"]["isolated"] is True
+    assert report["task_namespace"]["namespace"] == PILOT_TASK_NAMESPACE
+    assert report["task_namespace"]["update_task_name"] == pilot_update_task
+    assert [
+        (entry["service"], entry["task_name"])
+        for entry in report["task_namespace"]["managed_tasks"]
+    ] == list(pilot_names.items())
+    assert report["service_configuration"]["staged_generation"]["semantic_change"][
+        "added_task"
+    ] == {"service": "refill", "task_name": pilot_names["refill"]}
+    preflight = report["scheduled_tasks"]["preflight"]
+    assert sorted(preflight) == sorted(pilot_names.values())
+    assert preflight[pilot_names["refill"]]["exists"] is False
+    assert "xml_sha256" in preflight[pilot_names["host"]]
+    assert report["scheduled_tasks"]["staged_refill"]["state"] == "Disabled"
+
+    calls = [
+        json.loads(line)
+        for line in calls_path.read_text(encoding="utf-8-sig").splitlines()
+    ]
+    # Every production task answers in this fixture, so absence proves isolation.
+    assert not [call for call in calls if call["name"] in PRODUCTION_TASK_NAMES]
+    update_task_actions = [
+        call["action"] for call in calls if call["name"] == pilot_update_task
+    ]
+    assert update_task_actions[:4] == ["get", "export", "get", "export"]
+    assert update_task_actions[4:] == [
+        "stop",
+        "get",
+        "get",
+        "disable",
+        "get",
+        "stop",
+        "unregister",
+        "register",
+        "enable",
+        "get",
+        "export",
+    ]
+    assert "start" not in update_task_actions
+    refill_registrations = [
+        call
+        for call in calls
+        if call["action"] == "register" and call["name"] == pilot_names["refill"]
+    ]
+    assert len(refill_registrations) == 1
+    # The production Host task advertises powershell.exe in this fixture; the namespaced
+    # Host advertises pwsh. Refill authority must come from the namespaced Host.
+    assert refill_registrations[0]["execute"] == "pwsh"
+    assert any(
+        call["action"] == "disable" and call["name"] == pilot_names["refill"]
+        for call in calls
+    )
+    nested_calls = [
+        json.loads(line)
+        for line in (tmp_path / "nested-scheduled-task-calls.jsonl")
+        .read_text(encoding="utf-8-sig")
+        .splitlines()
+    ]
+    assert [call["name"] for call in nested_calls if call["action"] == "get"][
+        : len(pilot_names)
+    ] == list(pilot_names.values())
+    assert not [call for call in nested_calls if call["name"] in PRODUCTION_TASK_NAMES]
+
+
+def test_stable_bootstrap_handoff_repairs_the_isolated_six_task_baseline(
+    tmp_path: Path,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(
+        tmp_path,
+        task_namespace=PILOT_TASK_NAMESPACE,
+    )
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    host_root = fixture["host_root"]
+    assert isinstance(host_root, Path)
+    pilot_names = _resolved_task_names(PILOT_TASK_NAMESPACE)
+    before_script = f"""
+$global:RefillRegistered = $true
+$global:RefillState = 'Disabled'
+$global:RefillAction = [pscustomobject]@{{
+    Execute = 'pwsh'
+    Arguments = (
+        '-NoProfile -File run_windows_managed_service.ps1 ' +
+        '-ServiceName refill -HostRoot "{host_root.as_posix()}"'
+    )
+}}
+"""
+
+    result, calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=before_script,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    report = _read_handoff_report(fixture)
+    assert report["outcome"] == "success"
+    assert report["scheduled_tasks"]["baseline_mode"] == "six-task-disabled-refill"
+    assert report["scheduled_tasks"]["preflight"][pilot_names["refill"]]["state"] == "Disabled"
+    assert report["service_configuration"]["staged_generation"]["semantic_change"] == {
+        "added_service": None,
+        "added_task": None,
+        "mode": "preserve-six-service-baseline",
+    }
+    calls = [
+        json.loads(line)
+        for line in calls_path.read_text(encoding="utf-8-sig").splitlines()
+    ]
+    assert not [call for call in calls if call["name"] in PRODUCTION_TASK_NAMES]
+    refill_actions = [
+        call["action"] for call in calls if call["name"] == pilot_names["refill"]
+    ]
+    assert "register" not in refill_actions
+    assert "unregister" not in refill_actions
+
+
+def test_stable_bootstrap_handoff_rolls_back_the_isolated_namespace_after_activation_failure(
+    tmp_path: Path,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(
+        tmp_path,
+        task_namespace=PILOT_TASK_NAMESPACE,
+    )
+    live_bootstrap = fixture["live_bootstrap"]
+    target_names = fixture["target_names"]
+    assert isinstance(live_bootstrap, Path)
+    assert isinstance(target_names, dict)
+    old_bytes = {
+        target: (live_bootstrap / target).read_bytes()
+        for target in target_names.values()
+    }
+    pilot_update_task = _resolved_update_task_name(PILOT_TASK_NAMESPACE)
+
+    result, calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=(
+            "$global:UpdateTaskState = 'Disabled'\n"
+            "$env:MSOS_STABLE_BOOTSTRAP_HANDOFF_TEST_CORRUPT_ACTIVATED_FILE = '1'"
+        ),
+    )
+
+    assert result.returncode != 0
+    assert all(
+        (live_bootstrap / target).read_bytes() == content
+        for target, content in old_bytes.items()
+    )
+    report = _read_handoff_report(fixture)
+    assert report["outcome"] == "failed"
+    assert report["rollback"]["performed"] is True
+    assert report["update_task"]["name"] == pilot_update_task
+    assert report["update_task"]["restored"] is True
+    # The namespaced updater keeps its prior disabled contract across the rolled-back handoff.
+    assert report["update_task"]["preflight_enabled_contract"] == "disabled"
+    assert report["update_task"]["restore_enabled_contract"] == "disabled"
+    assert report["update_task"]["final_enabled_contract"] == "disabled"
+    calls = [
+        json.loads(line)
+        for line in calls_path.read_text(encoding="utf-8-sig").splitlines()
+    ]
+    assert not [call for call in calls if call["name"] in PRODUCTION_TASK_NAMES]
+    update_actions = [call["action"] for call in calls if call["name"] == pilot_update_task]
+    assert "unregister" in update_actions
+    assert "register" in update_actions
+    assert update_actions[-1] == "export"
+    assert "disable" in update_actions
+
+
+@pytest.mark.parametrize(
+    "defect",
+    ["production_names", "mixed_namespace", "missing_role", "duplicate_role", "extra_task"],
+)
+def test_stable_bootstrap_handoff_rejects_configs_outside_the_selected_namespace(
+    tmp_path: Path,
+    defect: str,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(
+        tmp_path,
+        task_namespace=PILOT_TASK_NAMESPACE,
+        config_task_namespace="" if defect == "production_names" else None,
+    )
+    live_bootstrap = fixture["live_bootstrap"]
+    assert isinstance(live_bootstrap, Path)
+    supervisor_yaml = live_bootstrap / "supervisor.yaml"
+    pilot_names = _resolved_task_names(PILOT_TASK_NAMESPACE)
+    production_names = _resolved_task_names()
+    text = supervisor_yaml.read_text(encoding="utf-8")
+    if defect == "mixed_namespace":
+        text = text.replace(pilot_names["gate"], production_names["gate"])
+    elif defect == "missing_role":
+        text = text.replace(
+            f"  - service: revision\n    task_name: '{pilot_names['revision']}'\n",
+            "",
+        )
+    elif defect == "duplicate_role":
+        text = text.replace(
+            f"  - service: relay\n    task_name: '{pilot_names['relay']}'\n",
+            f"  - service: host\n    task_name: '{pilot_names['host']}'\n",
+        )
+    elif defect == "extra_task":
+        text = text.replace(
+            f"  - service: publisher\n    task_name: '{pilot_names['publisher']}'\n",
+            f"  - service: publisher\n    task_name: '{pilot_names['publisher']}'\n"
+            "  - service: sidecar\n"
+            f"    task_name: '{pilot_names['host']} Sidecar'\n",
+        )
+    if defect != "production_names":
+        assert text != supervisor_yaml.read_text(encoding="utf-8")
+        supervisor_yaml.write_text(text, encoding="utf-8")
+    before = _live_bootstrap_bytes(fixture)
+
+    result, calls_path = _run_handoff_fixture(fixture, powershell, tmp_path)
+
+    assert result.returncode != 0
+    report = _read_handoff_report(fixture)
+    assert report["outcome"] != "success"
+    assert (
+        "installed supervisor.yaml must contain exactly the reviewed five tasks"
+        in json.dumps(report) + result.stderr + result.stdout
+    )
+    assert _live_bootstrap_bytes(fixture) == before
+    calls = [
+        json.loads(line)
+        for line in calls_path.read_text(encoding="utf-8-sig").splitlines()
+    ]
+    mutations = [
+        call
+        for call in calls
+        if call["name"] in PRODUCTION_TASK_NAMES
+        and call["action"] not in ("get", "export")
+    ]
+    assert mutations == []
 
 
 def test_task_controller_round_trips_task_names_through_powershell_stdin(

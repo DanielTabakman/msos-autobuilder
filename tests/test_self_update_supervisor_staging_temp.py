@@ -29,7 +29,7 @@ from msos_autobuilder.self_update_supervisor import (
     default_command_executor,
 )
 
-STAGING_PYTEST_TEMP_SUFFIX_BUDGET_CHARS = 32
+STAGING_PYTEST_TEMP_SUFFIX_BUDGET_CHARS = 23
 
 
 @pytest.fixture(autouse=True)
@@ -89,8 +89,7 @@ def test_staging_pytest_temp_path_is_identity_owned_and_release_bounded(
     other_release = _staging_pytest_temp_dir(config, _manifest(release_id="release-2"))
 
     assert first.parent == config.staging_pytest_temp_root.absolute()
-    assert first.name.startswith("a" * STAGING_PYTEST_TEMP_RELEASE_CHARS + "-")
-    assert len(first.name) == 2 * STAGING_PYTEST_TEMP_RELEASE_CHARS + 1
+    assert len(first.name) == STAGING_PYTEST_TEMP_RELEASE_CHARS
     assert first != other_commit
     assert first != other_release
     assert first.parent.name == _supervisor_identity_digest(config.supervisor_root)
@@ -133,8 +132,7 @@ def test_long_supervisor_root_does_not_lengthen_the_staging_pytest_temp_path(
         len(f"{os.sep}{STAGING_PYTEST_TEMP_NAMESPACE}{os.sep}")
         + STAGING_PYTEST_TEMP_IDENTITY_CHARS
         + len(os.sep)
-        + 2 * STAGING_PYTEST_TEMP_RELEASE_CHARS
-        + 1
+        + STAGING_PYTEST_TEMP_RELEASE_CHARS
     )
     assert len(str(long_path)) - len(str(os_temp_base)) == expected_suffix_chars
 
@@ -143,10 +141,10 @@ def test_staging_pytest_temp_suffix_fits_the_windows_staging_path_budget(
     tmp_path: Path,
     os_temp_base: Path,
 ) -> None:
-    # Staged pytest starts failing on Windows once TMP grows past roughly 70 characters, because
-    # pytest nests `pytest-of-<user>/pytest-<n>/<test-name>` under it and the suite then builds
-    # git fixtures below that. The supervisor-owned suffix under the OS temp base is budgeted so a
-    # standard per-user temp base leaves that headroom intact.
+    # This suite already builds fixture paths about 350 characters below TMP, and staged runs on
+    # Windows start failing once TMP pushes those past roughly 413 characters. A standard per-user
+    # temp base is about 32 characters, so the supervisor-owned suffix has to stay small enough to
+    # leave that headroom rather than consume it.
     config = _config(tmp_path, supervisor_root=_long_supervisor_root(tmp_path))
 
     path = _staging_pytest_temp_dir(config, _manifest())

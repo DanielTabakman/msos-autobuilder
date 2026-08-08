@@ -10,7 +10,7 @@
       "type": "CandidateGateError"
     }
   ],
-  "finished_at": "2026-07-15T22:24:12.623499+00:00",
+  "finished_at": "2026-08-08T06:25:29.036788+00:00",
   "job_id": "build-next-ppe-issue55_generic_gate_witness_v1-Issue55-GenericGate-Witness-ec1789cd9540",
   "patches": [
     {
@@ -28,7 +28,7 @@
   "publication_enabled": false,
   "source_head": "ec1789cd9540b1baf386c766e2b84feb6563257c",
   "source_report_sha256": "7deaf0e7751b40acbf1e10402508e4b0b0c48c390e8f68ab4cf85b6851b9d09b",
-  "started_at": "2026-07-15T22:24:09.363013+00:00",
+  "started_at": "2026-08-08T06:25:24.098196+00:00",
   "state": "candidate_failed",
   "status": "failed",
   "validation_contract_sha256": "29c5390bb28cbb06b034b63d4011c1830bbc3f8286fda04f1596664dd8f030a7",

@@ -227,6 +227,20 @@ def _resolved_update_task_name(namespace: str = "") -> str:
     return f"{prefix} Update Supervisor"
 
 
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _compact_powershell_text(*chunks: str) -> str:
+    """PowerShell 7 renders long errors with ANSI colors and wrapped continuation gutters."""
+    return re.sub(r"[\s|]+", "", _ANSI_ESCAPE.sub("", "".join(chunks)))
+
+
+def _assert_powershell_reported(expected: str, *chunks: str) -> None:
+    assert _compact_powershell_text(expected) in _compact_powershell_text(*chunks), (
+        f"expected {expected!r} in PowerShell output: {''.join(chunks)!r}"
+    )
+
+
 def _service_name_function(namespace: str = "", *, include_production: bool = False) -> str:
     """Render the stub task-name -> service map used by both handoff stub layers."""
     mapping = {task: service for service, task in _resolved_task_names(namespace).items()}
@@ -3687,7 +3701,7 @@ Assert-HandoffTaskNamespaceReady `
 
     assert result.returncode != 0
     assert "UNEXPECTED SUCCESS" not in result.stdout
-    assert expected_error in (result.stderr + result.stdout)
+    _assert_powershell_reported(expected_error, result.stderr, result.stdout)
 
 
 def test_stable_bootstrap_handoff_rejects_duplicate_or_empty_resolved_task_names(
@@ -3722,10 +3736,14 @@ Assert-HandoffTaskNamespaceReady `
 
     assert duplicate.returncode != 0
     assert "UNEXPECTED SUCCESS" not in duplicate.stdout
-    assert "Duplicate scheduled task name resolved" in (duplicate.stderr + duplicate.stdout)
+    _assert_powershell_reported(
+        "Duplicate scheduled task name resolved",
+        duplicate.stderr,
+        duplicate.stdout,
+    )
     assert empty.returncode != 0
     assert "UNEXPECTED SUCCESS" not in empty.stdout
-    assert "resolved empty" in (empty.stderr + empty.stdout)
+    _assert_powershell_reported("resolved empty", empty.stderr, empty.stdout)
 
 
 def test_stable_bootstrap_handoff_isolated_namespace_may_not_name_production_tasks(
@@ -3747,7 +3765,11 @@ Assert-HandoffTaskNamespaceReady `
 
     assert result.returncode != 0
     assert "UNEXPECTED SUCCESS" not in result.stdout
-    assert "collides with protected production task name" in (result.stderr + result.stdout)
+    _assert_powershell_reported(
+        "collides with protected production task name",
+        result.stderr,
+        result.stdout,
+    )
 
 
 def test_stable_bootstrap_handoff_isolated_roots_must_not_overlap_protected_roots(
@@ -3782,7 +3804,7 @@ Assert-HandoffTaskNamespaceReady `
 
     code, output = probe(protected_host, isolated_supervisor, namespace=PILOT_TASK_NAMESPACE)
     assert code != 0
-    assert "overlaps protected Issue #50 host root" in output
+    _assert_powershell_reported("overlaps protected Issue #50 host root", output)
 
     code, output = probe(
         isolated_host,
@@ -3790,11 +3812,11 @@ Assert-HandoffTaskNamespaceReady `
         namespace=PILOT_TASK_NAMESPACE,
     )
     assert code != 0
-    assert "overlaps protected Issue #50 supervisor root" in output
+    _assert_powershell_reported("overlaps protected Issue #50 supervisor root", output)
 
     code, output = probe(isolated_host, isolated_host, namespace=PILOT_TASK_NAMESPACE)
     assert code != 0
-    assert "must not overlap" in output
+    _assert_powershell_reported("must not overlap", output)
 
     # Default production behavior keeps using the protected production roots.
     code, output = probe(protected_host, protected_supervisor, namespace="")
@@ -3847,8 +3869,10 @@ def test_stable_bootstrap_handoff_rejects_blank_bound_task_namespace(tmp_path: P
     )
 
     assert result.returncode != 0
-    assert "TaskNamespace was explicitly supplied but is blank" in (
-        result.stderr + result.stdout
+    _assert_powershell_reported(
+        "TaskNamespace was explicitly supplied but is blank",
+        result.stderr,
+        result.stdout,
     )
     assert not (supervisor / "reports").exists()
     assert _live_bootstrap_bytes(fixture) == before
@@ -3877,8 +3901,10 @@ def test_stable_bootstrap_handoff_rejects_conflicting_namespace_and_update_task_
     )
 
     assert result.returncode != 0
-    assert "conflicts with the namespaced update supervisor task" in (
-        result.stderr + result.stdout
+    _assert_powershell_reported(
+        "conflicts with the namespaced update supervisor task",
+        result.stderr,
+        result.stdout,
     )
     # Fail closed before any Scheduled Task, bootstrap, or report mutation.
     assert not calls_path.exists()
@@ -4170,9 +4196,11 @@ def test_stable_bootstrap_handoff_rejects_configs_outside_the_selected_namespace
     assert result.returncode != 0
     report = _read_handoff_report(fixture)
     assert report["outcome"] != "success"
-    assert (
-        "installed supervisor.yaml must contain exactly the reviewed five tasks"
-        in json.dumps(report) + result.stderr + result.stdout
+    _assert_powershell_reported(
+        "installed supervisor.yaml must contain exactly the reviewed five tasks",
+        json.dumps(report),
+        result.stderr,
+        result.stdout,
     )
     assert _live_bootstrap_bytes(fixture) == before
     calls = [

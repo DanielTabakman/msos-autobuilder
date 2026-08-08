@@ -628,6 +628,65 @@ def test_candidate_gate_discovers_generic_build_next_contract(tmp_path: Path) ->
     assert _pip_freeze() == packages_before
 
 
+def test_contract_job_is_gated_without_a_build_next_job_id_prefix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_candidate_environment(tmp_path, monkeypatch)
+    source = _init_repo(tmp_path / "source")
+    source_head = _git(source, "rev-parse", "HEAD")
+    patch, changed_paths = _candidate_patch(source)
+    job_id = "useful-ppe-5316-token-audit-readonly-8d6c7119ec7a"
+    contract = _generic_contract(
+        job_id=job_id,
+        source_head=source_head,
+        changed_paths=changed_paths,
+    )
+    remote = _results_remote(
+        tmp_path,
+        source_head=source_head,
+        patch=patch,
+        changed_paths=changed_paths,
+        job_id=job_id,
+        job_yaml=_generic_job_yaml(job_id, source_head, changed_paths, contract),
+    )
+    config_path = _write_generic_config(
+        tmp_path,
+        host_root=tmp_path / "host",
+        source=source,
+        remote=remote,
+    )
+
+    assert CandidateGate(load_candidate_gate_config(config_path)).run_once() == (job_id,)
+    report = _read_gate_report(tmp_path, remote, job_id=job_id)
+    assert report["status"] == "passed"
+    assert report["plan_source"] == "candidate_validation"
+
+
+def test_job_without_contract_or_build_next_prefix_is_still_skipped(tmp_path: Path) -> None:
+    source = _init_repo(tmp_path / "source")
+    source_head = _git(source, "rev-parse", "HEAD")
+    patch, changed_paths = _candidate_patch(source)
+    job_id = "unrelated-relayed-result"
+    remote = _results_remote(
+        tmp_path,
+        source_head=source_head,
+        patch=patch,
+        changed_paths=changed_paths,
+        job_id=job_id,
+        job_yaml=yaml.safe_dump({"version": 1, "job_id": job_id}, sort_keys=False),
+    )
+    config_path = _write_generic_config(
+        tmp_path,
+        host_root=tmp_path / "host",
+        source=source,
+        remote=remote,
+    )
+
+    assert CandidateGate(load_candidate_gate_config(config_path)).run_once() == ()
+    assert not (tmp_path / "host" / "state" / "candidate-gate-seen.json").exists()
+
+
 def test_generic_dependency_hash_accepts_crlf_contract_for_lf_candidate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

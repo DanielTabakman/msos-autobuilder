@@ -106,6 +106,17 @@ def _mapping(value: Any, label: str) -> dict[str, Any]:
     return value
 
 
+def _declares_validation_contract(job_dir: Path) -> bool:
+    job_path = job_dir / "job.yaml"
+    if not job_path.is_file():
+        return False
+    try:
+        job = yaml.safe_load(job_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return False
+    return isinstance(job, dict) and isinstance(job.get("candidate_validation"), dict)
+
+
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
@@ -1029,7 +1040,7 @@ class CandidateGate:
                         job_dir,
                         self.config.plans[job_id],
                     )
-                elif job_id.startswith("build-next-"):
+                elif job_id.startswith("build-next-") or _declares_validation_contract(job_dir):
                     gate_report, processed_sha = self.process_generic_job(job_dir)
                 else:
                     continue

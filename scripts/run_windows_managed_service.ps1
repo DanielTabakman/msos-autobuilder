@@ -96,7 +96,12 @@ if ($null -ne $TemplateProperty -and [string]$TemplateProperty.Value) {
     if (-not (Test-Path $TemplatePath -PathType Leaf)) { throw "Managed config template not found at $TemplatePath" }
     $RuntimeConfig = Join-Path $StateRoot "runtime-config\$ServiceName.yaml"
     $Template = Get-Content -Path $TemplatePath -Raw
-    $Rendered = $Template.Replace("{managed_release_root}", $ReleasePath.Replace("\", "/")).Replace("{managed_python}", $Python.Replace("\", "/"))
+    $Rendered = $Template.Replace("{managed_release_root}", $ReleasePath.Replace("\", "/")).Replace("{managed_python}", $Python.Replace("\", "/")).Replace("{host_root}", $HostRoot.Replace("\", "/")).Replace("{machine_id}", $env:COMPUTERNAME)
+    # A surviving placeholder would otherwise be written into a live config and used as a real path.
+    $Unsubstituted = [regex]::Match($Rendered, "\{[A-Za-z_][A-Za-z0-9_]*\}")
+    if ($Unsubstituted.Success) {
+        throw "Managed config template $TemplatePath left an unsubstituted placeholder: $($Unsubstituted.Value)"
+    }
     Write-Utf8AtomicText -Path $RuntimeConfig -Value $Rendered
 }
 

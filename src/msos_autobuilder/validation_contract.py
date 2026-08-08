@@ -87,6 +87,13 @@ def _repository(value: Any) -> str:
     return text
 
 
+def _hex_digest(value: Any, label: str) -> str:
+    text = str(value or "").replace("\ufeff", "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", text):
+        raise ValidationContractError(f"{label} must be a 64-character hex digest")
+    return text
+
+
 def _dependency_policy(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValidationContractError("candidate_validation dependency_policy must be a mapping")
@@ -276,7 +283,10 @@ def build_ppe_validation_contract(
             "source": "accepted_ppe_ci_bootstrap",
             "source_commit": source_commit,
             "dependency_source_path": "requirements.txt",
-            "dependency_source_sha256": dependency_source_sha256,
+            "dependency_source_sha256": _hex_digest(
+                dependency_source_sha256,
+                "dependency_policy dependency_source_sha256",
+            ),
             "network_allowed": True,
             "candidate_environment_required": True,
             "strategy": "candidate_local_venv_requirements_test_tooling_editable_install",
@@ -326,4 +336,7 @@ def build_ppe_validation_contract(
         "product_main_write_enabled": False,
     }
     payload["contract_sha256"] = stable_contract_sha256(payload)
+    # A contract that its own loader rejects can never reach the candidate gate, so the
+    # builder refuses to emit one rather than deferring the failure to relayed evidence.
+    load_validation_contract(payload)
     return payload

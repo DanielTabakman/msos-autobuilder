@@ -27,6 +27,12 @@ founder_build_next:
     refill_enabled: false
     second_job_admission_enabled: false
     autonomous_installation_enabled: false
+  native_slice:
+    slice_id: token-audit-readonly-v1
+    touch_set:
+    - scripts/ppe_ide_build_starter.py
+    - scripts/ppe_token_audit.py
+    - tests/test_ppe_token_audit.py
 candidate_validation:
   version: 1
   pipeline_id: ppe-useful-job-5316
@@ -47,7 +53,7 @@ candidate_validation:
     source: accepted_ppe_ci_bootstrap
     source_commit: 8d6c7119ec7a77abcfd766443222d347313c75a2
     dependency_source_path: requirements.txt
-    dependency_source_sha256: "\uFEFF47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394"
+    dependency_source_sha256: 47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394
     network_allowed: true
     candidate_environment_required: true
     strategy: candidate_local_venv_requirements_test_tooling_editable_install
@@ -114,7 +120,7 @@ candidate_validation:
   publication_enabled: false
   merge_enabled: false
   product_main_write_enabled: false
-  contract_sha256: 77630e91754d84a1f9f99e378eb06c2db08e3e07c7c844675b212882cc709ee7
+  contract_sha256: 9e1a9130c4d9f76781f9e2284e20923110123d72aea030c698f7c43b24d7b744
 manifest:
   version: 1
   publication_enabled: false

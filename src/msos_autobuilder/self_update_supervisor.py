@@ -39,6 +39,9 @@ _REQUIRED_MANIFEST_PATHS = {
     "src/msos_autobuilder/self_update_supervisor.py",
 }
 STAGING_PYTEST_TIMEOUT_SECONDS = 2400.0
+STAGING_PYTEST_TEMP_NAMESPACE = "msos"
+STAGING_PYTEST_TEMP_IDENTITY_CHARS = 8
+STAGING_PYTEST_TEMP_RELEASE_CHARS = 8
 
 
 class ManifestError(ValueError):
@@ -123,7 +126,7 @@ class SupervisorConfig:
 
     @property
     def staging_pytest_temp_root(self) -> Path:
-        return self.supervisor_root / "tmp" / "staging-pytest"
+        return _staging_pytest_temp_root(self.supervisor_root)
 
     @property
     def notifications_root(self) -> Path:
@@ -505,27 +508,67 @@ def _assert_no_symlink_components(path: Path, root: Path) -> None:
             raise SupervisorError(f"staging pytest temp path contains a symlink: {current}")
 
 
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _os_local_temp_base() -> Path:
+    """Short OS-local temp base that holds every supervisor staging pytest temp root."""
+    return _lexical_absolute(Path(tempfile.gettempdir()))
+
+
+def _supervisor_identity_digest(supervisor_root: Path) -> str:
+    """Digest that binds one staging temp ownership root to exactly one supervisor root."""
+    normalized = os.path.normcase(os.fspath(_lexical_absolute(supervisor_root)))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[
+        :STAGING_PYTEST_TEMP_IDENTITY_CHARS
+    ]
+
+
+def _staging_pytest_temp_root(supervisor_root: Path) -> Path:
+    # Staged pytest must not inherit the supervisor root prefix. Isolated pilot supervisor roots
+    # are long enough that pytest's own nested temp directories exceed the Windows path limit even
+    # with LongPathsEnabled, which fails the staging gate for every release rather than for a
+    # defect in the release under test. Every segment below the OS temp base stays deliberately
+    # short because the whole staging suite has to fit in the remaining path budget.
+    return (
+        _os_local_temp_base()
+        / STAGING_PYTEST_TEMP_NAMESPACE
+        / _supervisor_identity_digest(supervisor_root)
+    )
+
+
 def _validate_staging_pytest_temp_dir(config: SupervisorConfig, path: Path) -> Path:
     supervisor_root = _lexical_absolute(config.supervisor_root)
     authorized_root = _lexical_absolute(config.staging_pytest_temp_root)
-    expected_root = supervisor_root / "tmp" / "staging-pytest"
-    if authorized_root != expected_root or authorized_root == supervisor_root:
-        raise SupervisorError("staging pytest temp root is outside the supervisor-owned boundary")
+    expected_root = _lexical_absolute(_staging_pytest_temp_root(config.supervisor_root))
+    namespace_root = authorized_root.parent
+    if authorized_root != expected_root or namespace_root == authorized_root:
+        raise SupervisorError("staging pytest temp root is not the derived supervisor-owned root")
+    if _is_within(authorized_root, supervisor_root) or _is_within(supervisor_root, authorized_root):
+        raise SupervisorError("staging pytest temp root must not share the supervisor root prefix")
     candidate = _lexical_absolute(path)
     if candidate.parent != authorized_root or candidate == authorized_root:
         raise SupervisorError("staging pytest temp path must be one release-specific child")
-    if not re.fullmatch(r"[0-9a-f]{12}-[0-9a-f]{8}", candidate.name):
+    if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{8}", candidate.name):
         raise SupervisorError("staging pytest temp path is not release bounded")
-    _assert_no_symlink_components(authorized_root, supervisor_root)
-    _assert_no_symlink_components(candidate, supervisor_root)
+    _assert_no_symlink_components(authorized_root, namespace_root)
+    _assert_no_symlink_components(candidate, namespace_root)
     return candidate
 
 
 def _staging_pytest_temp_dir(
     config: SupervisorConfig, manifest: UpdateManifest
 ) -> Path:
-    release_hash = hashlib.sha256(manifest.release_id.encode("utf-8")).hexdigest()[:8]
-    candidate = config.staging_pytest_temp_root / f"{manifest.commit[:12]}-{release_hash}"
+    release_hash = hashlib.sha256(manifest.release_id.encode("utf-8")).hexdigest()[
+        :STAGING_PYTEST_TEMP_RELEASE_CHARS
+    ]
+    commit_prefix = manifest.commit[:STAGING_PYTEST_TEMP_RELEASE_CHARS]
+    candidate = config.staging_pytest_temp_root / f"{commit_prefix}-{release_hash}"
     return _validate_staging_pytest_temp_dir(config, candidate)
 
 
@@ -582,15 +625,15 @@ def _prepare_staging_pytest_temp_dir(
     config: SupervisorConfig, manifest: UpdateManifest, cwd: Path
 ) -> Path:
     candidate = _staging_pytest_temp_dir(config, manifest)
+    authorized_root = candidate.parent
+    namespace_root = authorized_root.parent
+    namespace_root.mkdir(parents=True, exist_ok=True)
+    _assert_no_symlink_components(authorized_root, namespace_root)
+    authorized_root.mkdir(exist_ok=True)
     if _path_lexists(candidate):
         cleanup = _cleanup_staging_pytest_temp_dir(config, candidate, cwd)
         if not cleanup.passed:
             raise StagingError("could not clean stale staging pytest temp directory", (cleanup,))
-    config.staging_pytest_temp_root.mkdir(parents=True, exist_ok=True)
-    _assert_no_symlink_components(
-        _lexical_absolute(config.staging_pytest_temp_root),
-        _lexical_absolute(config.supervisor_root),
-    )
     candidate.mkdir(parents=False, exist_ok=False)
     _validate_staging_pytest_temp_dir(config, candidate)
     return candidate

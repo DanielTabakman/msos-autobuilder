@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
 from msos_autobuilder.self_update_supervisor import (
+    STAGING_PYTEST_TEMP_IDENTITY_CHARS,
+    STAGING_PYTEST_TEMP_NAMESPACE,
+    STAGING_PYTEST_TEMP_RELEASE_CHARS,
     STAGING_PYTEST_TIMEOUT_SECONDS,
     CheckResult,
     ManagedTask,
@@ -15,19 +19,34 @@ from msos_autobuilder.self_update_supervisor import (
     SupervisorError,
     UpdateManifest,
     _cleanup_staging_pytest_temp_dir,
+    _is_within,
+    _prepare_staging_pytest_temp_dir,
     _run_named_check,
     _run_staged_pytest_checks,
     _staging_pytest_temp_dir,
+    _supervisor_identity_digest,
     _validate_staging_pytest_temp_dir,
     default_command_executor,
 )
 
+STAGING_PYTEST_TEMP_SUFFIX_BUDGET_CHARS = 32
 
-def _config(tmp_path: Path) -> SupervisorConfig:
+
+@pytest.fixture(autouse=True)
+def os_temp_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Keep the OS-local staging temp base inside the test sandbox."""
+
+    base = tmp_path / "os-temp"
+    base.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(base))
+    return base
+
+
+def _config(tmp_path: Path, *, supervisor_root: Path | None = None) -> SupervisorConfig:
     probe = tmp_path / "managed-release-health-probe.py"
     probe.write_text("# fixture\n", encoding="utf-8")
     return SupervisorConfig(
-        supervisor_root=tmp_path / "supervisor",
+        supervisor_root=supervisor_root or (tmp_path / "supervisor"),
         host_root=tmp_path / "host",
         repo_url="https://github.com/DanielTabakman/msos-autobuilder.git",
         repository="DanielTabakman/msos-autobuilder",
@@ -35,6 +54,15 @@ def _config(tmp_path: Path) -> SupervisorConfig:
         release_probe_script=probe,
         managed_tasks=(ManagedTask("host", "MSOS Autobuilder Host"),),
     )
+
+
+def _long_supervisor_root(tmp_path: Path) -> Path:
+    """A synthetic root as long as the isolated Issue #119 pilot supervisor root."""
+
+    root = tmp_path / ".msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor"
+    while len(str(root)) < 160:
+        root = root / "nested-isolated-pilot-segment"
+    return root
 
 
 def _manifest(*, commit: str = "a" * 40, release_id: str = "release-1") -> UpdateManifest:
@@ -51,8 +79,9 @@ def _manifest(*, commit: str = "a" * 40, release_id: str = "release-1") -> Updat
     )
 
 
-def test_staging_pytest_temp_path_is_supervisor_owned_and_release_bounded(
+def test_staging_pytest_temp_path_is_identity_owned_and_release_bounded(
     tmp_path: Path,
+    os_temp_base: Path,
 ) -> None:
     config = _config(tmp_path)
     first = _staging_pytest_temp_dir(config, _manifest())
@@ -60,11 +89,113 @@ def test_staging_pytest_temp_path_is_supervisor_owned_and_release_bounded(
     other_release = _staging_pytest_temp_dir(config, _manifest(release_id="release-2"))
 
     assert first.parent == config.staging_pytest_temp_root.absolute()
-    assert first.name.startswith("a" * 12 + "-")
-    assert len(first.name) == 21
+    assert first.name.startswith("a" * STAGING_PYTEST_TEMP_RELEASE_CHARS + "-")
+    assert len(first.name) == 2 * STAGING_PYTEST_TEMP_RELEASE_CHARS + 1
     assert first != other_commit
     assert first != other_release
-    assert first.parent.parent.parent == config.supervisor_root.absolute()
+    assert first.parent.name == _supervisor_identity_digest(config.supervisor_root)
+    assert len(first.parent.name) == STAGING_PYTEST_TEMP_IDENTITY_CHARS
+    assert first.parent.parent == os_temp_base / STAGING_PYTEST_TEMP_NAMESPACE
+    assert not _is_within(first, config.supervisor_root.absolute())
+
+
+def test_default_staging_temp_base_is_the_os_local_temp_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    config = _config(tmp_path)
+
+    root = config.staging_pytest_temp_root
+
+    os_temp = Path(os.path.abspath(tempfile.gettempdir()))
+    assert root.parent == os_temp / STAGING_PYTEST_TEMP_NAMESPACE
+    assert root.name == _supervisor_identity_digest(config.supervisor_root)
+    assert not _is_within(root, config.supervisor_root.absolute())
+
+
+def test_long_supervisor_root_does_not_lengthen_the_staging_pytest_temp_path(
+    tmp_path: Path,
+    os_temp_base: Path,
+) -> None:
+    long_root = _long_supervisor_root(tmp_path)
+    long_config = _config(tmp_path, supervisor_root=long_root)
+    short_config = _config(tmp_path, supervisor_root=tmp_path / "s")
+
+    long_path = _staging_pytest_temp_dir(long_config, _manifest())
+    short_path = _staging_pytest_temp_dir(short_config, _manifest())
+
+    # The old design nested the temp root under the supervisor root, so the staged pytest TMP
+    # grew with the pilot path and overran the Windows path limit.
+    assert not _is_within(long_path, long_root.absolute())
+    assert len(str(long_path)) == len(str(short_path))
+    assert len(str(long_path)) < len(str(long_root))
+    expected_suffix_chars = (
+        len(f"{os.sep}{STAGING_PYTEST_TEMP_NAMESPACE}{os.sep}")
+        + STAGING_PYTEST_TEMP_IDENTITY_CHARS
+        + len(os.sep)
+        + 2 * STAGING_PYTEST_TEMP_RELEASE_CHARS
+        + 1
+    )
+    assert len(str(long_path)) - len(str(os_temp_base)) == expected_suffix_chars
+
+
+def test_staging_pytest_temp_suffix_fits_the_windows_staging_path_budget(
+    tmp_path: Path,
+    os_temp_base: Path,
+) -> None:
+    # Staged pytest starts failing on Windows once TMP grows past roughly 70 characters, because
+    # pytest nests `pytest-of-<user>/pytest-<n>/<test-name>` under it and the suite then builds
+    # git fixtures below that. The supervisor-owned suffix under the OS temp base is budgeted so a
+    # standard per-user temp base leaves that headroom intact.
+    config = _config(tmp_path, supervisor_root=_long_supervisor_root(tmp_path))
+
+    path = _staging_pytest_temp_dir(config, _manifest())
+
+    suffix_chars = len(str(path)) - len(str(os_temp_base))
+    assert suffix_chars <= STAGING_PYTEST_TEMP_SUFFIX_BUDGET_CHARS
+
+
+def test_distinct_supervisor_roots_cannot_share_staging_temp_ownership(
+    tmp_path: Path,
+) -> None:
+    first = _config(tmp_path, supervisor_root=tmp_path / "supervisor-a")
+    second = _config(tmp_path, supervisor_root=tmp_path / "supervisor-b")
+
+    first_path = _staging_pytest_temp_dir(first, _manifest())
+    second_path = _staging_pytest_temp_dir(second, _manifest())
+
+    assert first.staging_pytest_temp_root != second.staging_pytest_temp_root
+    assert first_path.parent != second_path.parent
+    assert first_path != second_path
+    with pytest.raises(SupervisorError, match="release-specific child"):
+        _validate_staging_pytest_temp_dir(first, second_path)
+
+
+def test_cleanup_refuses_another_supervisors_staging_temp_path(tmp_path: Path) -> None:
+    owner = _config(tmp_path, supervisor_root=tmp_path / "supervisor-a")
+    intruder = _config(tmp_path, supervisor_root=tmp_path / "supervisor-b")
+    owned = _staging_pytest_temp_dir(owner, _manifest())
+    owned.mkdir(parents=True)
+    sentinel = owned / "sentinel.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+
+    cleanup = _cleanup_staging_pytest_temp_dir(intruder, owned, tmp_path)
+
+    assert not cleanup.passed
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
+def test_staging_temp_root_inside_the_supervisor_root_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    supervisor_root = tmp_path / "supervisor"
+    inherited_base = supervisor_root / "tmp"
+    inherited_base.mkdir(parents=True)
+    monkeypatch.setattr(tempfile, "tempdir", str(inherited_base))
+    config = _config(tmp_path, supervisor_root=supervisor_root)
+
+    with pytest.raises(SupervisorError, match="supervisor root prefix"):
+        _staging_pytest_temp_dir(config, _manifest())
 
 
 def test_staged_pytest_receives_owned_temp_and_preserves_full_gate(
@@ -114,7 +245,9 @@ def test_staged_pytest_receives_owned_temp_and_preserves_full_gate(
         )
     ]
     effective_tmp = Path(calls[0][3])
+    assert effective_tmp == _staging_pytest_temp_dir(config, manifest)
     assert effective_tmp.parent == config.staging_pytest_temp_root.absolute()
+    assert not _is_within(effective_tmp, config.supervisor_root.absolute())
     assert pytest_result.environment == {"TMP": str(effective_tmp), "TEMP": str(effective_tmp)}
     assert pytest_result.argv[-3:] == ("-m", "pytest", "-q")
     assert pytest_result.timeout_seconds == STAGING_PYTEST_TIMEOUT_SECONDS
@@ -122,6 +255,20 @@ def test_staged_pytest_receives_owned_temp_and_preserves_full_gate(
     assert cleanup_result.passed
     assert not effective_tmp.exists()
     assert outside.read_text(encoding="utf-8") == "keep"
+
+
+def test_prepare_replaces_a_stale_release_temp_directory(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    manifest = _manifest()
+    stale = _staging_pytest_temp_dir(config, manifest)
+    stale.mkdir(parents=True)
+    (stale / "stale-pytest-tree").mkdir()
+
+    prepared = _prepare_staging_pytest_temp_dir(config, manifest, tmp_path)
+
+    assert prepared == stale
+    assert prepared.is_dir()
+    assert not (prepared / "stale-pytest-tree").exists()
 
 
 def test_unsafe_or_escaping_temp_paths_are_rejected_without_deletion(
@@ -159,6 +306,25 @@ def test_cleanup_refuses_release_temp_symlink_and_preserves_target(tmp_path: Pat
 
     assert not cleanup.passed
     assert candidate.is_symlink()
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
+def test_symlinked_ownership_root_is_rejected_without_deletion(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    target = tmp_path / "unrelated"
+    target.mkdir()
+    sentinel = target / "sentinel.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    ownership_root = config.staging_pytest_temp_root
+    ownership_root.parent.mkdir(parents=True)
+    try:
+        ownership_root.symlink_to(target, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+
+    with pytest.raises(SupervisorError, match="contains a symlink"):
+        _staging_pytest_temp_dir(config, _manifest())
+
     assert sentinel.read_text(encoding="utf-8") == "keep"
 
 

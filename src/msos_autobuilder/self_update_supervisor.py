@@ -554,7 +554,7 @@ def _validate_staging_pytest_temp_dir(config: SupervisorConfig, path: Path) -> P
     candidate = _lexical_absolute(path)
     if candidate.parent != authorized_root or candidate == authorized_root:
         raise SupervisorError("staging pytest temp path must be one release-specific child")
-    if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{8}", candidate.name):
+    if not re.fullmatch(r"[0-9a-f]{8}", candidate.name):
         raise SupervisorError("staging pytest temp path is not release bounded")
     _assert_no_symlink_components(authorized_root, namespace_root)
     _assert_no_symlink_components(candidate, namespace_root)
@@ -564,11 +564,11 @@ def _validate_staging_pytest_temp_dir(config: SupervisorConfig, path: Path) -> P
 def _staging_pytest_temp_dir(
     config: SupervisorConfig, manifest: UpdateManifest
 ) -> Path:
-    release_hash = hashlib.sha256(manifest.release_id.encode("utf-8")).hexdigest()[
+    release_identity = f"{manifest.commit}:{manifest.release_id}".encode()
+    release_hash = hashlib.sha256(release_identity).hexdigest()[
         :STAGING_PYTEST_TEMP_RELEASE_CHARS
     ]
-    commit_prefix = manifest.commit[:STAGING_PYTEST_TEMP_RELEASE_CHARS]
-    candidate = config.staging_pytest_temp_root / f"{commit_prefix}-{release_hash}"
+    candidate = config.staging_pytest_temp_root / release_hash
     return _validate_staging_pytest_temp_dir(config, candidate)
 
 

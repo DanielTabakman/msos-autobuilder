@@ -16,7 +16,7 @@
       "type": "CandidateGateError"
     }
   ],
-  "finished_at": "2026-07-25T14:38:51.234243+00:00",
+  "finished_at": "2026-08-08T06:39:45.620308+00:00",
   "job_id": "build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-bbf07c932816b782",
   "patches": [
     {
@@ -40,7 +40,7 @@
   "publication_enabled": false,
   "source_head": "43cc8123d49d6d9cf1c01e56159aa9e66b6df897",
   "source_report_sha256": "e460db6f01aa6d54606a634d591bda283deb655595fc9b038dfd9a2a854efaa5",
-  "started_at": "2026-07-25T14:38:47.771357+00:00",
+  "started_at": "2026-08-08T06:39:41.772220+00:00",
   "state": "candidate_failed",
   "status": "failed",
   "validation_contract_sha256": "ce7873aecc766fd4294637f4103d11def1e1284598d1469d3486f8624fcea058",

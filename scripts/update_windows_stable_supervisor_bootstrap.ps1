@@ -12,31 +12,258 @@ param(
     [string]$HostRoot = (Join-Path $env:USERPROFILE ".msos-autobuilder"),
     [string]$SupervisorRoot = (Join-Path $env:USERPROFILE ".msos-autobuilder-supervisor"),
     [string]$UpdateTaskName = "MSOS Autobuilder Update Supervisor",
+    [string]$TaskNamespace = "",
     [string]$BootstrapPython = (Join-Path $SupervisorRoot "bootstrap-venv\Scripts\python.exe")
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$ManagedTaskNames = @(
+# Omitted -TaskNamespace keeps production names. An explicitly bound blank value is rejected
+# before any filesystem, Scheduled Task, or report mutation.
+$TaskNamespaceWasBound = $PSBoundParameters.ContainsKey("TaskNamespace")
+$UpdateTaskNameWasBound = $PSBoundParameters.ContainsKey("UpdateTaskName")
+if ($TaskNamespaceWasBound -and ($null -eq $TaskNamespace -or [string]::IsNullOrWhiteSpace([string]$TaskNamespace))) {
+    throw "TaskNamespace was explicitly supplied but is blank. Omit -TaskNamespace for production names, or provide a valid nonblank namespace."
+}
+
+$script:MaxScheduledTaskNameLength = 238
+$script:ProductionManagedTaskRoles = @(
+    @{ service = "host"; role = "Host" },
+    @{ service = "relay"; role = "Result Relay" },
+    @{ service = "gate"; role = "Candidate Gate" },
+    @{ service = "revision"; role = "Revision Loop" },
+    @{ service = "publisher"; role = "Controlled Publisher" },
+    @{ service = "refill"; role = "Capacity-One Refill" }
+)
+$script:UpdateSupervisorRole = "Update Supervisor"
+$script:ProtectedProductionTaskNames = @(
     "MSOS Autobuilder Host",
     "MSOS Autobuilder Result Relay",
     "MSOS Autobuilder Candidate Gate",
     "MSOS Autobuilder Revision Loop",
     "MSOS Autobuilder Controlled Publisher",
-    "MSOS Autobuilder Capacity-One Refill"
+    "MSOS Autobuilder Capacity-One Refill",
+    "MSOS Autobuilder Update Supervisor"
 )
-
-$ExistingManagedTaskNames = @(
-    "MSOS Autobuilder Host",
-    "MSOS Autobuilder Result Relay",
-    "MSOS Autobuilder Candidate Gate",
-    "MSOS Autobuilder Revision Loop",
-    "MSOS Autobuilder Controlled Publisher"
-)
-
-$RefillTaskName = "MSOS Autobuilder Capacity-One Refill"
 $RefillServiceName = "refill"
+
+function Get-NormalizedTaskNamespace {
+    param([AllowNull()][string]$Namespace)
+    if ($null -eq $Namespace) { return "" }
+    return $Namespace.Trim()
+}
+
+function Get-NamespacedTaskName {
+    param(
+        [Parameter(Mandatory = $true)][string]$Role,
+        [string]$Namespace = ""
+    )
+    if ([string]::IsNullOrWhiteSpace($Namespace)) {
+        return "MSOS Autobuilder $Role"
+    }
+    return "MSOS Autobuilder $($Namespace.Trim()) $Role"
+}
+
+function Get-ProductionTaskNames {
+    return @($script:ProtectedProductionTaskNames)
+}
+
+function Resolve-HandoffTaskNames {
+    param(
+        [string]$Namespace = "",
+        [string]$UpdateTaskNameOverride = "",
+        [bool]$UpdateTaskNameWasBound = $false
+    )
+    $Normalized = Get-NormalizedTaskNamespace -Namespace $Namespace
+    $Managed = New-Object System.Collections.Generic.List[object]
+    foreach ($Entry in $script:ProductionManagedTaskRoles) {
+        [void]$Managed.Add(@{
+            service = $Entry.service
+            role = $Entry.role
+            task = (Get-NamespacedTaskName -Role $Entry.role -Namespace $Normalized)
+        })
+    }
+    $ResolvedUpdateTaskName = Get-NamespacedTaskName -Role $script:UpdateSupervisorRole -Namespace $Normalized
+    $Isolated = -not [string]::IsNullOrWhiteSpace($Normalized)
+    if ($UpdateTaskNameWasBound) {
+        # The pre-namespace -UpdateTaskName surface stays usable on its own. Combining it with a
+        # namespace may not silently produce a task set that spans two namespaces.
+        if ($Isolated -and $UpdateTaskNameOverride -ne $ResolvedUpdateTaskName) {
+            throw "UpdateTaskName '$UpdateTaskNameOverride' conflicts with the namespaced update supervisor task '$ResolvedUpdateTaskName'. Supply only one, or supply the matching name."
+        }
+        if (-not $Isolated) {
+            $ResolvedUpdateTaskName = $UpdateTaskNameOverride
+        }
+    }
+    return @{
+        namespace = $Normalized
+        isolated = $Isolated
+        managed_tasks = $Managed.ToArray()
+        update_task_name = $ResolvedUpdateTaskName
+    }
+}
+
+function Test-RootPathOverlap {
+    param(
+        [Parameter(Mandatory = $true)][string]$Left,
+        [Parameter(Mandatory = $true)][string]$Right
+    )
+    $LeftFull = [System.IO.Path]::GetFullPath($Left).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $RightFull = [System.IO.Path]::GetFullPath($Right).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    if ($LeftFull.Equals($RightFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $true
+    }
+    $LeftPrefix = $LeftFull + [System.IO.Path]::DirectorySeparatorChar
+    $RightPrefix = $RightFull + [System.IO.Path]::DirectorySeparatorChar
+    return (
+        $LeftFull.StartsWith($RightPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $RightFull.StartsWith($LeftPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+    )
+}
+
+function Assert-PathHasNoReparsePoints {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+    $Full = [System.IO.Path]::GetFullPath($Path)
+    $Root = [System.IO.Path]::GetPathRoot($Full)
+    if ([string]::IsNullOrWhiteSpace($Root)) {
+        throw "$Label path is malformed: $Path"
+    }
+    $Current = $Root.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    if ($Root.EndsWith([System.IO.Path]::DirectorySeparatorChar) -or $Root.EndsWith([System.IO.Path]::AltDirectorySeparatorChar)) {
+        $Current = $Root
+    }
+    $Relative = $Full.Substring($Root.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $Parts = @()
+    if (-not [string]::IsNullOrWhiteSpace($Relative)) {
+        $Parts = $Relative.Split([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    }
+    $Probe = $Current
+    if (Test-Path -LiteralPath $Probe) {
+        $Item = Get-Item -LiteralPath $Probe -Force
+        if (($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "$Label path resolves through a reparse point: $Path"
+        }
+    }
+    foreach ($Part in $Parts) {
+        if ([string]::IsNullOrWhiteSpace($Part)) { continue }
+        $Probe = Join-Path $Probe $Part
+        if (-not (Test-Path -LiteralPath $Probe)) { break }
+        $Item = Get-Item -LiteralPath $Probe -Force
+        if (($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "$Label path resolves through a reparse point: $Path"
+        }
+    }
+}
+
+function Assert-HandoffTaskNamespaceReady {
+    param(
+        [Parameter(Mandatory = $true)]$ResolvedNames,
+        [Parameter(Mandatory = $true)][string]$HostRootPath,
+        [Parameter(Mandatory = $true)][string]$SupervisorRootPath
+    )
+    $Namespace = [string]$ResolvedNames.namespace
+    if ($ResolvedNames.isolated) {
+        if ($Namespace -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9 ._-]{0,78}[A-Za-z0-9])?$') {
+            throw "TaskNamespace is malformed. Use 1-80 characters of letters, digits, spaces, '.', '_', or '-'."
+        }
+    }
+
+    $AllNames = New-Object System.Collections.Generic.List[string]
+    foreach ($Managed in @($ResolvedNames.managed_tasks)) {
+        if ([string]::IsNullOrWhiteSpace([string]$Managed.task)) {
+            throw "Managed task name resolved empty for service $($Managed.service)."
+        }
+        [void]$AllNames.Add([string]$Managed.task)
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$ResolvedNames.update_task_name)) {
+        throw "Update supervisor task name resolved empty."
+    }
+    [void]$AllNames.Add([string]$ResolvedNames.update_task_name)
+
+    $Seen = @{}
+    $InvalidFileNameChars = [System.IO.Path]::GetInvalidFileNameChars()
+    foreach ($Name in $AllNames) {
+        if ($Name.Length -gt $script:MaxScheduledTaskNameLength) {
+            throw "Scheduled task name exceeds Windows limit ($script:MaxScheduledTaskNameLength): $Name"
+        }
+        foreach ($Character in $Name.ToCharArray()) {
+            if ($InvalidFileNameChars -contains $Character) {
+                throw "Scheduled task name contains illegal characters: $Name"
+            }
+        }
+        $Key = $Name.ToLowerInvariant()
+        if ($Seen.ContainsKey($Key)) {
+            throw "Duplicate scheduled task name resolved: $Name"
+        }
+        $Seen[$Key] = $true
+    }
+
+    if (-not $ResolvedNames.isolated) { return }
+
+    # An isolated handoff may not name, or transact through, a production task or root.
+    foreach ($Name in $AllNames) {
+        foreach ($Protected in @(Get-ProductionTaskNames)) {
+            if ($Name.Equals($Protected, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "Isolated task name collides with protected production task name: $Name"
+            }
+        }
+    }
+
+    $UserProfile = [string]$env:USERPROFILE
+    if ([string]::IsNullOrWhiteSpace($UserProfile)) {
+        throw "USERPROFILE is required to prove an isolated handoff does not overlap the protected production roots."
+    }
+    $HostFull = [System.IO.Path]::GetFullPath($HostRootPath)
+    $SupervisorFull = [System.IO.Path]::GetFullPath($SupervisorRootPath)
+    $ProtectedHostFull = [System.IO.Path]::GetFullPath((Join-Path $UserProfile ".msos-autobuilder"))
+    $ProtectedSupervisorFull = [System.IO.Path]::GetFullPath((Join-Path $UserProfile ".msos-autobuilder-supervisor"))
+    if (Test-RootPathOverlap -Left $HostFull -Right $SupervisorFull) {
+        throw "Isolated HostRoot and SupervisorRoot must not overlap."
+    }
+    foreach ($Candidate in @(@{ label = "HostRoot"; path = $HostFull }, @{ label = "SupervisorRoot"; path = $SupervisorFull })) {
+        if (Test-RootPathOverlap -Left $Candidate.path -Right $ProtectedHostFull) {
+            throw "Isolated $($Candidate.label) overlaps protected Issue #50 host root: $ProtectedHostFull"
+        }
+        if (Test-RootPathOverlap -Left $Candidate.path -Right $ProtectedSupervisorFull) {
+            throw "Isolated $($Candidate.label) overlaps protected Issue #50 supervisor root: $ProtectedSupervisorFull"
+        }
+        Assert-PathHasNoReparsePoints -Path $Candidate.path -Label $Candidate.label
+    }
+}
+
+# Resolve and validate all seven task names before any evidence, filesystem, or task mutation.
+$ResolvedTaskNames = Resolve-HandoffTaskNames `
+    -Namespace $TaskNamespace `
+    -UpdateTaskNameOverride $UpdateTaskName `
+    -UpdateTaskNameWasBound $UpdateTaskNameWasBound
+Assert-HandoffTaskNamespaceReady -ResolvedNames $ResolvedTaskNames -HostRootPath $HostRoot -SupervisorRootPath $SupervisorRoot
+
+$IsolatedTaskNamespace = [bool]$ResolvedTaskNames.isolated
+$EffectiveTaskNamespace = [string]$ResolvedTaskNames.namespace
+$UpdateTaskName = [string]$ResolvedTaskNames.update_task_name
+$ResolvedManagedTasks = @($ResolvedTaskNames.managed_tasks)
+$RefillTaskName = [string](
+    $ResolvedManagedTasks | Where-Object { $_.service -eq $RefillServiceName } | Select-Object -First 1
+).task
+$ManagedTaskNames = @($ResolvedManagedTasks | ForEach-Object { [string]$_.task })
+$ExistingManagedTaskNames = @(
+    $ResolvedManagedTasks |
+        Where-Object { $_.service -ne $RefillServiceName } |
+        ForEach-Object { [string]$_.task }
+)
+$ExpectedBaselineTaskNames = @{
+    managed_tasks = @(
+        foreach ($Entry in $ResolvedManagedTasks) {
+            if ($Entry.service -eq $RefillServiceName) { continue }
+            @{ service = [string]$Entry.service; task_name = [string]$Entry.task }
+        }
+    )
+    refill_task = @{ service = $RefillServiceName; task_name = $RefillTaskName }
+}
 $RefillWitnessMaxAgeSeconds = 600
 $RefillWitnessMaxFutureSkewSeconds = 120
 
@@ -358,12 +585,14 @@ function Add-StagedServiceConfiguration {
         [Parameter(Mandatory = $true)][string]$InstalledBootstrap,
         [Parameter(Mandatory = $true)][string]$StagedBootstrap,
         [Parameter(Mandatory = $true)][string]$BootstrapPython,
+        [Parameter(Mandatory = $true)][hashtable]$ExpectedTaskNames,
         [Parameter(Mandatory = $true)][hashtable]$Evidence
     )
     if (-not (Test-Path $BootstrapPython -PathType Leaf)) {
         throw "Stable supervisor Python not found at $BootstrapPython"
     }
     $ProbePath = Join-Path ([System.IO.Path]::GetTempPath()) ("msos-bootstrap-service-config-" + [Guid]::NewGuid().ToString("N") + ".py")
+    $ExpectedPath = Join-Path ([System.IO.Path]::GetTempPath()) ("msos-bootstrap-service-config-expected-" + [Guid]::NewGuid().ToString("N") + ".json")
     $StdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) ("msos-bootstrap-service-config-stdout-" + [Guid]::NewGuid().ToString("N") + ".txt")
     $StderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ("msos-bootstrap-service-config-stderr-" + [Guid]::NewGuid().ToString("N") + ".txt")
     $Probe = @"
@@ -377,17 +606,19 @@ import yaml
 
 installed = pathlib.Path(sys.argv[1])
 staged = pathlib.Path(sys.argv[2])
-stdout_path = pathlib.Path(sys.argv[3])
-stderr_path = pathlib.Path(sys.argv[4])
+expected_path = pathlib.Path(sys.argv[3])
+stdout_path = pathlib.Path(sys.argv[4])
+stderr_path = pathlib.Path(sys.argv[5])
 
+expected = json.loads(expected_path.read_text(encoding="utf-8-sig"))
 old_tasks = [
-    ("host", "MSOS Autobuilder Host"),
-    ("relay", "MSOS Autobuilder Result Relay"),
-    ("gate", "MSOS Autobuilder Candidate Gate"),
-    ("revision", "MSOS Autobuilder Revision Loop"),
-    ("publisher", "MSOS Autobuilder Controlled Publisher"),
+    (str(entry["service"]), str(entry["task_name"]))
+    for entry in expected["managed_tasks"]
 ]
-refill_task = {"service": "refill", "task_name": "MSOS Autobuilder Capacity-One Refill"}
+refill_task = {
+    "service": str(expected["refill_task"]["service"]),
+    "task_name": str(expected["refill_task"]["task_name"]),
+}
 six_tasks = [*old_tasks, (refill_task["service"], refill_task["task_name"])]
 refill_service = {
     "argv": [
@@ -496,7 +727,8 @@ with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open(
 "@
     try {
         Write-Utf8NoBom -Path $ProbePath -Value $Probe
-        & $BootstrapPython $ProbePath $InstalledBootstrap $StagedBootstrap $StdoutPath $StderrPath
+        Write-Utf8NoBom -Path $ExpectedPath -Value (($ExpectedTaskNames | ConvertTo-Json -Depth 6) + [Environment]::NewLine)
+        & $BootstrapPython $ProbePath $InstalledBootstrap $StagedBootstrap $ExpectedPath $StdoutPath $StderrPath
         $ExitCode = $LASTEXITCODE
         $Stdout = if (Test-Path $StdoutPath) { Get-Content -Raw -Encoding UTF8 $StdoutPath } else { "" }
         $Stderr = if (Test-Path $StderrPath) { Get-Content -Raw -Encoding UTF8 $StderrPath } else { "" }
@@ -514,6 +746,7 @@ with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open(
     }
     finally {
         Remove-Item -Force -ErrorAction SilentlyContinue $ProbePath
+        Remove-Item -Force -ErrorAction SilentlyContinue $ExpectedPath
         Remove-Item -Force -ErrorAction SilentlyContinue $StdoutPath
         Remove-Item -Force -ErrorAction SilentlyContinue $StderrPath
     }
@@ -1562,6 +1795,18 @@ $Report = @{
     old_bootstrap_commit = $ExpectedOldBootstrapCommit
     new_bootstrap_commit = $Commit
     supervisor_root = $SupervisorRoot
+    host_root = $HostRoot
+    task_namespace = @{
+        supplied = $TaskNamespaceWasBound
+        namespace = $EffectiveTaskNamespace
+        isolated = $IsolatedTaskNamespace
+        managed_tasks = @(
+            foreach ($Entry in $ResolvedManagedTasks) {
+                @{ service = [string]$Entry.service; task_name = [string]$Entry.task }
+            }
+        )
+        update_task_name = $UpdateTaskName
+    }
     staged_bootstrap = $StagedBootstrap
     rollback_bootstrap = $RollbackBootstrap
     report_path = $ReportPath
@@ -1637,7 +1882,7 @@ try {
     New-Item -ItemType Directory -Force -Path $StageParent, $RollbackParent, $ReportsRoot | Out-Null
     Copy-Item -Recurse -Force -Path $BootstrapRoot -Destination $StagedBootstrap
     Copy-BootstrapSourceFiles -RepoRoot $RepoRoot -DestinationRoot $StagedBootstrap -Evidence $Report.file_hashes
-    Add-StagedServiceConfiguration -InstalledBootstrap $BootstrapRoot -StagedBootstrap $StagedBootstrap -BootstrapPython $BootstrapPython -Evidence $Report.service_configuration
+    Add-StagedServiceConfiguration -InstalledBootstrap $BootstrapRoot -StagedBootstrap $StagedBootstrap -BootstrapPython $BootstrapPython -ExpectedTaskNames $ExpectedBaselineTaskNames -Evidence $Report.service_configuration
     $ConfiguredHostRoot = [string]$Report.service_configuration["staged_generation"].host_root
     if ((ConvertTo-ComparablePath -Path $ConfiguredHostRoot) -ne (ConvertTo-ComparablePath -Path $HostRoot)) {
         throw "HostRoot parameter does not match installed supervisor.yaml host_root."

@@ -2777,6 +2777,108 @@ def test_stable_bootstrap_handoff_accepts_running_policy_paused_refill(
     assert "disable" not in refill_actions
 
 
+def test_stable_bootstrap_handoff_accepts_absent_previous_release_under_policy_paused_refill(
+    tmp_path: Path,
+) -> None:
+    """Pilot installs may lack previous-release.json; StrictMode must still compare hashes."""
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    protected_before = _prepare_policy_paused_refill_runtime(fixture)
+    supervisor = fixture["supervisor"]
+    assert isinstance(supervisor, Path)
+    previous_pointer = supervisor / "state" / "previous-release.json"
+    previous_pointer.unlink()
+    protected_before[previous_pointer.as_posix()] = None
+
+    result, calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=_running_refill_before_script(fixture),
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    report = _read_handoff_report(fixture)
+    assert report["outcome"] == "success"
+    assert report["activation"]["status"] == "restart_witness_passed"
+    assert report["scheduled_tasks"]["baseline_mode"] == "six-task-running-policy-paused"
+    preflight_previous = report["service_configuration"]["preflight"]["previous_release"]
+    post_previous = report["service_configuration"]["post_handoff_invariants"][
+        "previous_release"
+    ]
+    assert preflight_previous["exists"] is False
+    assert post_previous["exists"] is False
+    assert preflight_previous["sha256"] is None
+    assert post_previous["sha256"] is None
+    assert preflight_previous["sha256"] == post_previous["sha256"]
+    assert not previous_pointer.exists()
+    for path_text, before in protected_before.items():
+        path = Path(path_text)
+        if before is None:
+            assert not path.exists()
+        else:
+            assert path.read_bytes() == before
+
+    calls = [
+        json.loads(line)
+        for line in calls_path.read_text(encoding="utf-8-sig").splitlines()
+    ]
+    refill_actions = [
+        call["action"]
+        for call in calls
+        if call["name"] == "MSOS Autobuilder Capacity-One Refill"
+    ]
+    assert "register" not in refill_actions
+    assert "unregister" not in refill_actions
+    assert "disable" not in refill_actions
+
+
+@pytest.mark.parametrize(
+    ("start_absent", "operation"),
+    [
+        (True, "append"),  # absent -> present (Add-Content creates non-empty file)
+        (False, "delete"),  # present -> absent
+    ],
+)
+def test_stable_bootstrap_handoff_rejects_previous_release_absent_present_transitions(
+    tmp_path: Path,
+    start_absent: bool,
+    operation: str,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    _prepare_policy_paused_refill_runtime(fixture)
+    supervisor = fixture["supervisor"]
+    assert isinstance(supervisor, Path)
+    previous_pointer = supervisor / "state" / "previous-release.json"
+    if start_absent:
+        previous_pointer.unlink()
+    assert previous_pointer.exists() is (not start_absent)
+    mutation_script = _restart_mutation_script(previous_pointer, operation)
+
+    result, _calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=_running_refill_before_script(fixture) + mutation_script,
+    )
+
+    assert result.returncode != 0
+    report = _read_handoff_report(fixture)
+    assert report["outcome"] != "success"
+    assert "previous-release.json changed" in json.dumps(report)
+    assert report["activation"]["performed"] is True
+    assert report["rollback"]["performed"] is True
+
+
 @pytest.mark.parametrize(
     ("policy", "message"),
     [

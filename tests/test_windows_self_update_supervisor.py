@@ -2838,6 +2838,48 @@ def test_stable_bootstrap_handoff_accepts_absent_previous_release_under_policy_p
 
 
 @pytest.mark.parametrize(
+    ("start_absent", "operation"),
+    [
+        (True, "append"),  # absent -> present (Add-Content creates non-empty file)
+        (False, "delete"),  # present -> absent
+    ],
+)
+def test_stable_bootstrap_handoff_rejects_previous_release_absent_present_transitions(
+    tmp_path: Path,
+    start_absent: bool,
+    operation: str,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    _prepare_policy_paused_refill_runtime(fixture)
+    supervisor = fixture["supervisor"]
+    assert isinstance(supervisor, Path)
+    previous_pointer = supervisor / "state" / "previous-release.json"
+    if start_absent:
+        previous_pointer.unlink()
+    assert previous_pointer.exists() is (not start_absent)
+    mutation_script = _restart_mutation_script(previous_pointer, operation)
+
+    result, _calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=_running_refill_before_script(fixture) + mutation_script,
+    )
+
+    assert result.returncode != 0
+    report = _read_handoff_report(fixture)
+    assert report["outcome"] != "success"
+    assert "previous-release.json changed" in json.dumps(report)
+    assert report["activation"]["performed"] is True
+    assert report["rollback"]["performed"] is True
+
+
+@pytest.mark.parametrize(
     ("policy", "message"),
     [
         ({"version": 1, "enabled": True, "desired_capacity": 0}, "enabled exactly false"),

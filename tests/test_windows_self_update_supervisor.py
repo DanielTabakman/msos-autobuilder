@@ -1784,6 +1784,7 @@ def _prepare_policy_paused_refill_runtime(
     witness_started_at: str | None = None,
     include_refill_controller: bool = True,
     include_witness: bool = True,
+    include_previous_release: bool = True,
 ) -> dict[str, bytes | None]:
     supervisor = fixture["supervisor"]
     host_root = fixture["host_root"]
@@ -1800,18 +1801,21 @@ def _prepare_policy_paused_refill_runtime(
 
     state = supervisor / "state"
     previous_pointer = state / "previous-release.json"
-    previous_pointer.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "commit": "0" * 40,
-                "release_path": (supervisor / "versions" / ("0" * 40)).as_posix(),
-                "activated_at": "2026-07-15T00:00:00Z",
-            }
+    if include_previous_release:
+        previous_pointer.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "commit": "0" * 40,
+                    "release_path": (supervisor / "versions" / ("0" * 40)).as_posix(),
+                    "activated_at": "2026-07-15T00:00:00Z",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
         )
-        + "\n",
-        encoding="utf-8",
-    )
+    elif previous_pointer.exists():
+        previous_pointer.unlink()
     if include_witness:
         witness_root = state / "service-witnesses"
         witness_root.mkdir(parents=True, exist_ok=True)
@@ -2775,6 +2779,103 @@ def test_stable_bootstrap_handoff_accepts_running_policy_paused_refill(
     assert "register" not in refill_actions
     assert "unregister" not in refill_actions
     assert "disable" not in refill_actions
+
+
+def test_stable_bootstrap_handoff_accepts_absent_previous_release_on_namespaced_policy_paused_path(
+    tmp_path: Path,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(
+        tmp_path,
+        task_namespace=PILOT_TASK_NAMESPACE,
+    )
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    protected_before = _prepare_policy_paused_refill_runtime(
+        fixture,
+        include_previous_release=False,
+    )
+    previous_pointer = Path(fixture["supervisor"]) / "state" / "previous-release.json"
+    assert not previous_pointer.exists()
+
+    result, calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=_running_refill_before_script(fixture),
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    report = _read_handoff_report(fixture)
+    assert report["outcome"] == "success"
+    assert report["task_namespace"]["namespace"] == PILOT_TASK_NAMESPACE
+    assert report["protected_runtime_state"]["mode"] == "six-task-running-policy-paused"
+    assert report["protected_runtime_state"]["differences"] == []
+    previous_preflight = report["service_configuration"]["preflight"]["previous_release"]
+    previous_post = report["service_configuration"]["post_handoff_invariants"][
+        "previous_release"
+    ]
+    assert previous_preflight["exists"] is False
+    assert previous_post["exists"] is False
+    assert previous_preflight.get("sha256") == previous_post.get("sha256")
+    assert not previous_pointer.exists()
+    for path_text, before in protected_before.items():
+        path = Path(path_text)
+        if before is None:
+            assert not path.exists()
+        else:
+            assert path.read_bytes() == before
+
+    calls = [
+        json.loads(line)
+        for line in calls_path.read_text(encoding="utf-8-sig").splitlines()
+    ]
+    assert not [call for call in calls if call["name"] in PRODUCTION_TASK_NAMES]
+
+
+@pytest.mark.parametrize(
+    ("include_previous_release", "operation", "message"),
+    [
+        (False, "create", "previous-release.json changed"),
+        (True, "delete", "previous-release.json changed"),
+        (True, "append", "previous-release.json changed"),
+    ],
+)
+def test_stable_bootstrap_handoff_rejects_previous_release_evidence_transitions(
+    tmp_path: Path,
+    include_previous_release: bool,
+    operation: str,
+    message: str,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    _prepare_policy_paused_refill_runtime(
+        fixture,
+        include_previous_release=include_previous_release,
+    )
+    previous_pointer = Path(fixture["supervisor"]) / "state" / "previous-release.json"
+    assert previous_pointer.exists() is include_previous_release
+    mutation_script = _restart_mutation_script(previous_pointer, operation)
+
+    result, _calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=_running_refill_before_script(fixture) + mutation_script,
+    )
+
+    assert result.returncode != 0
+    report = _read_handoff_report(fixture)
+    assert report["outcome"] != "success"
+    assert message in json.dumps(report)
+    assert report["activation"]["performed"] is True
+    assert report["rollback"]["performed"] is True
 
 
 @pytest.mark.parametrize(

@@ -351,7 +351,15 @@ function Get-FileSha256 {
 function Get-TextFileEvidence {
     param([Parameter(Mandatory = $true)][string]$Path)
     if (-not (Test-Path $Path -PathType Leaf)) {
-        return @{ exists = $false; path = $Path }
+        # Keep a stable comparison contract under Set-StrictMode: absent files must
+        # expose the same properties as present files so unchanged-absent checks work.
+        return @{
+            exists = $false
+            path = $Path
+            sha256 = $null
+            canonical_sha256 = $null
+            length = 0
+        }
     }
     $Bytes = [System.IO.File]::ReadAllBytes($Path)
     return @{
@@ -360,6 +368,23 @@ function Get-TextFileEvidence {
         sha256 = Get-ByteArraySha256 -Bytes $Bytes
         canonical_sha256 = Get-CrlfCanonicalSha256 -Bytes $Bytes
         length = $Bytes.Length
+    }
+}
+
+function Assert-TextFileEvidenceUnchanged {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Before,
+        [Parameter(Mandatory = $true)][hashtable]$After,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+    if ([bool]$Before.exists -ne [bool]$After.exists) {
+        throw "$Label changed during policy-paused bootstrap handoff."
+    }
+    if (-not [bool]$Before.exists) {
+        return
+    }
+    if ([string]$Before.sha256 -ne [string]$After.sha256) {
+        throw "$Label changed during policy-paused bootstrap handoff."
     }
 }
 
@@ -467,7 +492,10 @@ function Get-JsonFileEvidence {
 }
 
 function Get-ByteArraySha256 {
-    param([byte[]]$Bytes)
+    param(
+        [AllowEmptyCollection()]
+        [byte[]]$Bytes = @()
+    )
     $Sha256 = [System.Security.Cryptography.SHA256]::Create()
     try {
         return [System.BitConverter]::ToString($Sha256.ComputeHash($Bytes)).
@@ -480,7 +508,11 @@ function Get-ByteArraySha256 {
 }
 
 function Get-CrlfCanonicalSha256 {
-    param([Parameter(Mandatory = $true)][byte[]]$Bytes)
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [byte[]]$Bytes
+    )
     $Canonical = New-Object System.IO.MemoryStream
     try {
         for ($Index = 0; $Index -lt $Bytes.Length; $Index++) {
@@ -2004,15 +2036,18 @@ try {
             $PostActiveRelease = Get-TextFileEvidence -Path $ActivePointerPath
             $PostPreviousRelease = Get-TextFileEvidence -Path $PreviousPointerPath
             $PostRefillPolicy = Get-TextFileEvidence -Path $RefillPolicyPath
-            if ([string]$PostActiveRelease.sha256 -ne [string]$Report.service_configuration["preflight"]["active_release"].sha256) {
-                throw "active-release.json changed during policy-paused bootstrap handoff."
-            }
-            if ([string]$PostPreviousRelease.sha256 -ne [string]$Report.service_configuration["preflight"]["previous_release"].sha256) {
-                throw "previous-release.json changed during policy-paused bootstrap handoff."
-            }
-            if ([string]$PostRefillPolicy.sha256 -ne [string]$Report.service_configuration["preflight"]["refill_policy"].sha256) {
-                throw "refill-policy.json changed during policy-paused bootstrap handoff."
-            }
+            Assert-TextFileEvidenceUnchanged `
+                -Before $Report.service_configuration["preflight"]["active_release"] `
+                -After $PostActiveRelease `
+                -Label "active-release.json"
+            Assert-TextFileEvidenceUnchanged `
+                -Before $Report.service_configuration["preflight"]["previous_release"] `
+                -After $PostPreviousRelease `
+                -Label "previous-release.json"
+            Assert-TextFileEvidenceUnchanged `
+                -Before $Report.service_configuration["preflight"]["refill_policy"] `
+                -After $PostRefillPolicy `
+                -Label "refill-policy.json"
             $Report.service_configuration["post_handoff_invariants"] = @{
                 active_release = $PostActiveRelease
                 previous_release = $PostPreviousRelease

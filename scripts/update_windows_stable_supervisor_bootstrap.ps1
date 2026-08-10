@@ -350,8 +350,17 @@ function Get-FileSha256 {
 
 function Get-TextFileEvidence {
     param([Parameter(Mandatory = $true)][string]$Path)
+    # Always emit the full evidence shape so Set-StrictMode callers can compare
+    # sha256/canonical_sha256/length for absent files (e.g. missing previous-release.json)
+    # without throwing "The property 'sha256' cannot be found on this object."
     if (-not (Test-Path $Path -PathType Leaf)) {
-        return @{ exists = $false; path = $Path }
+        return @{
+            exists = $false
+            path = $Path
+            sha256 = $null
+            canonical_sha256 = $null
+            length = $null
+        }
     }
     $Bytes = [System.IO.File]::ReadAllBytes($Path)
     return @{

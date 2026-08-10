@@ -475,6 +475,203 @@ function Get-JsonFileEvidence {
     return $Evidence
 }
 
+function ConvertTo-CanonicalJsonStringLiteral {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+    $Builder = New-Object System.Text.StringBuilder
+    [void]$Builder.Append([char]34)
+    foreach ($Char in $Text.ToCharArray()) {
+        switch ([int][char]$Char) {
+            8 { [void]$Builder.Append("\b") }
+            9 { [void]$Builder.Append("\t") }
+            10 { [void]$Builder.Append("\n") }
+            12 { [void]$Builder.Append("\f") }
+            13 { [void]$Builder.Append("\r") }
+            34 { [void]$Builder.Append([string][char]92); [void]$Builder.Append([char]34) }
+            92 { [void]$Builder.Append([string][char]92); [void]$Builder.Append([char]92) }
+            default {
+                if ([int][char]$Char -lt 32) {
+                    [void]$Builder.AppendFormat("\u{0:x4}", [int][char]$Char)
+                }
+                else {
+                    [void]$Builder.Append($Char)
+                }
+            }
+        }
+    }
+    [void]$Builder.Append([char]34)
+    return $Builder.ToString()
+}
+
+function ConvertTo-CanonicalJsonText {
+    param([AllowNull()]$Value)
+    if ($null -eq $Value) {
+        return "null"
+    }
+    if ($Value -is [bool]) {
+        if ($Value) { return "true" }
+        return "false"
+    }
+    if ($Value -is [string]) {
+        return ConvertTo-CanonicalJsonStringLiteral -Text $Value
+    }
+    if ($Value -is [datetime]) {
+        return ConvertTo-CanonicalJsonStringLiteral -Text $Value.ToString("o")
+    }
+    if ($Value -is [System.Management.Automation.PSCustomObject]) {
+        $Names = @($Value.PSObject.Properties.Name | Sort-Object)
+        $Parts = New-Object System.Collections.ArrayList
+        foreach ($Name in $Names) {
+            $EncodedName = ConvertTo-CanonicalJsonStringLiteral -Text ([string]$Name)
+            $EncodedValue = ConvertTo-CanonicalJsonText -Value ($Value.$Name)
+            [void]$Parts.Add("$EncodedName`:$EncodedValue")
+        }
+        return "{" + ($Parts -join ",") + "}"
+    }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $Names = @($Value.Keys | ForEach-Object { [string]$_ } | Sort-Object)
+        $Parts = New-Object System.Collections.ArrayList
+        foreach ($Name in $Names) {
+            $EncodedName = ConvertTo-CanonicalJsonStringLiteral -Text $Name
+            $EncodedValue = ConvertTo-CanonicalJsonText -Value ($Value[$Name])
+            [void]$Parts.Add("$EncodedName`:$EncodedValue")
+        }
+        return "{" + ($Parts -join ",") + "}"
+    }
+    if (
+        $Value -is [System.Collections.IEnumerable] -and
+        $Value -isnot [string] -and
+        $Value -isnot [System.Collections.IDictionary]
+    ) {
+        $Parts = New-Object System.Collections.ArrayList
+        foreach ($Item in $Value) {
+            [void]$Parts.Add((ConvertTo-CanonicalJsonText -Value $Item))
+        }
+        return "[" + ($Parts -join ",") + "]"
+    }
+    if ($Value -is [byte] -or $Value -is [sbyte] -or $Value -is [int16] -or $Value -is [uint16] -or
+        $Value -is [int] -or $Value -is [uint32] -or $Value -is [long] -or $Value -is [uint64] -or
+        $Value -is [decimal] -or $Value -is [double] -or $Value -is [float] -or $Value -is [bigint]) {
+        return [System.Convert]::ToString($Value, [System.Globalization.CultureInfo]::InvariantCulture)
+    }
+    return ConvertTo-CanonicalJsonStringLiteral -Text ([string]$Value)
+}
+
+function Get-JsonObjectPropertyMap {
+    param([Parameter(Mandatory = $true)]$Object)
+    $Map = [ordered]@{}
+    if ($Object -is [System.Management.Automation.PSCustomObject]) {
+        foreach ($Property in $Object.PSObject.Properties) {
+            $Map[[string]$Property.Name] = $Property.Value
+        }
+        return $Map
+    }
+    if ($Object -is [System.Collections.IDictionary]) {
+        foreach ($Key in $Object.Keys) {
+            $Map[[string]$Key] = $Object[$Key]
+        }
+        return $Map
+    }
+    throw "JSON value must be an object."
+}
+
+function Get-JsonObjectWithoutTopLevelProperty {
+    param(
+        [Parameter(Mandatory = $true)]$Object,
+        [Parameter(Mandatory = $true)][string]$PropertyName
+    )
+    $Map = Get-JsonObjectPropertyMap -Object $Object
+    $Filtered = [ordered]@{}
+    foreach ($Name in @($Map.Keys)) {
+        if ($Name -eq $PropertyName) { continue }
+        $Filtered[$Name] = $Map[$Name]
+    }
+    return $Filtered
+}
+
+function Assert-ExactPausedRefillPolicyAuthority {
+    param(
+        [Parameter(Mandatory = $true)]$Policy,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+    $Map = Get-JsonObjectPropertyMap -Object $Policy
+    if (-not $Map.Contains("enabled")) {
+        throw "refill-policy.json $Label enabled must be boolean false during policy-paused bootstrap handoff."
+    }
+    $Enabled = $Map["enabled"]
+    if ($Enabled -isnot [bool] -or $Enabled -ne $false) {
+        throw "refill-policy.json $Label enabled must be boolean false during policy-paused bootstrap handoff."
+    }
+    if (-not $Map.Contains("desired_capacity")) {
+        throw "refill-policy.json $Label desired_capacity must be integer 0 during policy-paused bootstrap handoff."
+    }
+    $DesiredCapacity = $Map["desired_capacity"]
+    if ($DesiredCapacity -is [bool]) {
+        throw "refill-policy.json $Label desired_capacity must be integer 0 during policy-paused bootstrap handoff."
+    }
+    if (
+        $DesiredCapacity -isnot [int] -and
+        $DesiredCapacity -isnot [long] -and
+        $DesiredCapacity -isnot [bigint]
+    ) {
+        throw "refill-policy.json $Label desired_capacity must be integer 0 during policy-paused bootstrap handoff."
+    }
+    if ($DesiredCapacity -ne 0) {
+        throw "refill-policy.json $Label desired_capacity must be integer 0 during policy-paused bootstrap handoff."
+    }
+}
+
+function Assert-PolicyPausedRefillPolicyHandoffInvariant {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$PreflightTextEvidence,
+        [Parameter(Mandatory = $true)][hashtable]$PreflightJsonEvidence,
+        [Parameter(Mandatory = $true)][string]$PolicyPath
+    )
+    if (-not $PreflightTextEvidence.exists) {
+        throw "refill-policy.json missing before policy-paused bootstrap handoff."
+    }
+    if (-not $PreflightJsonEvidence.exists -or $null -eq $PreflightJsonEvidence.json) {
+        throw "refill-policy.json preflight JSON evidence is missing during policy-paused bootstrap handoff."
+    }
+
+    $PostEvidence = Get-TextFileEvidence -Path $PolicyPath
+    if (-not $PostEvidence.exists) {
+        throw "refill-policy.json missing after policy-paused bootstrap handoff."
+    }
+    try {
+        $PostJson = Get-Content -Path $PolicyPath -Raw | ConvertFrom-Json
+    }
+    catch {
+        throw "refill-policy.json malformed after policy-paused bootstrap handoff."
+    }
+    if ($null -eq $PostJson -or $PostJson.GetType().Name -notin @("PSCustomObject", "OrderedDictionary", "Hashtable")) {
+        throw "refill-policy.json must remain a JSON object during policy-paused bootstrap handoff."
+    }
+
+    $PreJson = $PreflightJsonEvidence.json
+    Assert-ExactPausedRefillPolicyAuthority -Policy $PreJson -Label "preflight"
+    Assert-ExactPausedRefillPolicyAuthority -Policy $PostJson -Label "post-handoff"
+
+    $PreComparable = Get-JsonObjectWithoutTopLevelProperty -Object $PreJson -PropertyName "last_decision_evidence"
+    $PostComparable = Get-JsonObjectWithoutTopLevelProperty -Object $PostJson -PropertyName "last_decision_evidence"
+    $PreFingerprint = ConvertTo-CanonicalJsonText -Value $PreComparable
+    $PostFingerprint = ConvertTo-CanonicalJsonText -Value $PostComparable
+    $RawBytesChanged = [string]$PreflightTextEvidence.sha256 -ne [string]$PostEvidence.sha256
+    $SemanticInvariantPassed = $PreFingerprint -eq $PostFingerprint
+    if (-not $SemanticInvariantPassed) {
+        throw "refill-policy.json changed during policy-paused bootstrap handoff."
+    }
+
+    $PostEvidence["json"] = $PostJson
+    $PostEvidence["preflight_sha256"] = [string]$PreflightTextEvidence.sha256
+    $PostEvidence["post_sha256"] = [string]$PostEvidence.sha256
+    $PostEvidence["raw_bytes_changed"] = $RawBytesChanged
+    $PostEvidence["semantic_invariant_passed"] = $true
+    $PostEvidence["volatile_field_excluded"] = "last_decision_evidence"
+    $PostEvidence["preflight_semantic_fingerprint"] = $PreFingerprint
+    $PostEvidence["post_semantic_fingerprint"] = $PostFingerprint
+    return $PostEvidence
+}
+
 function Get-ByteArraySha256 {
     param([byte[]]$Bytes)
     $Sha256 = [System.Security.Cryptography.SHA256]::Create()
@@ -2012,16 +2209,16 @@ try {
             }
             $PostActiveRelease = Get-TextFileEvidence -Path $ActivePointerPath
             $PostPreviousRelease = Get-TextFileEvidence -Path $PreviousPointerPath
-            $PostRefillPolicy = Get-TextFileEvidence -Path $RefillPolicyPath
             if ([string]$PostActiveRelease.sha256 -ne [string]$Report.service_configuration["preflight"]["active_release"].sha256) {
                 throw "active-release.json changed during policy-paused bootstrap handoff."
             }
             if ([string]$PostPreviousRelease.sha256 -ne [string]$Report.service_configuration["preflight"]["previous_release"].sha256) {
                 throw "previous-release.json changed during policy-paused bootstrap handoff."
             }
-            if ([string]$PostRefillPolicy.sha256 -ne [string]$Report.service_configuration["preflight"]["refill_policy"].sha256) {
-                throw "refill-policy.json changed during policy-paused bootstrap handoff."
-            }
+            $PostRefillPolicy = Assert-PolicyPausedRefillPolicyHandoffInvariant `
+                -PreflightTextEvidence $Report.service_configuration["preflight"]["refill_policy"] `
+                -PreflightJsonEvidence $Report.service_configuration["refill_policy_preflight"] `
+                -PolicyPath $RefillPolicyPath
             $Report.service_configuration["post_handoff_invariants"] = @{
                 active_release = $PostActiveRelease
                 previous_release = $PostPreviousRelease

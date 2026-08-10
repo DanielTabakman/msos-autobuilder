@@ -1907,6 +1907,41 @@ def _prepare_policy_paused_refill_runtime(
     }
 
 
+def _paused_refill_policy(**overrides: object) -> dict[str, object]:
+    policy: dict[str, object] = {
+        "version": 1,
+        "enabled": False,
+        "desired_capacity": 0,
+        "resume_desired_capacity": 1,
+        "status": "PAUSED",
+        "message": "Refill is paused; no new dispatch was attempted.",
+        "queue_cap": 4,
+        "dispatch_window": {"mode": "always", "suppression_enabled": False},
+        "last_decision_evidence": {
+            "decision": "paused",
+            "observed_at": "2026-08-10T00:00:00+00:00",
+        },
+    }
+    policy.update(overrides)
+    return policy
+
+
+def _restart_policy_replace_script(
+    policy_path: Path,
+    policy: dict[str, object] | str,
+) -> str:
+    if isinstance(policy, str):
+        payload = policy
+    else:
+        payload = json.dumps(policy, sort_keys=True) + "\n"
+    escaped = payload.replace("'", "''")
+    return f"""
+$env:MSOS_STUBBED_PROTECTED_MUTATION_PATH = '{policy_path.as_posix()}'
+$env:MSOS_STUBBED_PROTECTED_MUTATION_OPERATION = 'replace'
+$env:MSOS_STUBBED_PROTECTED_MUTATION_JSON = '{escaped}'
+"""
+
+
 def _running_refill_before_script(fixture: dict[str, object]) -> str:
     host_root = fixture["host_root"]
     supervisor = fixture["supervisor"]
@@ -2107,6 +2142,23 @@ def _stubbed_task_control_script(
             "                    New-Item -ItemType File -Force -Path $MutationPath | Out-Null",
             "                }",
             "                'delete' { Remove-Item -Force $MutationPath }",
+            "                'replace' {",
+            "                    $Replacement = $env:MSOS_STUBBED_PROTECTED_MUTATION_JSON",
+            (
+                "                    if ($null -eq $Replacement) { "
+                "throw 'replace mutation requires MSOS_STUBBED_PROTECTED_MUTATION_JSON' }"
+            ),
+            "                    $MutationParent = Split-Path -Parent $MutationPath",
+            (
+                "                    New-Item -ItemType Directory -Force "
+                "-Path $MutationParent | Out-Null"
+            ),
+            "                    $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)",
+            (
+                "                    [System.IO.File]::WriteAllText("
+                "$MutationPath, [string]$Replacement, $Utf8NoBom)"
+            ),
+            "                }",
             (
                 "                default { throw 'unsupported protected "
                 "mutation operation: $MutationOperation' }"
@@ -2748,6 +2800,11 @@ def test_stable_bootstrap_handoff_accepts_running_policy_paused_refill(
     assert policy_preflight["sha256"] == report["service_configuration"][
         "refill_policy_preflight"
     ]["sha256"]
+    assert policy_post["raw_bytes_changed"] is False
+    assert policy_post["semantic_invariant_passed"] is True
+    assert policy_post["volatile_field_excluded"] == "last_decision_evidence"
+    assert policy_post["preflight_sha256"] == policy_preflight["sha256"]
+    assert policy_post["post_sha256"] == policy_post["sha256"]
     assert (
         report["service_configuration"]["preflight"]["active_release"]["sha256"]
         == report["service_configuration"]["post_handoff_invariants"]["active_release"]["sha256"]
@@ -2875,6 +2932,153 @@ def test_stable_bootstrap_handoff_rejects_previous_release_absent_present_transi
     report = _read_handoff_report(fixture)
     assert report["outcome"] != "success"
     assert "previous-release.json changed" in json.dumps(report)
+    assert report["activation"]["performed"] is True
+    assert report["rollback"]["performed"] is True
+
+
+def test_stable_bootstrap_handoff_accepts_refill_policy_last_decision_bookkeeping_refresh(
+    tmp_path: Path,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    base_policy = _paused_refill_policy()
+    _prepare_policy_paused_refill_runtime(fixture, policy=base_policy)
+    host_root = fixture["host_root"]
+    assert isinstance(host_root, Path)
+    policy_path = host_root / "state" / "refill-policy.json"
+    refreshed = _paused_refill_policy(
+        last_decision_evidence={
+            "decision": "paused",
+            "observed_at": "2026-08-10T12:34:56+00:00",
+            "reason": "disabled zero-capacity reconcile",
+        }
+    )
+    mutation_script = _restart_policy_replace_script(policy_path, refreshed)
+
+    result, _calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=_running_refill_before_script(fixture) + mutation_script,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    report = _read_handoff_report(fixture)
+    assert report["outcome"] == "success"
+    policy_preflight = report["service_configuration"]["preflight"]["refill_policy"]
+    policy_post = report["service_configuration"]["post_handoff_invariants"]["refill_policy"]
+    assert policy_preflight["sha256"] != policy_post["sha256"]
+    assert policy_post["raw_bytes_changed"] is True
+    assert policy_post["semantic_invariant_passed"] is True
+    assert policy_post["preflight_sha256"] == policy_preflight["sha256"]
+    assert policy_post["post_sha256"] == policy_post["sha256"]
+    assert policy_post["volatile_field_excluded"] == "last_decision_evidence"
+    assert policy_post["preflight_semantic_fingerprint"] == policy_post[
+        "post_semantic_fingerprint"
+    ]
+    assert json.loads(policy_path.read_text(encoding="utf-8")) == refreshed
+
+
+@pytest.mark.parametrize(
+    ("mutated_policy", "message"),
+    [
+        (
+            _paused_refill_policy(enabled=True),
+            "enabled must be boolean false",
+        ),
+        (
+            _paused_refill_policy(desired_capacity=1),
+            "desired_capacity must be integer 0",
+        ),
+        (
+            _paused_refill_policy(queue_cap=8),
+            "refill-policy.json changed during policy-paused bootstrap handoff.",
+        ),
+        (
+            _paused_refill_policy(
+                dispatch_window={"mode": "never", "suppression_enabled": True}
+            ),
+            "refill-policy.json changed during policy-paused bootstrap handoff.",
+        ),
+        (
+            {
+                key: value
+                for key, value in _paused_refill_policy().items()
+                if key != "message"
+            },
+            "refill-policy.json changed during policy-paused bootstrap handoff.",
+        ),
+        (
+            _paused_refill_policy(unexpected_authority_flag=True),
+            "refill-policy.json changed during policy-paused bootstrap handoff.",
+        ),
+        ("{not json", "malformed after policy-paused bootstrap handoff."),
+    ],
+)
+def test_stable_bootstrap_handoff_rejects_refill_policy_authority_or_shape_drift(
+    tmp_path: Path,
+    mutated_policy: dict[str, object] | str,
+    message: str,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    _prepare_policy_paused_refill_runtime(fixture, policy=_paused_refill_policy())
+    host_root = fixture["host_root"]
+    assert isinstance(host_root, Path)
+    policy_path = host_root / "state" / "refill-policy.json"
+    mutation_script = _restart_policy_replace_script(policy_path, mutated_policy)
+
+    result, _calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=_running_refill_before_script(fixture) + mutation_script,
+    )
+
+    assert result.returncode != 0
+    report = _read_handoff_report(fixture)
+    assert report["outcome"] != "success"
+    assert message in json.dumps(report)
+    assert report["activation"]["performed"] is True
+    assert report["rollback"]["performed"] is True
+
+
+def test_stable_bootstrap_handoff_rejects_missing_post_refill_policy(
+    tmp_path: Path,
+) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is not installed on this runner")
+
+    fixture = _build_stable_bootstrap_handoff_fixture(tmp_path)
+    _convert_installed_bootstrap_to_six_service_baseline(fixture)
+    _prepare_policy_paused_refill_runtime(fixture, policy=_paused_refill_policy())
+    host_root = fixture["host_root"]
+    assert isinstance(host_root, Path)
+    policy_path = host_root / "state" / "refill-policy.json"
+    mutation_script = _restart_mutation_script(policy_path, "delete")
+
+    result, _calls_path = _run_handoff_fixture(
+        fixture,
+        powershell,
+        tmp_path,
+        before_script=_running_refill_before_script(fixture) + mutation_script,
+    )
+
+    assert result.returncode != 0
+    report = _read_handoff_report(fixture)
+    assert report["outcome"] != "success"
+    assert "refill-policy.json missing after policy-paused bootstrap handoff." in json.dumps(
+        report
+    )
     assert report["activation"]["performed"] is True
     assert report["rollback"]["performed"] is True
 

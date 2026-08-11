@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -42,6 +43,9 @@ STAGING_PYTEST_TIMEOUT_SECONDS = 2400.0
 STAGING_PYTEST_TEMP_NAMESPACE = "msos"
 STAGING_PYTEST_TEMP_IDENTITY_CHARS = 8
 STAGING_PYTEST_TEMP_RELEASE_CHARS = 8
+# Bounded Windows cleanup window for owned staging-temp entries that briefly deny deletion.
+STAGING_TEMP_DELETE_RETRY_SECONDS = 1.0
+STAGING_TEMP_DELETE_SLEEP_SECONDS = 0.05
 
 
 class ManifestError(ValueError):
@@ -572,24 +576,88 @@ def _staging_pytest_temp_dir(
     return _validate_staging_pytest_temp_dir(config, candidate)
 
 
+def _make_owned_path_writable(path: Path) -> None:
+    """Clear the writable bit on one validated owned entry without following a link."""
+    if _is_link_like(path):
+        raise SupervisorError(
+            f"refusing to normalize permissions through staging pytest temp link: {path}"
+        )
+    mode = path.lstat().st_mode
+    writable_mode = stat.S_IMODE(mode) | stat.S_IWUSR
+    try:
+        os.chmod(os.fspath(path), writable_mode, follow_symlinks=False)
+    except (NotImplementedError, LookupError, ValueError, TypeError) as exc:
+        # Some platforms reject follow_symlinks=False for chmod. The entry was already
+        # verified non-link-like, so a same-path chmod stays inside the owned temp tree.
+        if _is_link_like(path):
+            raise SupervisorError(
+                f"refusing to normalize permissions through staging pytest temp link: {path}"
+            ) from exc
+        os.chmod(os.fspath(path), writable_mode)
+
+
+def _delete_owned_path_with_retry(path: Path, delete: Callable[[], None]) -> None:
+    """Delete one owned temp entry with writable-bit normalize + bounded PermissionError retry."""
+    deadline = time.monotonic() + STAGING_TEMP_DELETE_RETRY_SECONDS
+    last_error: PermissionError | None = None
+    while True:
+        if _is_link_like(path):
+            # Symlink/junction entries are unlinked only; never chmod their targets.
+            try:
+                path.unlink()
+                return
+            except FileNotFoundError:
+                return
+            except PermissionError as exc:
+                last_error = exc
+        else:
+            try:
+                delete()
+                return
+            except FileNotFoundError:
+                return
+            except PermissionError as exc:
+                last_error = exc
+                try:
+                    if _path_lexists(path) and not _is_link_like(path):
+                        _make_owned_path_writable(path)
+                        delete()
+                        return
+                except FileNotFoundError:
+                    return
+                except PermissionError as retry_exc:
+                    last_error = retry_exc
+                except SupervisorError:
+                    raise
+                except OSError:
+                    # Writable-bit normalization can race with transient locks; keep retrying.
+                    pass
+
+        if time.monotonic() >= deadline:
+            if last_error is not None:
+                raise last_error
+            raise PermissionError(f"could not delete staging pytest temp path: {path}")
+        time.sleep(STAGING_TEMP_DELETE_SLEEP_SECONDS)
+
+
 def _remove_tree_no_symlinks(path: Path) -> None:
     if _is_link_like(path):
         raise SupervisorError(f"refusing to traverse staging pytest temp link: {path}")
     if not path.exists():
         return
     if not path.is_dir():
-        path.unlink()
+        _delete_owned_path_with_retry(path, path.unlink)
         return
     with os.scandir(path) as entries:
         for entry in entries:
             child = Path(entry.path)
             if entry.is_symlink() or _is_link_like(child):
-                child.unlink()
+                _delete_owned_path_with_retry(child, child.unlink)
             elif entry.is_dir(follow_symlinks=False):
                 _remove_tree_no_symlinks(child)
             else:
-                child.unlink()
-    path.rmdir()
+                _delete_owned_path_with_retry(child, child.unlink)
+    _delete_owned_path_with_retry(path, path.rmdir)
 
 
 def _cleanup_staging_pytest_temp_dir(
@@ -600,6 +668,10 @@ def _cleanup_staging_pytest_temp_dir(
         candidate = _validate_staging_pytest_temp_dir(config, path)
         existed = _path_lexists(candidate)
         _remove_tree_no_symlinks(candidate)
+        if _path_lexists(candidate):
+            raise SupervisorError(
+                f"staging pytest temp tree still present after cleanup: {candidate}"
+            )
         return CheckResult(
             name="pytest-temp-cleanup",
             argv=("remove-tree-no-symlinks", str(candidate)),

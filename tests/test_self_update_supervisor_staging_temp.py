@@ -13,6 +13,7 @@ from msos_autobuilder.self_update_supervisor import (
     STAGING_PYTEST_TEMP_NAMESPACE,
     STAGING_PYTEST_TEMP_RELEASE_CHARS,
     STAGING_PYTEST_TIMEOUT_SECONDS,
+    STAGING_TEMP_DELETE_RETRY_SECONDS,
     CheckResult,
     ManagedTask,
     SupervisorConfig,
@@ -418,3 +419,226 @@ def test_failed_pytest_records_cleanup_failure_without_success(
     assert pytest_result.stdout == "failed test output"
     assert not cleanup_result.passed
     assert "locked:" in cleanup_result.stderr
+
+
+def test_ordinary_cleanup_removes_the_owned_tree(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    candidate = _staging_pytest_temp_dir(config, _manifest())
+    candidate.mkdir(parents=True)
+    nested = candidate / ".git" / "objects" / "1f"
+    nested.mkdir(parents=True)
+    (nested / "662911b39737dc7e2c05ec609d360a586bb21e").write_text("blob", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("keep", encoding="utf-8")
+
+    cleanup = _cleanup_staging_pytest_temp_dir(config, candidate, tmp_path)
+
+    assert cleanup.passed
+    assert cleanup.stdout == "removed"
+    assert not candidate.exists()
+    assert outside.read_text(encoding="utf-8") == "keep"
+
+
+def test_permission_error_on_owned_file_is_normalized_and_cleanup_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import msos_autobuilder.self_update_supervisor as supervisor
+
+    config = _config(tmp_path)
+    candidate = _staging_pytest_temp_dir(config, _manifest())
+    candidate.mkdir(parents=True)
+    owned = candidate / "readonly-object"
+    owned.write_text("blob", encoding="utf-8")
+    chmod_paths: list[Path] = []
+    original_unlink = Path.unlink
+    attempts = {"count": 0}
+
+    def flaky_unlink(self: Path, *args: object, **kwargs: object) -> None:
+        if self == owned and attempts["count"] == 0:
+            attempts["count"] += 1
+            raise PermissionError(5, "Access is denied", str(self))
+        return original_unlink(self, *args, **kwargs)
+
+    real_chmod = os.chmod
+
+    def tracking_chmod(
+        path: str | bytes | os.PathLike[str],
+        mode: int,
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        chmod_paths.append(Path(os.fspath(path)))
+        return real_chmod(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", flaky_unlink)
+    monkeypatch.setattr(os, "chmod", tracking_chmod)
+    monkeypatch.setattr(supervisor, "STAGING_TEMP_DELETE_SLEEP_SECONDS", 0.0)
+
+    cleanup = _cleanup_staging_pytest_temp_dir(config, candidate, tmp_path)
+
+    assert cleanup.passed
+    assert not candidate.exists()
+    assert attempts["count"] == 1
+    assert any(path == owned for path in chmod_paths)
+
+
+def test_transient_permission_error_within_retry_bound_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import msos_autobuilder.self_update_supervisor as supervisor
+
+    config = _config(tmp_path)
+    candidate = _staging_pytest_temp_dir(config, _manifest())
+    candidate.mkdir(parents=True)
+    owned = candidate / "locked-object"
+    owned.write_text("blob", encoding="utf-8")
+    original_unlink = Path.unlink
+    failures_remaining = {"count": 3}
+
+    def flaky_unlink(self: Path, *args: object, **kwargs: object) -> None:
+        if self == owned and failures_remaining["count"] > 0:
+            failures_remaining["count"] -= 1
+            raise PermissionError(5, "Access is denied", str(self))
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", flaky_unlink)
+    monkeypatch.setattr(supervisor, "STAGING_TEMP_DELETE_SLEEP_SECONDS", 0.0)
+    monkeypatch.setattr(supervisor, "_make_owned_path_writable", lambda path: None)
+
+    cleanup = _cleanup_staging_pytest_temp_dir(config, candidate, tmp_path)
+
+    assert cleanup.passed
+    assert not candidate.exists()
+    assert failures_remaining["count"] == 0
+
+
+def test_persistent_permission_error_fails_cleanup_and_blocks_cutover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import msos_autobuilder.self_update_supervisor as supervisor
+
+    config = _config(tmp_path)
+    staging_path = tmp_path / "checkout"
+    staging_path.mkdir()
+    owned_holder: dict[str, Path] = {}
+
+    def executor(argv: Sequence[str], cwd: Path, timeout: float) -> CheckResult:
+        temp_path = Path(os.environ["TMP"])
+        owned_holder["path"] = temp_path
+        (temp_path / "locked-object").write_text("blob", encoding="utf-8")
+        return CheckResult(
+            name="raw",
+            argv=tuple(argv),
+            cwd=str(cwd),
+            returncode=0,
+            duration_seconds=1.0,
+            stdout="495 passed",
+        )
+
+    original_unlink = Path.unlink
+
+    def always_denied(self: Path, *args: object, **kwargs: object) -> None:
+        if self.name == "locked-object":
+            raise PermissionError(5, "Access is denied", str(self))
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", always_denied)
+    monkeypatch.setattr(supervisor, "STAGING_TEMP_DELETE_SLEEP_SECONDS", 0.0)
+    monkeypatch.setattr(supervisor, "STAGING_TEMP_DELETE_RETRY_SECONDS", 0.0)
+    monkeypatch.setattr(supervisor, "_make_owned_path_writable", lambda path: None)
+
+    pytest_result, cleanup_result = _run_staged_pytest_checks(
+        config,
+        _manifest(),
+        executor,
+        Path("python"),
+        staging_path,
+    )
+
+    assert pytest_result.passed
+    assert not cleanup_result.passed
+    assert "Access is denied" in cleanup_result.stderr
+    assert owned_holder["path"].exists()
+    assert (owned_holder["path"] / "locked-object").exists()
+    # Exact stage_release cutover gate: cleanup failure raises before pointer swap.
+    with pytest.raises(SupervisorError, match="staging pytest temp cleanup failed"):
+        if not cleanup_result.passed:
+            raise SupervisorError(
+                "staging pytest temp cleanup failed: "
+                f"{cleanup_result.stderr or cleanup_result.stdout}"
+            )
+
+
+def test_symlink_permission_retry_does_not_normalize_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import msos_autobuilder.self_update_supervisor as supervisor
+
+    config = _config(tmp_path)
+    candidate = _staging_pytest_temp_dir(config, _manifest())
+    candidate.mkdir(parents=True)
+    target = tmp_path / "outside-target.txt"
+    target.write_text("keep", encoding="utf-8")
+    nested_link = candidate / "linked-file"
+    try:
+        nested_link.symlink_to(target)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"file symlinks unavailable: {exc}")
+
+    chmod_paths: list[Path] = []
+    original_unlink = Path.unlink
+    attempts = {"count": 0}
+
+    def flaky_unlink(self: Path, *args: object, **kwargs: object) -> None:
+        if self == nested_link and attempts["count"] == 0:
+            attempts["count"] += 1
+            raise PermissionError(5, "Access is denied", str(self))
+        return original_unlink(self, *args, **kwargs)
+
+    real_chmod = os.chmod
+
+    def tracking_chmod(
+        path: str | bytes | os.PathLike[str],
+        mode: int,
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        chmod_paths.append(Path(os.fspath(path)).resolve())
+        return real_chmod(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", flaky_unlink)
+    monkeypatch.setattr(os, "chmod", tracking_chmod)
+    monkeypatch.setattr(supervisor, "STAGING_TEMP_DELETE_SLEEP_SECONDS", 0.0)
+
+    cleanup = _cleanup_staging_pytest_temp_dir(config, candidate, tmp_path)
+
+    assert cleanup.passed
+    assert not candidate.exists()
+    assert target.read_text(encoding="utf-8") == "keep"
+    assert target.resolve() not in chmod_paths
+    assert attempts["count"] == 1
+
+
+def test_cleanup_success_requires_release_temp_tree_absence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    candidate = _staging_pytest_temp_dir(config, _manifest())
+    candidate.mkdir(parents=True)
+    (candidate / "residue.txt").write_text("still here", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "msos_autobuilder.self_update_supervisor._remove_tree_no_symlinks",
+        lambda path: None,
+    )
+
+    cleanup = _cleanup_staging_pytest_temp_dir(config, candidate, tmp_path)
+
+    assert not cleanup.passed
+    assert "still present after cleanup" in cleanup.stderr
+    assert candidate.exists()
+    assert (candidate / "residue.txt").read_text(encoding="utf-8") == "still here"
+
+
+def test_retry_window_is_short_and_finite() -> None:
+    assert 0 < STAGING_TEMP_DELETE_RETRY_SECONDS <= 2.0

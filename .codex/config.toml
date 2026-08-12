@@ -1,0 +1,6 @@
+# Project-local Codex defaults.
+# Loaded only when this repository is trusted by the local Codex client.
+
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+approvals_reviewer = "auto_review"

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
-import shutil
+import os
+import stat
 import subprocess
+import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +27,10 @@ from .routing import BackendRouter
 from .scheduler import ParallelScheduler
 from .workspaces import WorkspacePolicy
 
+# Bounded Windows cleanup window for owned worker-workspace entries that briefly deny deletion.
+WORKSPACE_DELETE_RETRY_SECONDS = 1.0
+WORKSPACE_DELETE_SLEEP_SECONDS = 0.05
+
 
 class CodexConfigError(ValueError):
     """Raised when host or shadow configuration is unsafe or incomplete."""
@@ -31,6 +38,113 @@ class CodexConfigError(ValueError):
 
 class CodexShadowError(RuntimeError):
     """Raised when a shadow run cannot complete safely."""
+
+
+def _path_lexists(path: Path) -> bool:
+    return os.path.lexists(path)
+
+
+def _is_link_like(path: Path) -> bool:
+    is_junction = getattr(path, "is_junction", None)
+    return path.is_symlink() or bool(is_junction and is_junction())
+
+
+def _make_owned_workspace_path_writable(path: Path) -> None:
+    """Clear the writable bit on one validated owned entry without following a link."""
+    if _is_link_like(path):
+        raise CodexShadowError(
+            f"refusing to normalize permissions through worker workspace link: {path}"
+        )
+    mode = path.lstat().st_mode
+    writable_mode = stat.S_IMODE(mode) | stat.S_IWUSR
+    try:
+        os.chmod(os.fspath(path), writable_mode, follow_symlinks=False)
+    except (NotImplementedError, LookupError, ValueError, TypeError) as exc:
+        # Some platforms reject follow_symlinks=False for chmod. The entry was already
+        # verified non-link-like, so a same-path chmod stays inside the owned workspace.
+        if _is_link_like(path):
+            raise CodexShadowError(
+                f"refusing to normalize permissions through worker workspace link: {path}"
+            ) from exc
+        os.chmod(os.fspath(path), writable_mode)
+
+
+def _delete_owned_workspace_path_with_retry(path: Path, delete: Callable[[], None]) -> None:
+    """Delete one owned workspace entry with writable normalize + bounded PermissionError retry."""
+    deadline = time.monotonic() + WORKSPACE_DELETE_RETRY_SECONDS
+    last_error: PermissionError | None = None
+    while True:
+        if _is_link_like(path):
+            # Symlink/junction entries are unlinked only; never chmod their targets.
+            try:
+                path.unlink()
+                return
+            except FileNotFoundError:
+                return
+            except PermissionError as exc:
+                last_error = exc
+        else:
+            try:
+                delete()
+                return
+            except FileNotFoundError:
+                return
+            except PermissionError as exc:
+                last_error = exc
+                try:
+                    if _path_lexists(path) and not _is_link_like(path):
+                        _make_owned_workspace_path_writable(path)
+                        delete()
+                        return
+                except FileNotFoundError:
+                    return
+                except PermissionError as retry_exc:
+                    last_error = retry_exc
+                except CodexShadowError:
+                    raise
+                except OSError:
+                    # Writable-bit normalization can race with transient locks; keep retrying.
+                    pass
+
+        if time.monotonic() >= deadline:
+            if last_error is not None:
+                raise last_error
+            raise PermissionError(f"could not delete worker workspace path: {path}")
+        time.sleep(WORKSPACE_DELETE_SLEEP_SECONDS)
+
+
+def _remove_workspace_tree_no_symlinks(path: Path) -> None:
+    if _is_link_like(path):
+        raise CodexShadowError(f"refusing to traverse worker workspace link: {path}")
+    if not path.exists():
+        return
+    if not path.is_dir():
+        _delete_owned_workspace_path_with_retry(path, path.unlink)
+        return
+    with os.scandir(path) as entries:
+        for entry in entries:
+            child = Path(entry.path)
+            if entry.is_symlink() or _is_link_like(child):
+                _delete_owned_workspace_path_with_retry(child, child.unlink)
+            elif entry.is_dir(follow_symlinks=False):
+                _remove_workspace_tree_no_symlinks(child)
+            else:
+                _delete_owned_workspace_path_with_retry(child, child.unlink)
+    _delete_owned_workspace_path_with_retry(path, path.rmdir)
+
+
+def _reset_owned_workspace(workspace: Path) -> None:
+    """Remove one expected Autobuilder-owned lane workspace, Windows-safe and fail-closed."""
+    if not _path_lexists(workspace):
+        return
+    if _is_link_like(workspace):
+        _delete_owned_workspace_path_with_retry(workspace, workspace.unlink)
+    else:
+        _remove_workspace_tree_no_symlinks(workspace)
+    if _path_lexists(workspace):
+        raise CodexShadowError(
+            f"worker workspace still present after reset: {workspace}"
+        )
 
 
 @dataclass(frozen=True)
@@ -284,8 +398,12 @@ def run_codex_shadow(
     if config.reset_workspaces:
         for spec in specs:
             workspace = policy.expected_path(spec.task.lane)
-            if workspace.exists():
-                shutil.rmtree(workspace)
+            try:
+                _reset_owned_workspace(workspace)
+            except PermissionError as exc:
+                raise CodexShadowError(
+                    f"failed to reset worker workspace {workspace}: {exc}"
+                ) from exc
 
     backend = CodexCliBackend(
         config.source_repo,

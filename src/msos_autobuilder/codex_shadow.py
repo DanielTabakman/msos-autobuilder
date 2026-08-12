@@ -45,8 +45,24 @@ def _path_lexists(path: Path) -> bool:
 
 
 def _is_link_like(path: Path) -> bool:
+    if path.is_symlink():
+        return True
     is_junction = getattr(path, "is_junction", None)
-    return path.is_symlink() or bool(is_junction and is_junction())
+    if callable(is_junction):
+        try:
+            if is_junction():
+                return True
+        except OSError:
+            pass
+    if os.name != "nt":
+        return False
+    # Python 3.11 has no Path.is_junction(); detect Windows reparse points via lstat.
+    try:
+        attrs = getattr(path.lstat(), "st_file_attributes", 0)
+    except OSError:
+        return False
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return bool(attrs & reparse)
 
 
 def _make_owned_workspace_path_writable(path: Path) -> None:

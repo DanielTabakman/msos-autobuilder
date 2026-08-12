@@ -14,6 +14,7 @@ from msos_autobuilder.codex_shadow import (
     CodexConfigError,
     CodexHostConfig,
     CodexShadowError,
+    _is_link_like,
     _make_owned_workspace_path_writable,
     _reset_owned_workspace,
     codex_host_preflight,
@@ -391,6 +392,124 @@ def test_writable_normalize_refuses_link_like_entry(tmp_path: Path) -> None:
         _make_owned_workspace_path_writable(link)
 
     assert target.read_text(encoding="utf-8") == "keep\n"
+
+
+def test_python311_reparse_fallback_detects_link_like_without_is_junction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows reparse detection must work when Path.is_junction is absent (Python 3.11)."""
+    entry = tmp_path / "junction-standin"
+    entry.mkdir()
+    ordinary = tmp_path / "ordinary-dir"
+    ordinary.mkdir()
+
+    if hasattr(Path, "is_junction"):
+        monkeypatch.delattr(Path, "is_junction")
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(Path, "is_symlink", lambda self: False)
+
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    real_lstat = Path.lstat
+
+    def fake_lstat(self: Path) -> object:
+        base = real_lstat(self)
+        if self == entry:
+            return type(
+                "ReparseStat",
+                (),
+                {
+                    "st_mode": base.st_mode,
+                    "st_file_attributes": reparse_flag,
+                },
+            )()
+        return type(
+            "OrdinaryStat",
+            (),
+            {
+                "st_mode": base.st_mode,
+                "st_file_attributes": 0,
+            },
+        )()
+
+    monkeypatch.setattr(Path, "lstat", fake_lstat)
+
+    assert _is_link_like(entry) is True
+    assert _is_link_like(ordinary) is False
+
+
+def test_python311_reparse_fallback_unlinks_without_chmod_or_traversal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reparse-like children must be unlinked, never chmod'd or walked into."""
+    import msos_autobuilder.codex_shadow as shadow
+
+    workspace = tmp_path / "lane"
+    workspace.mkdir()
+    reparse_entry = workspace / "junction-standin"
+    reparse_entry.mkdir()
+    nested = reparse_entry / "nested.txt"
+    nested.write_text("nested-keep\n", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("keep\n", encoding="utf-8")
+    parked = tmp_path / "parked-junction"
+
+    if hasattr(Path, "is_junction"):
+        monkeypatch.delattr(Path, "is_junction")
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(Path, "is_symlink", lambda self: False)
+    monkeypatch.setattr(shadow, "WORKSPACE_DELETE_SLEEP_SECONDS", 0.0)
+
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    real_lstat = Path.lstat
+
+    def fake_lstat(self: Path) -> object:
+        base = real_lstat(self)
+        if self == reparse_entry:
+            return type(
+                "ReparseStat",
+                (),
+                {
+                    "st_mode": base.st_mode,
+                    "st_file_attributes": reparse_flag,
+                },
+            )()
+        return base
+
+    monkeypatch.setattr(Path, "lstat", fake_lstat)
+
+    chmod_paths: list[Path] = []
+    real_chmod = os.chmod
+
+    def tracking_chmod(
+        path: str | bytes | os.PathLike[str],
+        mode: int,
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        chmod_paths.append(Path(os.fspath(path)))
+        return real_chmod(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "chmod", tracking_chmod)
+
+    original_unlink = Path.unlink
+
+    def junction_unlink(self: Path, *args: object, **kwargs: object) -> None:
+        if self == reparse_entry:
+            # Simulate removing a junction entry without traversing its target tree.
+            self.rename(parked)
+            return
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", junction_unlink)
+
+    _reset_owned_workspace(workspace)
+
+    assert not workspace.exists()
+    assert outside.read_text(encoding="utf-8") == "keep\n"
+    assert parked.exists()
+    assert (parked / "nested.txt").read_text(encoding="utf-8") == "nested-keep\n"
+    assert not any(path == reparse_entry or path == nested for path in chmod_paths)
+    assert not hasattr(Path, "is_junction")
 
 
 def test_retry_window_is_short_and_finite() -> None:

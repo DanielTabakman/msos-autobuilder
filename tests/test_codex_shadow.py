@@ -398,6 +398,8 @@ def test_python311_reparse_fallback_detects_link_like_without_is_junction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Windows reparse detection must work when Path.is_junction is absent (Python 3.11)."""
+    import msos_autobuilder.codex_shadow as shadow
+
     entry = tmp_path / "junction-standin"
     entry.mkdir()
     ordinary = tmp_path / "ordinary-dir"
@@ -405,7 +407,7 @@ def test_python311_reparse_fallback_detects_link_like_without_is_junction(
 
     if hasattr(Path, "is_junction"):
         monkeypatch.delattr(Path, "is_junction")
-    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(shadow, "_windows_platform", lambda: True)
     monkeypatch.setattr(Path, "is_symlink", lambda self: False)
 
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
@@ -455,7 +457,7 @@ def test_python311_reparse_fallback_unlinks_without_chmod_or_traversal(
 
     if hasattr(Path, "is_junction"):
         monkeypatch.delattr(Path, "is_junction")
-    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(shadow, "_windows_platform", lambda: True)
     monkeypatch.setattr(Path, "is_symlink", lambda self: False)
     monkeypatch.setattr(shadow, "WORKSPACE_DELETE_SLEEP_SECONDS", 0.0)
 

@@ -44,6 +44,11 @@ def _path_lexists(path: Path) -> bool:
     return os.path.lexists(path)
 
 
+def _windows_platform() -> bool:
+    """Isolated Windows check so tests can exercise reparse fallback without mutating os.name."""
+    return os.name == "nt"
+
+
 def _is_link_like(path: Path) -> bool:
     if path.is_symlink():
         return True
@@ -54,7 +59,7 @@ def _is_link_like(path: Path) -> bool:
                 return True
         except OSError:
             pass
-    if os.name != "nt":
+    if not _windows_platform():
         return False
     # Python 3.11 has no Path.is_junction(); detect Windows reparse points via lstat.
     try:

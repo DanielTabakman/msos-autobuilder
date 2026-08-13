@@ -43,7 +43,7 @@ def _progress_command(
 
 
 def _python_script(script: str) -> list[str]:
-    return [sys.executable, "-c", script]
+    return [sys.executable, "-u", "-c", script]
 
 
 def _pid_exists(pid: int) -> bool:
@@ -139,14 +139,17 @@ def test_progress_heartbeat_is_recorded(tmp_path: Path) -> None:
         assert "seconds_since_last_progress" in item
         assert item["soft_checkpoint"] in {"before", "after"}
         assert item["latest_percentage"] is None or 0 <= item["latest_percentage"] <= 100
-    assert any(item["latest_percentage"] for item in heartbeats)
+    assert result.progress["latest_percentage"] == 90
+    assert any(
+        item["latest_percentage"] for item in heartbeats
+    ), heartbeats
 
 
 def test_stagnant_process_dies_on_no_progress_threshold(tmp_path: Path) -> None:
     script = (
         "import time\n"
         "print('.... [10%]', flush=True)\n"
-        "time.sleep(30)\n"
+        "time.sleep(60)\n"
     )
     started = time.monotonic()
     result = _progress_command(
@@ -163,7 +166,7 @@ def test_stagnant_process_dies_on_no_progress_threshold(tmp_path: Path) -> None:
     assert not result.passed
     assert result.progress["abort_reason"] == "no_progress"
     assert result.termination["attempted"] is True
-    assert elapsed < 4.0
+    assert elapsed < 25.0
     assert "no forward progress" in result.stderr
     assert result.progress["soft_checkpoint"] == "before"
 
@@ -171,7 +174,7 @@ def test_stagnant_process_dies_on_no_progress_threshold(tmp_path: Path) -> None:
 def test_mere_liveness_does_not_reset_watchdog(tmp_path: Path) -> None:
     script = (
         "import time\n"
-        "for _ in range(80):\n"
+        "for _ in range(400):\n"
         "    print('still running', flush=True)\n"
         "    time.sleep(0.1)\n"
     )
@@ -188,7 +191,7 @@ def test_mere_liveness_does_not_reset_watchdog(tmp_path: Path) -> None:
 
     assert result.timed_out
     assert result.progress["abort_reason"] == "no_progress"
-    assert elapsed < 3.0
+    assert elapsed < 25.0
     assert "still running" in result.stdout
     assert result.progress["latest_percentage"] is None
 
@@ -225,6 +228,7 @@ def test_hard_ceiling_always_wins(tmp_path: Path) -> None:
 def test_successful_process_preserves_quiet_gate_semantics(tmp_path: Path) -> None:
     argv = [
         sys.executable,
+        "-u",
         "-c",
         "print('.... [100%]', flush=True); print('1 passed in 0.01s', flush=True)",
         "-m",

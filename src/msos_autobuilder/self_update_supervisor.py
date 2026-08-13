@@ -854,6 +854,7 @@ def _spawn_supervised_process(argv: Sequence[str], cwd: Path) -> subprocess.Pope
         encoding="utf-8",
         errors="replace",
         start_new_session=os.name != "nt",
+        bufsize=1,
         creationflags=(
             getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
         ),
@@ -1152,6 +1153,7 @@ def _run_progress_aware_command(
                 _record_heartbeat(elapsed, view, since_progress)
 
             if process.poll() is not None:
+                decision_elapsed = elapsed
                 (
                     stdout,
                     stderr,
@@ -1167,6 +1169,10 @@ def _run_progress_aware_command(
                     abort=False,
                 )
                 final_view = _pytest_progress_view(stdout)
+                since_progress = time.monotonic() - last_progress_at
+                _record_heartbeat(
+                    time.monotonic() - started, final_view, since_progress
+                )
                 progress = {
                     "soft_checkpoint_seconds": soft_checkpoint_seconds,
                     "hard_ceiling_seconds": hard_ceiling_seconds,
@@ -1174,9 +1180,9 @@ def _run_progress_aware_command(
                     "heartbeat_seconds": heartbeat_seconds,
                     "latest_percentage": final_view.percentage,
                     "latest_progress": final_view.latest_progress,
-                    "seconds_since_last_progress": round(time.monotonic() - last_progress_at, 3),
+                    "seconds_since_last_progress": round(since_progress, 3),
                     "soft_checkpoint": (
-                        "after" if elapsed >= soft_checkpoint_seconds else "before"
+                        "after" if decision_elapsed >= soft_checkpoint_seconds else "before"
                     ),
                     "heartbeats": heartbeats,
                     "abort_reason": None,
@@ -1222,7 +1228,8 @@ def _run_progress_aware_command(
     final_elapsed = time.monotonic() - started
     final_view = _pytest_progress_view(stdout)
     since_progress = time.monotonic() - last_progress_at
-    after_soft = final_elapsed >= soft_checkpoint_seconds
+    after_soft = elapsed >= soft_checkpoint_seconds
+    _record_heartbeat(final_elapsed, final_view, since_progress)
     abort_message = _progress_abort_message(
         abort_reason or "hard_ceiling",
         elapsed_seconds=final_elapsed,

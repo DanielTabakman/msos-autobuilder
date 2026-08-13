@@ -867,7 +867,7 @@ def _start_pipe_reader(
     def _read() -> None:
         try:
             while pipe is not None:
-                chunk = pipe.read(4096)
+                chunk = _read_available_pipe_chunk(pipe)
                 if not chunk:
                     break
                 with lock:
@@ -878,6 +878,35 @@ def _start_pipe_reader(
     thread = threading.Thread(target=_read, daemon=True)
     thread.start()
     return thread
+
+
+def _read_available_pipe_chunk(pipe: Any) -> str:
+    """Return currently available pipe data without waiting for a full buffer or newline.
+
+    ``read(n)`` on a subprocess pipe can block until n bytes or EOF, hiding small
+    flushed pytest -q fragments. ``read1`` / a single ``os.read`` returns as soon as
+    any flushed bytes are present, including quiet result characters with no newline.
+    """
+
+    if hasattr(pipe, "read1"):
+        chunk = pipe.read1(4096)
+        return chunk if isinstance(chunk, str) else _decode_pipe_bytes(chunk)
+    raw = getattr(pipe, "buffer", pipe)
+    if hasattr(raw, "read1"):
+        return _decode_pipe_bytes(raw.read1(4096))
+    fileno = getattr(raw, "fileno", None)
+    if callable(fileno):
+        return _decode_pipe_bytes(os.read(fileno(), 4096))
+    chunk = pipe.read(1)
+    return chunk if isinstance(chunk, str) else _decode_pipe_bytes(chunk)
+
+
+def _decode_pipe_bytes(chunk: bytes | str | None) -> str:
+    if not chunk:
+        return ""
+    if isinstance(chunk, str):
+        return chunk
+    return chunk.decode("utf-8", errors="replace")
 
 
 def _best_effort_process_tree(pid: int) -> dict[str, Any]:

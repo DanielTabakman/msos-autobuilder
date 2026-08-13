@@ -115,6 +115,51 @@ def test_progressing_process_can_cross_soft_checkpoint(tmp_path: Path) -> None:
     assert "after" in checkpoints
 
 
+def test_incremental_no_newline_progress_is_observed_before_exit(tmp_path: Path) -> None:
+    """Watchdog must see small flushed quiet fragments while the child is still alive.
+
+    A healthy pytest -q process emits tiny no-newline result characters. The child
+    here runs longer than the no-progress threshold, so a blocking read(4096) would
+    hide that progress until EOF and falsely abort.
+    """
+
+    script = (
+        "import sys, time\n"
+        "for step in range(1, 16):\n"
+        "    sys.stdout.write('.')\n"
+        "    if step % 5 == 0:\n"
+        "        sys.stdout.write(f' [{step * 6}%]')\n"
+        "    sys.stdout.flush()\n"
+        "    time.sleep(0.2)\n"
+        "sys.stdout.write('\\n15 passed\\n')\n"
+        "sys.stdout.flush()\n"
+    )
+    result = _progress_command(
+        _python_script(script),
+        tmp_path,
+        soft=10.0,
+        hard=8.0,
+        no_progress=1.0,
+        heartbeat=0.3,
+        poll=0.05,
+    )
+
+    assert result.passed
+    assert not result.timed_out
+    assert result.progress["abort_reason"] is None
+    assert result.duration_seconds > 1.0
+    assert result.progress["latest_percentage"] == 90
+    assert result.stdout.count(".") >= 15
+    mid_run = [
+        item
+        for item in result.progress["heartbeats"][:-1]
+        if (item["result_dots"] or 0) > 0 or item["latest_percentage"]
+    ]
+    assert mid_run, result.progress["heartbeats"]
+    assert any(item["elapsed_seconds"] < 1.0 for item in mid_run)
+    assert any((item["result_dots"] or 0) > 0 for item in mid_run)
+
+
 def test_progress_heartbeat_is_recorded(tmp_path: Path) -> None:
     script = (
         "import time\n"

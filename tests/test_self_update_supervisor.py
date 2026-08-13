@@ -14,7 +14,7 @@ import pytest
 import yaml
 
 from msos_autobuilder.self_update_supervisor import (
-    STAGING_PYTEST_TIMEOUT_SECONDS,
+    STAGING_PYTEST_HARD_CEILING_SECONDS,
     CheckResult,
     ExpectedFile,
     FileHealthVerifier,
@@ -739,7 +739,7 @@ def test_release_builder_fetches_and_verifies_only_exact_commit(tmp_path: Path) 
     assert json.loads((staged.release_path / "release.json").read_text())["commit"] == commit
     assert verifier.calls == [("fixture/repo", commit, ("CI", "Windows Smoke"))]
     assert any(
-        argv[-3:] == ("-m", "pytest", "-q") and timeout == STAGING_PYTEST_TIMEOUT_SECONDS
+        argv[-3:] == ("-m", "pytest", "-q") and timeout == STAGING_PYTEST_HARD_CEILING_SECONDS
         for argv, timeout in executor_calls
     )
     reused = builder.stage(manifest)

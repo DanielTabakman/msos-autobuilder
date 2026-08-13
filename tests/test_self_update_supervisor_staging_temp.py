@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from msos_autobuilder.self_update_supervisor import (
+    STAGING_PYTEST_HARD_CEILING_SECONDS,
     STAGING_PYTEST_TEMP_IDENTITY_CHARS,
     STAGING_PYTEST_TEMP_NAMESPACE,
     STAGING_PYTEST_TEMP_RELEASE_CHARS,
@@ -238,7 +239,7 @@ def test_staged_pytest_receives_owned_temp_and_preserves_full_gate(
         (
             ("python", "-m", "pytest", "-q"),
             staging_path,
-            STAGING_PYTEST_TIMEOUT_SECONDS,
+            STAGING_PYTEST_HARD_CEILING_SECONDS,
             calls[0][3],
             calls[0][3],
         )
@@ -249,8 +250,9 @@ def test_staged_pytest_receives_owned_temp_and_preserves_full_gate(
     assert not _is_within(effective_tmp, config.supervisor_root.absolute())
     assert pytest_result.environment == {"TMP": str(effective_tmp), "TEMP": str(effective_tmp)}
     assert pytest_result.argv[-3:] == ("-m", "pytest", "-q")
-    assert pytest_result.timeout_seconds == STAGING_PYTEST_TIMEOUT_SECONDS
+    assert pytest_result.timeout_seconds == STAGING_PYTEST_HARD_CEILING_SECONDS
     assert STAGING_PYTEST_TIMEOUT_SECONDS == 2400.0
+    assert STAGING_PYTEST_HARD_CEILING_SECONDS == 3600.0
     assert cleanup_result.passed
     assert not effective_tmp.exists()
     assert outside.read_text(encoding="utf-8") == "keep"

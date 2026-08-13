@@ -18,6 +18,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -39,7 +40,12 @@ _REQUIRED_MANIFEST_PATHS = {
     "pyproject.toml",
     "src/msos_autobuilder/self_update_supervisor.py",
 }
-STAGING_PYTEST_TIMEOUT_SECONDS = 2400.0
+STAGING_PYTEST_SOFT_CHECKPOINT_SECONDS = 2400.0
+STAGING_PYTEST_TIMEOUT_SECONDS = STAGING_PYTEST_SOFT_CHECKPOINT_SECONDS
+STAGING_PYTEST_HARD_CEILING_SECONDS = 3600.0
+STAGING_PYTEST_NO_PROGRESS_SECONDS = 600.0
+STAGING_PYTEST_HEARTBEAT_SECONDS = 300.0
+STAGING_PYTEST_PROGRESS_POLL_SECONDS = 1.0
 STAGING_PYTEST_TEMP_NAMESPACE = "msos"
 STAGING_PYTEST_TEMP_IDENTITY_CHARS = 8
 STAGING_PYTEST_TEMP_RELEASE_CHARS = 8
@@ -159,6 +165,7 @@ class CheckResult:
     timed_out: bool = False
     termination: dict[str, Any] = field(default_factory=dict)
     process_tree: dict[str, Any] = field(default_factory=dict)
+    progress: dict[str, Any] = field(default_factory=dict)
 
     @property
     def passed(self) -> bool:
@@ -745,6 +752,133 @@ def _merge_timeout_output(partial: str, remaining: str) -> str:
     return partial + remaining
 
 
+_PYTEST_PERCENT_RE = re.compile(r"(\d{1,3})\s*%")
+_PYTEST_RESULT_CLUSTER_RE = re.compile(r"[.sSFExXpP]{2,}|\.(?:[.sSFExXpP])*")
+
+
+@dataclass(frozen=True)
+class _PytestProgressView:
+    percentage: int | None
+    pass_dots: int
+    result_clusters: int
+
+    @property
+    def latest_progress(self) -> str:
+        if self.percentage is not None:
+            return f"{self.percentage}%"
+        if self.pass_dots:
+            return f"{self.pass_dots} dots"
+        if self.result_clusters:
+            return f"{self.result_clusters} result clusters"
+        return "none"
+
+
+def _is_staged_pytest_command(argv: Sequence[str]) -> bool:
+    parts = [str(part) for part in argv]
+    return len(parts) >= 3 and parts[-3:] == ["-m", "pytest", "-q"]
+
+
+def _pytest_progress_view(stdout: str) -> _PytestProgressView:
+    percents = [
+        int(value) for value in _PYTEST_PERCENT_RE.findall(stdout) if 0 <= int(value) <= 100
+    ]
+    return _PytestProgressView(
+        percentage=percents[-1] if percents else None,
+        pass_dots=stdout.count("."),
+        result_clusters=len(_PYTEST_RESULT_CLUSTER_RE.findall(stdout)),
+    )
+
+
+def _pytest_progress_advanced(previous: _PytestProgressView, current: _PytestProgressView) -> bool:
+    if current.percentage is not None and (
+        previous.percentage is None or current.percentage > previous.percentage
+    ):
+        return True
+    if current.pass_dots > previous.pass_dots:
+        return True
+    return current.result_clusters > previous.result_clusters
+
+
+def _pytest_heartbeat(
+    *,
+    elapsed_seconds: float,
+    view: _PytestProgressView,
+    seconds_since_last_progress: float,
+    soft_checkpoint_seconds: float,
+) -> dict[str, Any]:
+    return {
+        "elapsed_seconds": round(elapsed_seconds, 3),
+        "latest_percentage": view.percentage,
+        "latest_progress": view.latest_progress,
+        "result_dots": view.pass_dots,
+        "seconds_since_last_progress": round(seconds_since_last_progress, 3),
+        "soft_checkpoint": (
+            "after" if elapsed_seconds >= soft_checkpoint_seconds else "before"
+        ),
+    }
+
+
+def _progress_abort_message(
+    reason: str,
+    *,
+    elapsed_seconds: float,
+    view: _PytestProgressView,
+    seconds_since_last_progress: float,
+    after_soft_checkpoint: bool,
+    no_progress_seconds: float,
+    hard_ceiling_seconds: float,
+) -> str:
+    checkpoint = "after" if after_soft_checkpoint else "before"
+    if reason == "no_progress":
+        return (
+            "staging pytest aborted: no forward progress for "
+            f"{seconds_since_last_progress:.0f}s "
+            f"(threshold {no_progress_seconds:.0f}s, elapsed {elapsed_seconds:.0f}s, "
+            f"latest {view.latest_progress}, soft checkpoint {checkpoint})"
+        )
+    return (
+        "staging pytest aborted: hard ceiling reached after "
+        f"{elapsed_seconds:.0f}s "
+        f"(ceiling {hard_ceiling_seconds:.0f}s, latest {view.latest_progress}, "
+        f"since progress {seconds_since_last_progress:.0f}s, soft checkpoint {checkpoint})"
+    )
+
+
+def _spawn_supervised_process(argv: Sequence[str], cwd: Path) -> subprocess.Popen[str]:
+    return subprocess.Popen(
+        list(argv),
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        start_new_session=os.name != "nt",
+        creationflags=(
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
+        ),
+    )
+
+
+def _start_pipe_reader(
+    pipe: Any, sink: list[str], lock: threading.Lock
+) -> threading.Thread:
+    def _read() -> None:
+        try:
+            while pipe is not None:
+                chunk = pipe.read(4096)
+                if not chunk:
+                    break
+                with lock:
+                    sink.append(chunk)
+        except Exception:
+            return
+
+    thread = threading.Thread(target=_read, daemon=True)
+    thread.start()
+    return thread
+
+
 def _best_effort_process_tree(pid: int) -> dict[str, Any]:
     try:
         if os.name == "nt":
@@ -872,21 +1006,42 @@ def _terminate_process_tree(process: subprocess.Popen[str]) -> dict[str, Any]:
     return evidence
 
 
-def default_command_executor(argv: Sequence[str], cwd: Path, timeout: float) -> CheckResult:
+def _finalize_supervised_process(
+    process: subprocess.Popen[str],
+    *,
+    stdout_chunks: list[str],
+    stderr_chunks: list[str],
+    readers: Sequence[threading.Thread],
+    lock: threading.Lock,
+    abort: bool,
+) -> tuple[str, str, dict[str, Any], dict[str, Any], int]:
+    process_tree: dict[str, Any] = {}
+    termination: dict[str, Any] = {}
+    if abort:
+        process_tree = _best_effort_process_tree(process.pid)
+        termination = _terminate_process_tree(process)
+    for reader in readers:
+        reader.join(timeout=2.0)
+    if process.poll() is None:
+        process.kill()
+        if abort:
+            termination["post_termination_kill"] = True
+        try:
+            process.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            pass
+    with lock:
+        stdout = "".join(stdout_chunks)
+        stderr = "".join(stderr_chunks)
+    returncode = process.returncode if process.returncode is not None else 124
+    if abort:
+        termination["final_returncode"] = returncode
+    return stdout, stderr, termination, process_tree, returncode
+
+
+def _run_bounded_command(argv: Sequence[str], cwd: Path, timeout: float) -> CheckResult:
     started = time.monotonic()
-    process = subprocess.Popen(
-        list(argv),
-        cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        start_new_session=os.name != "nt",
-        creationflags=(
-            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
-        ),
-    )
+    process = _spawn_supervised_process(argv, cwd)
     try:
         stdout, stderr = process.communicate(timeout=timeout)
         return CheckResult(
@@ -924,6 +1079,200 @@ def default_command_executor(argv: Sequence[str], cwd: Path, timeout: float) -> 
             termination=termination,
             process_tree=process_tree,
         )
+
+
+def _run_progress_aware_command(
+    argv: Sequence[str],
+    cwd: Path,
+    *,
+    hard_ceiling_seconds: float,
+    soft_checkpoint_seconds: float,
+    no_progress_seconds: float,
+    heartbeat_seconds: float,
+    poll_seconds: float,
+) -> CheckResult:
+    started = time.monotonic()
+    process = _spawn_supervised_process(argv, cwd)
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+    lock = threading.Lock()
+    readers = (
+        _start_pipe_reader(process.stdout, stdout_chunks, lock),
+        _start_pipe_reader(process.stderr, stderr_chunks, lock),
+    )
+    last_progress_at = started
+    last_heartbeat_at = started
+    previous_view = _PytestProgressView(percentage=None, pass_dots=0, result_clusters=0)
+    heartbeats: list[dict[str, Any]] = []
+    abort_reason: str | None = None
+    crossed_soft_checkpoint = False
+
+    def _current_output() -> tuple[str, str]:
+        with lock:
+            return "".join(stdout_chunks), "".join(stderr_chunks)
+
+    def _record_heartbeat(
+        elapsed_seconds: float, view: _PytestProgressView, since_progress: float
+    ) -> None:
+        nonlocal last_heartbeat_at
+        record = _pytest_heartbeat(
+            elapsed_seconds=elapsed_seconds,
+            view=view,
+            seconds_since_last_progress=since_progress,
+            soft_checkpoint_seconds=soft_checkpoint_seconds,
+        )
+        heartbeats.append(record)
+        last_heartbeat_at = time.monotonic()
+        print(
+            "staging-pytest heartbeat "
+            f"elapsed={record['elapsed_seconds']}s "
+            f"progress={record['latest_progress']} "
+            f"since_progress={record['seconds_since_last_progress']}s "
+            f"soft_checkpoint={record['soft_checkpoint']}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    _record_heartbeat(0.0, previous_view, 0.0)
+    try:
+        while True:
+            now = time.monotonic()
+            elapsed = now - started
+            stdout = _current_output()[0]
+            view = _pytest_progress_view(stdout)
+            if _pytest_progress_advanced(previous_view, view):
+                last_progress_at = now
+                previous_view = view
+            since_progress = now - last_progress_at
+            after_soft = elapsed >= soft_checkpoint_seconds
+            if after_soft and not crossed_soft_checkpoint:
+                crossed_soft_checkpoint = True
+                _record_heartbeat(elapsed, view, since_progress)
+            elif now - last_heartbeat_at >= heartbeat_seconds:
+                _record_heartbeat(elapsed, view, since_progress)
+
+            if process.poll() is not None:
+                (
+                    stdout,
+                    stderr,
+                    termination,
+                    process_tree,
+                    returncode,
+                ) = _finalize_supervised_process(
+                    process,
+                    stdout_chunks=stdout_chunks,
+                    stderr_chunks=stderr_chunks,
+                    readers=readers,
+                    lock=lock,
+                    abort=False,
+                )
+                final_view = _pytest_progress_view(stdout)
+                progress = {
+                    "soft_checkpoint_seconds": soft_checkpoint_seconds,
+                    "hard_ceiling_seconds": hard_ceiling_seconds,
+                    "no_progress_seconds": no_progress_seconds,
+                    "heartbeat_seconds": heartbeat_seconds,
+                    "latest_percentage": final_view.percentage,
+                    "latest_progress": final_view.latest_progress,
+                    "seconds_since_last_progress": round(time.monotonic() - last_progress_at, 3),
+                    "soft_checkpoint": (
+                        "after" if elapsed >= soft_checkpoint_seconds else "before"
+                    ),
+                    "heartbeats": heartbeats,
+                    "abort_reason": None,
+                }
+                return CheckResult(
+                    name="command",
+                    argv=tuple(str(part) for part in argv),
+                    cwd=str(cwd),
+                    returncode=returncode,
+                    duration_seconds=time.monotonic() - started,
+                    stdout=_bounded(_redact(stdout)),
+                    stderr=_bounded(_redact(stderr)),
+                    termination=termination,
+                    process_tree=process_tree,
+                    progress=progress,
+                )
+
+            if elapsed >= hard_ceiling_seconds:
+                abort_reason = "hard_ceiling"
+                break
+            if since_progress >= no_progress_seconds:
+                abort_reason = "no_progress"
+                break
+            time.sleep(poll_seconds)
+    except Exception:
+        _terminate_process_tree(process)
+        raise
+
+    (
+        stdout,
+        stderr,
+        termination,
+        process_tree,
+        returncode,
+    ) = _finalize_supervised_process(
+        process,
+        stdout_chunks=stdout_chunks,
+        stderr_chunks=stderr_chunks,
+        readers=readers,
+        lock=lock,
+        abort=True,
+    )
+    final_elapsed = time.monotonic() - started
+    final_view = _pytest_progress_view(stdout)
+    since_progress = time.monotonic() - last_progress_at
+    after_soft = final_elapsed >= soft_checkpoint_seconds
+    abort_message = _progress_abort_message(
+        abort_reason or "hard_ceiling",
+        elapsed_seconds=final_elapsed,
+        view=final_view,
+        seconds_since_last_progress=since_progress,
+        after_soft_checkpoint=after_soft,
+        no_progress_seconds=no_progress_seconds,
+        hard_ceiling_seconds=hard_ceiling_seconds,
+    )
+    termination["reason"] = abort_reason
+    progress = {
+        "soft_checkpoint_seconds": soft_checkpoint_seconds,
+        "hard_ceiling_seconds": hard_ceiling_seconds,
+        "no_progress_seconds": no_progress_seconds,
+        "heartbeat_seconds": heartbeat_seconds,
+        "latest_percentage": final_view.percentage,
+        "latest_progress": final_view.latest_progress,
+        "seconds_since_last_progress": round(since_progress, 3),
+        "soft_checkpoint": "after" if after_soft else "before",
+        "heartbeats": heartbeats,
+        "abort_reason": abort_reason,
+    }
+    combined_stderr = _merge_timeout_output(stderr, abort_message + "\n")
+    return CheckResult(
+        name="command",
+        argv=tuple(str(part) for part in argv),
+        cwd=str(cwd),
+        returncode=returncode if returncode is not None else 124,
+        duration_seconds=final_elapsed,
+        stdout=_bounded(_redact(stdout)),
+        stderr=_bounded(_redact(combined_stderr)),
+        timed_out=True,
+        termination=termination,
+        process_tree=process_tree,
+        progress=progress,
+    )
+
+
+def default_command_executor(argv: Sequence[str], cwd: Path, timeout: float) -> CheckResult:
+    if _is_staged_pytest_command(argv):
+        return _run_progress_aware_command(
+            argv,
+            cwd,
+            hard_ceiling_seconds=timeout,
+            soft_checkpoint_seconds=STAGING_PYTEST_SOFT_CHECKPOINT_SECONDS,
+            no_progress_seconds=STAGING_PYTEST_NO_PROGRESS_SECONDS,
+            heartbeat_seconds=STAGING_PYTEST_HEARTBEAT_SECONDS,
+            poll_seconds=STAGING_PYTEST_PROGRESS_POLL_SECONDS,
+        )
+    return _run_bounded_command(argv, cwd, timeout)
 
 
 def _run_named_check(
@@ -966,6 +1315,7 @@ def _run_named_check(
         timed_out=result.timed_out,
         termination=dict(result.termination),
         process_tree=dict(result.process_tree),
+        progress=dict(result.progress),
     )
 
 
@@ -984,7 +1334,7 @@ def _run_staged_pytest_checks(
             "pytest",
             [str(venv_python), "-m", "pytest", "-q"],
             staging_path,
-            STAGING_PYTEST_TIMEOUT_SECONDS,
+            STAGING_PYTEST_HARD_CEILING_SECONDS,
             environment=environment,
         )
     finally:

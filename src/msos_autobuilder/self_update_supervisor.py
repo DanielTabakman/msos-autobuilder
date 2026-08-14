@@ -1882,9 +1882,84 @@ def _write_update_notification(
     )
 
 
+# OpenProcess(ERROR_INVALID_PARAMETER): recorded PID does not exist.
+_WINERROR_INVALID_PARAMETER = 87
+_WINERROR_ACCESS_DENIED = 5
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_STILL_ACTIVE = 259
+
+
+def _windows_platform() -> bool:
+    """Isolated Windows check so tests can exercise the PID probe without mutating os.name."""
+    return os.name == "nt"
+
+
+def _windows_pid_is_running_from_open_result(
+    *,
+    opened: bool,
+    last_error: int,
+    exit_code: int | None,
+) -> bool:
+    """Return True when a writer may still exist. False only for a proven-dead PID.
+
+    WinError 87 (ERROR_INVALID_PARAMETER) is the observed OpenProcess result for a
+    genuinely dead PID. Access-denied and any other probe ambiguity fail closed.
+    """
+    if opened:
+        if exit_code is None:
+            return True
+        return int(exit_code) == _STILL_ACTIVE
+    if last_error == _WINERROR_INVALID_PARAMETER:
+        return False
+    if last_error == _WINERROR_ACCESS_DENIED:
+        return True
+    return True
+
+
+def _windows_pid_is_running(pid: int) -> bool:
+    """Query-only process existence check. Never uses os.kill/TerminateProcess."""
+    import ctypes
+    from ctypes import wintypes
+
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.GetExitCodeProcess.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if handle:
+            try:
+                exit_code = wintypes.DWORD()
+                queried = bool(
+                    kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+                )
+                return _windows_pid_is_running_from_open_result(
+                    opened=True,
+                    last_error=0,
+                    exit_code=int(exit_code.value) if queried else None,
+                )
+            finally:
+                kernel32.CloseHandle(handle)
+        return _windows_pid_is_running_from_open_result(
+            opened=False,
+            last_error=int(ctypes.get_last_error()),
+            exit_code=None,
+        )
+    except OSError:
+        return True
+
+
 def _pid_is_running(pid: int) -> bool:
     if pid <= 0:
         return False
+    if _windows_platform():
+        return _windows_pid_is_running(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -1907,7 +1982,11 @@ def _exclusive_update_lock(config: SupervisorConfig):
             except (OSError, ValueError, json.JSONDecodeError):
                 existing = {}
             pid = existing.get("pid") if isinstance(existing, dict) else None
-            if isinstance(pid, int) and _pid_is_running(pid):
+            if isinstance(pid, int) and not isinstance(pid, bool):
+                pid_running = _pid_is_running(pid)
+            else:
+                pid_running = pid is not None
+            if pid_running:
                 raise SupervisorError(
                     "another self-update supervisor attempt is already running"
                 ) from exc

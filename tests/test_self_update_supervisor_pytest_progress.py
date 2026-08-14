@@ -242,6 +242,9 @@ def test_mere_liveness_does_not_reset_watchdog(tmp_path: Path) -> None:
 
 
 def test_hard_ceiling_always_wins(tmp_path: Path) -> None:
+    hard = 1.0
+    heartbeat = 0.25
+    poll = 0.05
     script = (
         "import time\n"
         "step = 0\n"
@@ -255,19 +258,62 @@ def test_hard_ceiling_always_wins(tmp_path: Path) -> None:
         _python_script(script),
         tmp_path,
         soft=0.3,
-        hard=1.0,
+        hard=hard,
         no_progress=30.0,
-        heartbeat=0.25,
+        heartbeat=heartbeat,
+        poll=poll,
     )
     elapsed = time.monotonic() - started
 
     assert result.timed_out
     assert result.progress["abort_reason"] == "hard_ceiling"
-    assert result.duration_seconds >= 0.9
-    assert elapsed < 4.0
+    assert result.progress["hard_ceiling_seconds"] == hard
+    assert result.duration_seconds >= hard - poll
     assert result.progress["soft_checkpoint"] == "after"
     assert result.progress["latest_percentage"]
     assert "hard ceiling" in result.stderr
+
+    heartbeats = result.progress["heartbeats"]
+    assert len(heartbeats) >= 2
+    # The final heartbeat is recorded after process-tree teardown. Live
+    # samples prove the ceiling decision itself happened near the 1s bound.
+    live_heartbeats = heartbeats[:-1]
+    last_live_elapsed = live_heartbeats[-1]["elapsed_seconds"]
+    assert last_live_elapsed >= hard - heartbeat - poll
+    assert last_live_elapsed < hard + heartbeat + poll
+    assert all(
+        item["elapsed_seconds"] < hard + heartbeat + poll for item in live_heartbeats
+    )
+
+    assert result.termination["attempted"] is True
+    assert result.termination.get("reason") == "hard_ceiling"
+    if os.name == "nt":
+        assert result.termination["method"] == "taskkill-tree"
+    else:
+        assert result.termination["method"] == "process-group-term-kill"
+    root_pid = int(result.process_tree["root_pid"])
+    assert root_pid > 0
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and _pid_exists(root_pid):
+        time.sleep(0.05)
+    assert not _pid_exists(root_pid)
+
+    # Hang detector only. Wrapper elapsed may include the documented abort-path
+    # waits in `_best_effort_process_tree` (15s), `_terminate_process_tree`
+    # (Windows taskkill 30s / Unix SIGTERM wait 5s), two reader joins (2s
+    # each), and residual `process.wait` (5s). It must not require teardown
+    # itself to finish in an arbitrary few seconds.
+    tree_capture_timeout = 15.0
+    termination_timeout = 30.0 if os.name == "nt" else 5.0
+    reader_join_budget = 2.0 * 2
+    residual_wait = 5.0
+    teardown_budget = (
+        tree_capture_timeout
+        + termination_timeout
+        + reader_join_budget
+        + residual_wait
+    )
+    assert elapsed < hard + teardown_budget + 1.0
 
 
 def test_successful_process_preserves_quiet_gate_semantics(tmp_path: Path) -> None:

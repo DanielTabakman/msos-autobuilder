@@ -139,6 +139,9 @@ def test_handoff_script_does_not_use_pid_automatic_variable() -> None:
     assert "Test-RecordedPidRunning" in script
     assert "[Parameter(Mandatory = $true)][int]$RecordedPid" in script
     assert "Test-RecordedPidRunning -RecordedPid $RecordedPid" in script
+    assert "$RecordedPid = [int]$Lock.pid" not in script
+    assert "$JsonPid -isnot [int]" in script
+    assert "$JsonPid -isnot [long]" in script
     assert re.search(r"(?i)\$Pid\b", script) is None
     assert re.search(r"(?i)(?<!Recorded)-Pid\b", script) is None
     assert "Test-PidRunning" not in script
@@ -322,6 +325,43 @@ Write-Output 'PREFLIGHT_OK'
         result.stdout,
     )
     assert "PREFLIGHT_OK" not in result.stdout
+    assert lock_path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "pid",
+    [
+        "40096",
+        True,
+        40096.5,
+    ],
+)
+def test_coercible_non_integer_pid_lock_blocks_preflight_without_mutating_lock(
+    tmp_path: Path,
+    pid: object,
+) -> None:
+    supervisor_root = tmp_path / "supervisor"
+    lock_path = supervisor_root / "state" / "update.lock"
+    _write_lock(lock_path, pid)
+    original = lock_path.read_bytes()
+
+    result = _run_lock_preflight(
+        f"""
+Assert-NoActiveUpdateAttempt -SupervisorRoot '{supervisor_root.as_posix()}'
+Write-Output 'PREFLIGHT_OK'
+"""
+    )
+
+    assert result.returncode != 0
+    _assert_powershell_reported(
+        f"Found an unreadable update lock at {lock_path}; refusing bootstrap replacement.",
+        result.stderr,
+        result.stdout,
+    )
+    assert "PREFLIGHT_OK" not in result.stdout
+    assert "A self-update supervisor attempt is active" not in _compact_powershell_text(
+        result.stderr, result.stdout
+    )
     assert lock_path.read_bytes() == original
 
 

@@ -763,7 +763,13 @@ function Assert-NoActiveUpdateAttempt {
     if (-not (Test-Path $LockPath -PathType Leaf)) { return }
     try {
         $Lock = Get-Content -Path $LockPath -Raw | ConvertFrom-Json
-        $RecordedPid = [int]$Lock.pid
+        # Reject coercible non-integers before Get-Process. [int]"40096" and
+        # [int]$true would otherwise look like a real PID and fail open.
+        $JsonPid = $Lock.pid
+        if (($JsonPid -isnot [int] -and $JsonPid -isnot [long]) -or $JsonPid -le 0) {
+            throw "Update lock pid is not a positive integer JSON value."
+        }
+        $RecordedPid = [int]$JsonPid
         if (Test-RecordedPidRunning -RecordedPid $RecordedPid) {
             throw "A self-update supervisor attempt is active with PID $RecordedPid."
         }

@@ -1472,6 +1472,11 @@ def test_stable_bootstrap_handoff_is_exact_commit_reversible_and_non_mutating() 
     assert "Disable-ScheduledTask -TaskName $UpdateTaskName" in script
     assert "Enable-ScheduledTask -TaskName $UpdateTaskName" in script
     assert "Assert-NoActiveUpdateAttempt" in script
+    assert "Test-RecordedPidRunning" in script
+    assert "[int]$RecordedPid" in script
+    assert "[int]$Pid" not in script
+    assert "Test-PidRunning" not in script
+    assert re.search(r"(?i)\$Pid\b", script) is None
     assert "PowerShellTaskController" in script
     assert "controller.states(task_names)" in script
     assert "Add-StagedServiceConfiguration" in script

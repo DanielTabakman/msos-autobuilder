@@ -738,14 +738,22 @@ function Get-GitBlobBytes {
     }
 }
 
-function Test-PidRunning {
-    param([Parameter(Mandatory = $true)][int]$Pid)
+function Test-RecordedPidRunning {
+    # Do not name locals or parameters Pid: Windows PowerShell 5.1 aliases that
+    # identifier to the automatic read-only process-id variable.
+    param([Parameter(Mandatory = $true)][int]$RecordedPid)
     try {
-        Get-Process -Id $Pid -ErrorAction Stop | Out-Null
+        Get-Process -Id $RecordedPid -ErrorAction Stop | Out-Null
         return $true
     }
     catch {
-        return $false
+        $NotFound = (
+            $_.CategoryInfo.Category -eq "ObjectNotFound" -or
+            $_.FullyQualifiedErrorId -like "NoProcessFoundForGivenId*" -or
+            $_.Exception.Message -like "*Cannot find a process with the process identifier*"
+        )
+        if ($NotFound) { return $false }
+        throw "Process existence for PID $RecordedPid is ambiguous: $($_.Exception.Message)"
     }
 }
 
@@ -755,13 +763,14 @@ function Assert-NoActiveUpdateAttempt {
     if (-not (Test-Path $LockPath -PathType Leaf)) { return }
     try {
         $Lock = Get-Content -Path $LockPath -Raw | ConvertFrom-Json
-        $Pid = [int]$Lock.pid
-        if (Test-PidRunning -Pid $Pid) {
-            throw "A self-update supervisor attempt is active with PID $Pid."
+        $RecordedPid = [int]$Lock.pid
+        if (Test-RecordedPidRunning -RecordedPid $RecordedPid) {
+            throw "A self-update supervisor attempt is active with PID $RecordedPid."
         }
     }
     catch {
         if ($_.Exception.Message -like "A self-update supervisor attempt is active*") { throw }
+        if ($_.Exception.Message -like "Process existence for PID * is ambiguous*") { throw }
         throw "Found an unreadable update lock at $LockPath; refusing bootstrap replacement."
     }
 }

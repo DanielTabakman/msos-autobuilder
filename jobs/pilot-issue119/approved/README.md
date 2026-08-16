@@ -2,16 +2,16 @@
 
 This directory is the dedicated useful-work feed for the isolated Issue #119 pilot host.
 
-It is separate from the durable historical global feed at \jobs/approved\.
-Do not move, delete, edit, supersede, or mark seen anything under \jobs/approved\.
+It is separate from the durable historical global feed at `jobs/approved`.
+Do not move, delete, edit, supersede, or mark seen anything under `jobs/approved`.
 
 Rules:
 
 - every executable file must be YAML;
-- \ersion: 1\;
-- immutable unique \job_id\;
-- \pproved: true\;
-- \publication_enabled: false\ at both job and embedded manifest layers;
+- `version: 1`;
+- immutable unique `job_id`;
+- `approved: true`;
+- `publication_enabled: false` at both job and embedded manifest layers;
 - inline instructions only;
 - no secrets;
 - no product publication authority.

@@ -318,9 +318,15 @@ def work_item_digest_from_mapping(work: Mapping[str, Any]) -> str:
     )
 
 
-def work_item_source_bytes_from_snapshot_json(snapshot_text: str, work_item_id: str) -> bytes:
+def work_item_source_bytes_from_snapshot_json(
+    snapshot_text: str,
+    work_item_id: str,
+    pipeline_id: str = "ppe",
+) -> bytes:
     object_spans = _json_object_spans(snapshot_text)
-    ready_spans = set(_ready_work_element_spans(snapshot_text, object_spans))
+    ready_spans = set(
+        _canonical_ready_work_element_spans(snapshot_text, object_spans, pipeline_id)
+    )
     matches: list[str] = []
     for start, end in object_spans:
         if (start, end) not in ready_spans:
@@ -401,7 +407,7 @@ def _json_container_end(text: str, start: int) -> int:
     raise LifecycleEvidenceError("PPE portfolio output has unbalanced JSON objects")
 
 
-def _ready_work_array_ranges(text: str) -> list[tuple[int, int]]:
+def _named_array_ranges(text: str, key: str) -> list[tuple[int, int]]:
     ranges: list[tuple[int, int]] = []
     in_string = False
     escape = False
@@ -417,7 +423,7 @@ def _ready_work_array_ranges(text: str) -> list[tuple[int, int]]:
                 escape = True
             elif char == '"':
                 in_string = False
-                if text[string_start + 1 : index] == "ready_work":
+                if text[string_start + 1 : index] == key:
                     cursor = index + 1
                     while cursor < length and text[cursor].isspace():
                         cursor += 1
@@ -441,24 +447,90 @@ def _ready_work_array_ranges(text: str) -> list[tuple[int, int]]:
     return ranges
 
 
-def _ready_work_element_spans(
+def _direct_object_elements(
+    object_spans: list[tuple[int, int]],
+    arr_start: int,
+    arr_end: int,
+) -> list[tuple[int, int]]:
+    inner = [(start, end) for start, end in object_spans if arr_start < start and end <= arr_end]
+    elements: list[tuple[int, int]] = []
+    for start, end in inner:
+        nested = any(
+            other_start < start and end <= other_end
+            for other_start, other_end in inner
+            if (other_start, other_end) != (start, end)
+        )
+        if not nested:
+            elements.append((start, end))
+    return elements
+
+
+def _array_is_direct_property(
+    object_spans: list[tuple[int, int]],
+    owner: tuple[int, int],
+    arr_start: int,
+    arr_end: int,
+) -> bool:
+    owner_start, owner_end = owner
+    if not (owner_start < arr_start and arr_end <= owner_end):
+        return False
+    return not any(
+        owner_start < start and end <= owner_end and start < arr_start and arr_end <= end
+        for start, end in object_spans
+        if (start, end) != owner
+    )
+
+
+def _direct_named_array_ranges(
     text: str,
     object_spans: list[tuple[int, int]],
+    owner: tuple[int, int],
+    key: str,
 ) -> list[tuple[int, int]]:
-    elements: list[tuple[int, int]] = []
-    for arr_start, arr_end in _ready_work_array_ranges(text):
-        inner = [
-            (start, end) for start, end in object_spans if arr_start < start and end <= arr_end
-        ]
-        for start, end in inner:
-            nested = any(
-                other_start < start and end <= other_end
-                for other_start, other_end in inner
-                if (other_start, other_end) != (start, end)
-            )
-            if not nested:
-                elements.append((start, end))
-    return elements
+    return [
+        (arr_start, arr_end)
+        for arr_start, arr_end in _named_array_ranges(text, key)
+        if _array_is_direct_property(object_spans, owner, arr_start, arr_end)
+    ]
+
+
+def _unique_pipeline_object_span(
+    text: str,
+    object_spans: list[tuple[int, int]],
+    pipeline_id: str,
+) -> tuple[int, int] | None:
+    if not object_spans:
+        return None
+    pipeline_arrays = _direct_named_array_ranges(text, object_spans, object_spans[-1], "pipelines")
+    if len(pipeline_arrays) != 1:
+        return None
+    arr_start, arr_end = pipeline_arrays[0]
+    matches: list[tuple[int, int]] = []
+    for start, end in _direct_object_elements(object_spans, arr_start, arr_end):
+        try:
+            value = json.loads(text[start:end])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, Mapping) and str(value.get("pipeline_id") or "") == pipeline_id:
+            matches.append((start, end))
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
+def _canonical_ready_work_element_spans(
+    text: str,
+    object_spans: list[tuple[int, int]],
+    pipeline_id: str,
+) -> list[tuple[int, int]]:
+    pipeline = _unique_pipeline_object_span(text, object_spans, pipeline_id)
+    if pipeline is None:
+        return []
+    ready_arrays = _direct_named_array_ranges(text, object_spans, pipeline, "ready_work")
+    if len(ready_arrays) != 1:
+        return []
+    arr_start, arr_end = ready_arrays[0]
+    return _direct_object_elements(object_spans, arr_start, arr_end)
 
 
 def attempt_identity(

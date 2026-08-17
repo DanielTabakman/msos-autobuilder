@@ -516,6 +516,34 @@ def test_duplicate_ready_work_candidates_block_admission(tmp_path: Path) -> None
     assert "not exactly one READY item" in receipt.message
 
 
+def test_other_pipeline_ready_work_same_id_does_not_block_ppe_admission(tmp_path: Path) -> None:
+    snapshot = _snapshot(work_item_id="options_horizon_comparison_v1")
+    work = snapshot["pipelines"][0]["ready_work"][0]
+    snapshot["pipelines"][0]["next_action"] = _ppe_pipeline_next_action(work)
+    _append_pipeline(snapshot, "autobuilder", ["options_horizon_comparison_v1"])
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(_config(tmp_path, ppe, feed))
+
+    assert receipt.status == "QUEUED"
+    assert receipt.work_item_id == "options_horizon_comparison_v1"
+
+
+def test_human_facing_ready_work_array_does_not_block_ppe_admission(tmp_path: Path) -> None:
+    snapshot = _snapshot(work_item_id="options_horizon_comparison_v1")
+    work = snapshot["pipelines"][0]["ready_work"][0]
+    snapshot["pipelines"][0]["next_action"] = _ppe_pipeline_next_action(work)
+    snapshot["status_projection"] = {"ready_work": [dict(work)]}
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(_config(tmp_path, ppe, feed))
+
+    assert receipt.status == "QUEUED"
+    assert receipt.work_item_id == "options_horizon_comparison_v1"
+
+
 def test_missing_ready_work_candidate_is_not_inferred_from_next_action(tmp_path: Path) -> None:
     snapshot = _snapshot(work_item_id="options_horizon_comparison_v1")
     work = snapshot["pipelines"][0]["ready_work"][0]

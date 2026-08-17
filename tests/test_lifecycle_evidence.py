@@ -53,7 +53,7 @@ def test_canonical_json_and_work_item_digest_are_platform_stable() -> None:
 
 def test_work_item_digest_uses_exact_source_bytes_boundary() -> None:
     pretty = (
-        '{\n  "pipelines": [\n    {"ready_work": [\n'
+        '{\n  "pipelines": [\n    {"pipeline_id": "ppe", "ready_work": [\n'
         '      {"work_item_id": "A", "title": "Alpha", "state": "READY_TO_BUILD",'
         ' "trace": "plan.json", "evidence": "manual", "spaces": "  kept  "}\n'
         "    ]}\n  ]\n}\n"
@@ -134,9 +134,11 @@ def _issue_119_snapshot_json(
     ready_work: list[dict[str, object]] | None = None,
     next_action: dict[str, object] | None = None,
     extra_outside: list[dict[str, object]] | None = None,
+    extra_pipelines: list[dict[str, object]] | None = None,
+    extra_root: dict[str, object] | None = None,
 ) -> str:
     candidate = _issue_119_ready_work_candidate()
-    snapshot = {
+    snapshot: dict[str, object] = {
         "version": 1,
         "read_only": True,
         "pipelines": [
@@ -157,8 +159,14 @@ def _issue_119_snapshot_json(
             "selection_rank": [1, "ppe", ISSUE_119_WORK_ITEM],
         },
     }
+    if extra_pipelines:
+        pipelines = snapshot["pipelines"]
+        assert isinstance(pipelines, list)
+        pipelines.extend(extra_pipelines)
     if extra_outside:
         snapshot["human_projections"] = extra_outside
+    if extra_root:
+        snapshot.update(extra_root)
     return json.dumps(snapshot, indent=2)
 
 
@@ -184,6 +192,53 @@ def test_issue_119_next_action_duplicate_id_does_not_make_ready_work_ambiguous()
 def test_duplicate_ready_work_candidates_for_same_id_fail_closed() -> None:
     candidate = _issue_119_ready_work_candidate()
     snapshot = _issue_119_snapshot_json(ready_work=[candidate, dict(candidate)])
+    with pytest.raises(LifecycleEvidenceError, match=AMBIGUOUS_SOURCE_BOUNDARY):
+        work_item_source_bytes_from_snapshot_json(snapshot, ISSUE_119_WORK_ITEM)
+
+
+def test_other_pipeline_ready_work_same_id_does_not_affect_ppe_extraction() -> None:
+    other = dict(_issue_119_ready_work_candidate())
+    other["title"] = "other-pipeline duplicate"
+    other["allowed_product_paths"] = ["src/other.py"]
+    snapshot = _issue_119_snapshot_json(
+        extra_pipelines=[
+            {
+                "pipeline_id": "autobuilder",
+                "state": "READY_TO_BUILD",
+                "ready_work": [other],
+            }
+        ]
+    )
+    source = work_item_source_bytes_from_snapshot_json(snapshot, ISSUE_119_WORK_ITEM)
+    bound = json.loads(source)
+    assert bound == _issue_119_ready_work_candidate()
+    assert bound["title"] != "other-pipeline duplicate"
+
+
+def test_human_facing_ready_work_array_same_id_does_not_affect_ppe_extraction() -> None:
+    projection = dict(_issue_119_ready_work_candidate())
+    projection["title"] = "human projection"
+    snapshot = _issue_119_snapshot_json(
+        extra_root={"status_projection": {"ready_work": [projection]}}
+    )
+    source = work_item_source_bytes_from_snapshot_json(snapshot, ISSUE_119_WORK_ITEM)
+    bound = json.loads(source)
+    assert bound == _issue_119_ready_work_candidate()
+    assert bound["title"] != "human projection"
+
+
+def test_other_pipeline_ready_work_cannot_supply_missing_ppe_candidate() -> None:
+    other = dict(_issue_119_ready_work_candidate())
+    snapshot = _issue_119_snapshot_json(
+        ready_work=[],
+        extra_pipelines=[
+            {
+                "pipeline_id": "autobuilder",
+                "state": "READY_TO_BUILD",
+                "ready_work": [other],
+            }
+        ],
+    )
     with pytest.raises(LifecycleEvidenceError, match=AMBIGUOUS_SOURCE_BOUNDARY):
         work_item_source_bytes_from_snapshot_json(snapshot, ISSUE_119_WORK_ITEM)
 

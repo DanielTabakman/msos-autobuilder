@@ -319,8 +319,12 @@ def work_item_digest_from_mapping(work: Mapping[str, Any]) -> str:
 
 
 def work_item_source_bytes_from_snapshot_json(snapshot_text: str, work_item_id: str) -> bytes:
+    object_spans = _json_object_spans(snapshot_text)
+    ready_spans = set(_ready_work_element_spans(snapshot_text, object_spans))
     matches: list[str] = []
-    for start, end in _json_object_spans(snapshot_text):
+    for start, end in object_spans:
+        if (start, end) not in ready_spans:
+            continue
         candidate = snapshot_text[start:end]
         try:
             value = json.loads(candidate)
@@ -364,6 +368,97 @@ def _json_object_spans(text: str) -> list[tuple[int, int]]:
     if stack or in_string:
         raise LifecycleEvidenceError("PPE portfolio output has unbalanced JSON objects")
     return spans
+
+
+def _json_container_end(text: str, start: int) -> int:
+    closers = {"{": "}", "[": "]"}
+    opener = text[start]
+    if opener not in closers:
+        raise LifecycleEvidenceError("PPE portfolio output has unbalanced JSON objects")
+    stack = [opener]
+    in_string = False
+    escape = False
+    for index in range(start + 1, len(text)):
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in closers:
+            stack.append(char)
+        elif char in "}]":
+            if not stack or closers[stack[-1]] != char:
+                raise LifecycleEvidenceError("PPE portfolio output has unbalanced JSON objects")
+            stack.pop()
+            if not stack:
+                return index + 1
+    raise LifecycleEvidenceError("PPE portfolio output has unbalanced JSON objects")
+
+
+def _ready_work_array_ranges(text: str) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    in_string = False
+    escape = False
+    string_start = 0
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+                if text[string_start + 1 : index] == "ready_work":
+                    cursor = index + 1
+                    while cursor < length and text[cursor].isspace():
+                        cursor += 1
+                    if cursor < length and text[cursor] == ":":
+                        cursor += 1
+                        while cursor < length and text[cursor].isspace():
+                            cursor += 1
+                        if cursor < length and text[cursor] == "[":
+                            end = _json_container_end(text, cursor)
+                            ranges.append((cursor, end))
+                            index = end
+                            continue
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            string_start = index
+        index += 1
+    if in_string:
+        raise LifecycleEvidenceError("PPE portfolio output has unbalanced JSON objects")
+    return ranges
+
+
+def _ready_work_element_spans(
+    text: str,
+    object_spans: list[tuple[int, int]],
+) -> list[tuple[int, int]]:
+    elements: list[tuple[int, int]] = []
+    for arr_start, arr_end in _ready_work_array_ranges(text):
+        inner = [
+            (start, end) for start, end in object_spans if arr_start < start and end <= arr_end
+        ]
+        for start, end in inner:
+            nested = any(
+                other_start < start and end <= other_end
+                for other_start, other_end in inner
+                if (other_start, other_end) != (start, end)
+            )
+            if not nested:
+                elements.append((start, end))
+    return elements
 
 
 def attempt_identity(

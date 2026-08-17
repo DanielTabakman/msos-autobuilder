@@ -53,7 +53,7 @@ def test_canonical_json_and_work_item_digest_are_platform_stable() -> None:
 
 def test_work_item_digest_uses_exact_source_bytes_boundary() -> None:
     pretty = (
-        '{\n  "pipelines": [\n    {"ready_work": [\n'
+        '{\n  "pipelines": [\n    {"pipeline_id": "ppe", "ready_work": [\n'
         '      {"work_item_id": "A", "title": "Alpha", "state": "READY_TO_BUILD",'
         ' "trace": "plan.json", "evidence": "manual", "spaces": "  kept  "}\n'
         "    ]}\n  ]\n}\n"
@@ -69,6 +69,230 @@ def test_work_item_digest_uses_exact_source_bytes_boundary() -> None:
         b' "trace": "plan.json", "evidence": "manual", "spaces": "  kept  "}'
     )
     assert pretty.encode("utf-8").find(source) > 0
+
+
+ISSUE_119_WORK_ITEM = "options_horizon_comparison_v1"
+ISSUE_119_TRACE = "docs/SOP/PHASE_PLANS/options_horizon_comparison_v1_relay.json"
+AMBIGUOUS_SOURCE_BOUNDARY = "exact work-item source byte boundary is ambiguous"
+
+
+def _issue_119_ready_work_candidate() -> dict[str, object]:
+    return {
+        "work_item_id": ISSUE_119_WORK_ITEM,
+        "title": "Compare option-horizon surfaces before ranking expressions.",
+        "native_state": "READY",
+        "state": "READY_TO_BUILD",
+        "trace": ISSUE_119_TRACE,
+        "evidence": "manual",
+        "selection": {
+            "founder_priority": "high",
+            "founder_priority_rank": 1,
+            "deadline_rank": "9999-12-31T00:00:00+00:00",
+            "dependency_unblock_value": 20,
+            "age_index": 0,
+        },
+        "native_prerequisites": {
+            "read_only": True,
+            "source": "ppe_native_read_only",
+            "source_plan": ISSUE_119_TRACE,
+            "selected_native_slice": "Options-Horizon-Product-Slice002",
+            "allowed_product_paths": ["src/options/horizon.py", "tests/test_horizon.py"],
+            "dispatchable": True,
+            "evidence": {"identity": "native-slice-identity", "source_files": []},
+            "statuses": [
+                {
+                    "slice_id": "Options-Horizon-Control-Slice001",
+                    "status": "complete",
+                    "non_blocking": False,
+                }
+            ],
+        },
+        "source_plan": ISSUE_119_TRACE,
+        "selected_native_slice": "Options-Horizon-Product-Slice002",
+        "selected_native_dispatchable": True,
+        "allowed_product_paths": ["src/options/horizon.py", "tests/test_horizon.py"],
+    }
+
+
+def _issue_119_next_action(
+    *,
+    work_item_id: str = ISSUE_119_WORK_ITEM,
+    title: str = "Compare option-horizon surfaces before ranking expressions.",
+) -> dict[str, object]:
+    return {
+        "state": "READY_TO_BUILD",
+        "action_type": "build",
+        "summary": title,
+        "work_item_id": work_item_id,
+        "trace": ISSUE_119_TRACE,
+        "evidence": "manual",
+    }
+
+
+def _issue_119_snapshot_json(
+    *,
+    ready_work: list[dict[str, object]] | None = None,
+    next_action: dict[str, object] | None = None,
+    extra_outside: list[dict[str, object]] | None = None,
+    extra_pipelines: list[dict[str, object]] | None = None,
+    extra_root: dict[str, object] | None = None,
+) -> str:
+    candidate = _issue_119_ready_work_candidate()
+    snapshot: dict[str, object] = {
+        "version": 1,
+        "read_only": True,
+        "pipelines": [
+            {
+                "pipeline_id": "ppe",
+                "state": "READY_TO_BUILD",
+                "ready_work": ready_work if ready_work is not None else [candidate],
+                "next_action": next_action if next_action is not None else _issue_119_next_action(),
+            }
+        ],
+        "recommended_next_action": {
+            "pipeline_id": "ppe",
+            "state": "READY_TO_BUILD",
+            "action_type": "build",
+            "summary": candidate["title"],
+            "work_item_id": ISSUE_119_WORK_ITEM,
+            "evidence": "manual",
+            "selection_rank": [1, "ppe", ISSUE_119_WORK_ITEM],
+        },
+    }
+    if extra_pipelines:
+        pipelines = snapshot["pipelines"]
+        assert isinstance(pipelines, list)
+        pipelines.extend(extra_pipelines)
+    if extra_outside:
+        snapshot["human_projections"] = extra_outside
+    if extra_root:
+        snapshot.update(extra_root)
+    return json.dumps(snapshot, indent=2)
+
+
+def _source_is_ready_work_element(snapshot: str, source: bytes) -> bool:
+    ready_marker = snapshot.find('"ready_work"')
+    next_action_marker = snapshot.find('"next_action"')
+    source_at = snapshot.encode("utf-8").find(source)
+    return 0 <= ready_marker < source_at < next_action_marker
+
+
+def test_issue_119_next_action_duplicate_id_does_not_make_ready_work_ambiguous() -> None:
+    snapshot = _issue_119_snapshot_json()
+    source = work_item_source_bytes_from_snapshot_json(snapshot, ISSUE_119_WORK_ITEM)
+    bound = json.loads(source)
+
+    assert snapshot.count(f'"work_item_id": "{ISSUE_119_WORK_ITEM}"') >= 3
+    assert bound == _issue_119_ready_work_candidate()
+    assert bound["allowed_product_paths"] == ["src/options/horizon.py", "tests/test_horizon.py"]
+    assert "action_type" not in bound
+    assert _source_is_ready_work_element(snapshot, source)
+
+
+def test_duplicate_ready_work_candidates_for_same_id_fail_closed() -> None:
+    candidate = _issue_119_ready_work_candidate()
+    snapshot = _issue_119_snapshot_json(ready_work=[candidate, dict(candidate)])
+    with pytest.raises(LifecycleEvidenceError, match=AMBIGUOUS_SOURCE_BOUNDARY):
+        work_item_source_bytes_from_snapshot_json(snapshot, ISSUE_119_WORK_ITEM)
+
+
+def test_other_pipeline_ready_work_same_id_does_not_affect_ppe_extraction() -> None:
+    other = dict(_issue_119_ready_work_candidate())
+    other["title"] = "other-pipeline duplicate"
+    other["allowed_product_paths"] = ["src/other.py"]
+    snapshot = _issue_119_snapshot_json(
+        extra_pipelines=[
+            {
+                "pipeline_id": "autobuilder",
+                "state": "READY_TO_BUILD",
+                "ready_work": [other],
+            }
+        ]
+    )
+    source = work_item_source_bytes_from_snapshot_json(snapshot, ISSUE_119_WORK_ITEM)
+    bound = json.loads(source)
+    assert bound == _issue_119_ready_work_candidate()
+    assert bound["title"] != "other-pipeline duplicate"
+
+
+def test_human_facing_ready_work_array_same_id_does_not_affect_ppe_extraction() -> None:
+    projection = dict(_issue_119_ready_work_candidate())
+    projection["title"] = "human projection"
+    snapshot = _issue_119_snapshot_json(
+        extra_root={"status_projection": {"ready_work": [projection]}}
+    )
+    source = work_item_source_bytes_from_snapshot_json(snapshot, ISSUE_119_WORK_ITEM)
+    bound = json.loads(source)
+    assert bound == _issue_119_ready_work_candidate()
+    assert bound["title"] != "human projection"
+
+
+def test_other_pipeline_ready_work_cannot_supply_missing_ppe_candidate() -> None:
+    other = dict(_issue_119_ready_work_candidate())
+    snapshot = _issue_119_snapshot_json(
+        ready_work=[],
+        extra_pipelines=[
+            {
+                "pipeline_id": "autobuilder",
+                "state": "READY_TO_BUILD",
+                "ready_work": [other],
+            }
+        ],
+    )
+    with pytest.raises(LifecycleEvidenceError, match=AMBIGUOUS_SOURCE_BOUNDARY):
+        work_item_source_bytes_from_snapshot_json(snapshot, ISSUE_119_WORK_ITEM)
+
+
+def test_same_id_outside_ready_work_does_not_create_candidate_ambiguity() -> None:
+    duplicate = _issue_119_next_action()
+    snapshot = _issue_119_snapshot_json(
+        extra_outside=[
+            duplicate,
+            dict(duplicate),
+            {
+                "work_item_id": ISSUE_119_WORK_ITEM,
+                "state": "READY_TO_BUILD",
+                "trace": ISSUE_119_TRACE,
+                "evidence": "manual",
+            },
+        ]
+    )
+    source = work_item_source_bytes_from_snapshot_json(snapshot, ISSUE_119_WORK_ITEM)
+    assert json.loads(source) == _issue_119_ready_work_candidate()
+
+
+def test_missing_ready_work_candidate_fails_closed_even_when_next_action_repeats_id() -> None:
+    snapshot = _issue_119_snapshot_json(ready_work=[])
+    with pytest.raises(LifecycleEvidenceError, match=AMBIGUOUS_SOURCE_BOUNDARY):
+        work_item_source_bytes_from_snapshot_json(snapshot, ISSUE_119_WORK_ITEM)
+
+
+def test_ready_work_candidate_missing_authority_fails_closed_without_using_next_action() -> None:
+    missing_trace = _issue_119_ready_work_candidate()
+    del missing_trace["trace"]
+    snapshot = _issue_119_snapshot_json(ready_work=[missing_trace])
+    with pytest.raises(LifecycleEvidenceError, match=AMBIGUOUS_SOURCE_BOUNDARY):
+        work_item_source_bytes_from_snapshot_json(snapshot, ISSUE_119_WORK_ITEM)
+
+    missing_evidence = _issue_119_ready_work_candidate()
+    del missing_evidence["evidence"]
+    snapshot = _issue_119_snapshot_json(ready_work=[missing_evidence])
+    with pytest.raises(LifecycleEvidenceError, match=AMBIGUOUS_SOURCE_BOUNDARY):
+        work_item_source_bytes_from_snapshot_json(snapshot, ISSUE_119_WORK_ITEM)
+
+
+def test_next_action_for_a_different_work_item_does_not_redirect_extraction() -> None:
+    other = "options_expression_fit_ranking_v1"
+    snapshot = _issue_119_snapshot_json(
+        next_action=_issue_119_next_action(
+            work_item_id=other,
+            title="Rank fitted option expressions.",
+        )
+    )
+    source = work_item_source_bytes_from_snapshot_json(snapshot, ISSUE_119_WORK_ITEM)
+    bound = json.loads(source)
+    assert bound["work_item_id"] == ISSUE_119_WORK_ITEM
+    assert bound == _issue_119_ready_work_candidate()
 
 
 def test_exact_producer_paths_never_enter_attempt_lifecycle(tmp_path: Path) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -18,6 +19,10 @@ from msos_autobuilder.build_next import (
     _normalize_github_repository,
     _select_native_slice,
     build_next,
+)
+from msos_autobuilder.lifecycle_evidence import (
+    work_item_source_bytes_from_snapshot_json,
+    work_item_source_sha256_v1,
 )
 from msos_autobuilder.validation_contract import (
     canonical_dependency_source_sha256,
@@ -235,6 +240,17 @@ def _snapshot(
     }
 
 
+def _ppe_pipeline_next_action(work: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "state": "READY_TO_BUILD",
+        "action_type": "build",
+        "summary": work.get("title"),
+        "work_item_id": work.get("work_item_id"),
+        "trace": work.get("trace"),
+        "evidence": work.get("evidence"),
+    }
+
+
 def _write_ppe(
     root: Path,
     *,
@@ -431,6 +447,129 @@ def test_build_next_submits_exactly_one_selected_item(tmp_path: Path) -> None:
     assert ".github/workflows/**" in lane["forbidden_paths"]
     assert "docs/SOP/SPRINT_FIXTURE.md" not in lane["allowed_paths"]
     assert "docs/SOP/POST_FIXTURE_SELECTION.md" not in lane["allowed_paths"]
+
+
+def test_issue_119_duplicate_next_action_id_admits_canonical_ready_work(tmp_path: Path) -> None:
+    snapshot = _snapshot(work_item_id="options_horizon_comparison_v1")
+    work = snapshot["pipelines"][0]["ready_work"][0]
+    work["allowed_product_paths"] = ["src/viz/panel.py", "tests/test_panel.py"]
+    snapshot["pipelines"][0]["next_action"] = _ppe_pipeline_next_action(work)
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(_config(tmp_path, ppe, feed))
+
+    assert receipt.status == "QUEUED"
+    assert receipt.work_item_id == "options_horizon_comparison_v1"
+    portfolio = json.dumps(json.loads((ppe / "snapshot.json").read_text(encoding="utf-8")))
+    ready_source = work_item_source_bytes_from_snapshot_json(
+        portfolio, "options_horizon_comparison_v1"
+    )
+    bound = json.loads(ready_source)
+    expected = work_item_source_sha256_v1(ready_source)
+    next_action_digest = work_item_source_sha256_v1(
+        json.dumps(snapshot["pipelines"][0]["next_action"]).encode("utf-8")
+    )
+    assert bound["work_item_id"] == "options_horizon_comparison_v1"
+    assert bound["allowed_product_paths"] == ["src/viz/panel.py", "tests/test_panel.py"]
+    assert "action_type" not in bound
+    assert receipt.evidence["work_item_source_sha256_v1"] == expected
+    assert expected != next_action_digest
+    review = tmp_path / "review"
+    _git(None, "clone", "-q", "--branch", "jobs", str(feed), str(review))
+    job = yaml.safe_load(
+        next((review / "jobs" / "approved").glob("build-next-*.yaml")).read_text(encoding="utf-8")
+    )
+    assert job["founder_build_next"]["work_item_id"] == "options_horizon_comparison_v1"
+    assert job["founder_build_next"]["work_item_source_sha256_v1"] == expected
+    assert job["manifest"]["lanes"][0]["allowed_paths"] == [
+        "src/viz/panel.py",
+        "tests/test_panel.py",
+    ]
+
+
+def test_pipeline_next_action_for_other_item_does_not_redirect_selection(tmp_path: Path) -> None:
+    snapshot = _snapshot(work_item_id="options_horizon_comparison_v1")
+    other = _ready_item("options_expression_fit_ranking_v1")
+    snapshot["pipelines"][0]["ready_work"].append(other)
+    snapshot["pipelines"][0]["next_action"] = _ppe_pipeline_next_action(other)
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(_config(tmp_path, ppe, feed))
+
+    assert receipt.status == "QUEUED"
+    assert receipt.work_item_id == "options_horizon_comparison_v1"
+
+
+def test_duplicate_ready_work_candidates_block_admission(tmp_path: Path) -> None:
+    snapshot = _snapshot(work_item_id="options_horizon_comparison_v1")
+    duplicate = dict(snapshot["pipelines"][0]["ready_work"][0])
+    snapshot["pipelines"][0]["ready_work"].append(duplicate)
+    snapshot["pipelines"][0]["next_action"] = _ppe_pipeline_next_action(duplicate)
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(_config(tmp_path, ppe, feed))
+
+    assert receipt.status == "BLOCKED"
+    assert "not exactly one READY item" in receipt.message
+
+
+def test_other_pipeline_ready_work_same_id_does_not_block_ppe_admission(tmp_path: Path) -> None:
+    snapshot = _snapshot(work_item_id="options_horizon_comparison_v1")
+    work = snapshot["pipelines"][0]["ready_work"][0]
+    snapshot["pipelines"][0]["next_action"] = _ppe_pipeline_next_action(work)
+    _append_pipeline(snapshot, "autobuilder", ["options_horizon_comparison_v1"])
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(_config(tmp_path, ppe, feed))
+
+    assert receipt.status == "QUEUED"
+    assert receipt.work_item_id == "options_horizon_comparison_v1"
+
+
+def test_human_facing_ready_work_array_does_not_block_ppe_admission(tmp_path: Path) -> None:
+    snapshot = _snapshot(work_item_id="options_horizon_comparison_v1")
+    work = snapshot["pipelines"][0]["ready_work"][0]
+    snapshot["pipelines"][0]["next_action"] = _ppe_pipeline_next_action(work)
+    snapshot["status_projection"] = {"ready_work": [dict(work)]}
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(_config(tmp_path, ppe, feed))
+
+    assert receipt.status == "QUEUED"
+    assert receipt.work_item_id == "options_horizon_comparison_v1"
+
+
+def test_missing_ready_work_candidate_is_not_inferred_from_next_action(tmp_path: Path) -> None:
+    snapshot = _snapshot(work_item_id="options_horizon_comparison_v1")
+    work = snapshot["pipelines"][0]["ready_work"][0]
+    snapshot["pipelines"][0]["next_action"] = _ppe_pipeline_next_action(work)
+    snapshot["pipelines"][0]["ready_work"] = []
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(_config(tmp_path, ppe, feed))
+
+    assert receipt.status == "BLOCKED"
+    assert "not exactly one READY item" in receipt.message
+
+
+def test_missing_ready_work_trace_is_not_inferred_from_next_action(tmp_path: Path) -> None:
+    snapshot = _snapshot(work_item_id="options_horizon_comparison_v1")
+    work = snapshot["pipelines"][0]["ready_work"][0]
+    snapshot["pipelines"][0]["next_action"] = _ppe_pipeline_next_action(work)
+    del work["trace"]
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
+    feed = _feed_repo(tmp_path / "feed-work")
+
+    receipt = build_next(_config(tmp_path, ppe, feed))
+
+    assert receipt.status == "BLOCKED"
+    assert "exact work-item source byte boundary is ambiguous" in receipt.message
 
 
 def test_control_smoke_and_closeout_slices_are_not_folded_into_product_lane(

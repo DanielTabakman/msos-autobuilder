@@ -1450,6 +1450,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             work_item_source_bytes = work_item_source_bytes_from_snapshot_json(
                 portfolio_output,
                 work_item_id,
+                pipeline_id=pipeline_id,
             )
             work_item_source_sha256 = work_item_source_sha256_v1(work_item_source_bytes)
         except LifecycleEvidenceError as exc:

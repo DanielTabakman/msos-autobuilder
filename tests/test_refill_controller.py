@@ -9,7 +9,15 @@ from threading import Event, Thread
 
 import pytest
 import yaml
-from test_build_next import _commit_all, _config, _feed_repo, _git, _snapshot, _write_ppe
+from test_build_next import (
+    _catalog_root,
+    _commit_all,
+    _config,
+    _feed_repo,
+    _git,
+    _snapshot,
+    _write_ppe,
+)
 
 import msos_autobuilder.refill_controller as refill_controller
 from msos_autobuilder.cli import _refill_keep_one_command, build_parser
@@ -155,25 +163,19 @@ def test_keep_one_reconciles_through_accepted_build_next_path(tmp_path: Path) ->
     assert policy.last_decision_evidence["build_next"]["job_id"] == report.build_next_receipt.job_id
 
 
-def test_refill_blocks_before_build_next_when_source_freshness_unproven(
+def test_refill_admission_ignores_dirty_external_target_checkout(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = _refill_config(tmp_path)
     _write_host_status(config)
     keep_one_running(config)
     (config.build_next.ppe_repo / "untracked.txt").write_text("dirty\n", encoding="utf-8")
 
-    def fail_if_called(build_config: object) -> object:
-        raise AssertionError("build_next must not be called before source freshness proof")
-
-    monkeypatch.setattr(refill_controller, "build_next", fail_if_called)
     report = reconcile_refill(config)
 
-    assert report.status == "BLOCKED"
-    assert report.build_next_receipt is None
-    assert report.decision_evidence["reason"] == "source_freshness"
-    assert report.decision_evidence["source_freshness"]["block_reason"] == "dirty_checkout"
+    assert report.status == "QUEUED"
+    assert report.build_next_receipt is not None
+    assert report.build_next_receipt.work_item_id == "fixture_work"
 
 
 def test_existing_running_and_queued_jobs_fill_capacity_without_dispatch(tmp_path: Path) -> None:
@@ -279,9 +281,14 @@ def test_queue_and_review_backpressure_fail_closed_before_dispatch(tmp_path: Pat
 
 
 def test_fail_closed_build_next_states_are_reported_distinctly(tmp_path: Path) -> None:
+    blocked_ppe = _write_ppe(tmp_path / "ppe-blocked")
+    for path in _catalog_root(blocked_ppe).glob("*.json"):
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw.pop("target_repository", None)
+        path.write_text(json.dumps(raw) + "\n", encoding="utf-8")
     blocked_config = _refill_config(
         tmp_path / "blocked",
-        ppe=_write_ppe(tmp_path / "ppe-blocked", snapshot=_snapshot(state="BLOCKED")),
+        ppe=blocked_ppe,
         feed=_feed_repo(tmp_path / "feed-blocked"),
     )
     _write_host_status(blocked_config)
@@ -3307,7 +3314,7 @@ def test_unknown_failure_blocks_without_exclusion_or_b_dispatch(tmp_path: Path) 
     assert generation["item_scoped_terminal_exclusions"] == []
 
 
-def test_ppe_source_movement_blocks_exclusion_rerank(tmp_path: Path) -> None:
+def test_ppe_source_movement_does_not_block_exclusion_rerank(tmp_path: Path) -> None:
     ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_two_items())
     feed = _feed_repo(tmp_path / "feed-work")
     config = _refill_config(tmp_path, ppe=ppe, feed=feed)
@@ -3319,15 +3326,16 @@ def test_ppe_source_movement_blocks_exclusion_rerank(tmp_path: Path) -> None:
     _git(ppe, "push", "-q", "origin", "main")
     _archive_attempt(config, job_id)
     _write_state_json(config, "controlled-publisher-seen.json", {job_id: {"status": "published"}})
+    _release_claim_for_job(config, job_id)
 
     report = reconcile_refill(config)
     generation = load_refill_generation(config)
 
     assert moved != pinned
-    assert report.status == "BLOCKED"
-    assert report.build_next_receipt is None
-    assert report.decision_evidence["reason"] == "source_pin_mismatch"
-    assert generation["item_scoped_terminal_exclusions"] == []
+    assert report.status == "QUEUED"
+    assert report.build_next_receipt is not None
+    assert report.build_next_receipt.work_item_id == "fixture_work_b"
+    assert generation["item_scoped_terminal_exclusions"] == ["fixture_work"]
 
 
 def test_pinned_generation_remote_advancement_does_not_mutate_checkout_head(
@@ -3349,17 +3357,18 @@ def test_pinned_generation_remote_advancement_does_not_mutate_checkout_head(
     _git(upstream, "push", "-q", "origin", "main")
     _archive_attempt(config, job_id)
     _write_state_json(config, "controlled-publisher-seen.json", {job_id: {"status": "published"}})
+    _release_claim_for_job(config, job_id)
 
     report = reconcile_refill(config)
 
     assert advanced != pinned
     assert _git(ppe, "rev-parse", "HEAD") == pinned
-    assert report.status == "BLOCKED"
-    assert report.build_next_receipt is None
-    assert report.decision_evidence["reason"] == "source_pin_mismatch"
+    assert report.status == "QUEUED"
+    assert report.build_next_receipt is not None
+    assert report.build_next_receipt.work_item_id == "fixture_work_b"
 
 
-def test_ppe_source_movement_blocks_provider_retry(tmp_path: Path) -> None:
+def test_ppe_source_movement_does_not_block_provider_retry(tmp_path: Path) -> None:
     ppe = _write_ppe(tmp_path / "ppe")
     feed = _feed_repo(tmp_path / "feed-work")
     config = RefillConfig(
@@ -3388,9 +3397,9 @@ def test_ppe_source_movement_blocks_provider_retry(tmp_path: Path) -> None:
 
     report = reconcile_refill(config)
 
-    assert report.status == "BLOCKED"
-    assert report.build_next_receipt is None
-    assert report.decision_evidence["reason"] == "source_pin_mismatch"
+    assert report.status == "QUEUED"
+    assert report.build_next_receipt is not None
+    assert report.build_next_receipt.work_item_id == "fixture_work"
 
 
 def test_pause_resume_at_unchanged_pinned_source_proceeds(tmp_path: Path) -> None:

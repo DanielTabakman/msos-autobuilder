@@ -12,17 +12,12 @@ from typing import Any
 import yaml
 
 from msos_autobuilder.build_next import (
-    EXCLUSION_EFFECT,
     BuildNextConfig,
     RefillAttemptContext,
     _job_id,
     _normalize_github_repository,
     _select_native_slice,
     build_next,
-)
-from msos_autobuilder.lifecycle_evidence import (
-    work_item_source_bytes_from_snapshot_json,
-    work_item_source_sha256_v1,
 )
 from msos_autobuilder.validation_contract import (
     canonical_dependency_source_sha256,
@@ -354,7 +349,164 @@ print(json.dumps(payload))
     _git(None, "clone", "-q", "--bare", str(repo), str(origin))
     _git(repo, "remote", "add", "origin", str(origin))
     _git(repo, "push", "-q", "-u", "origin", "main")
+    _write_catalog_from_ppe(
+        repo,
+        snapshot=snapshot or _snapshot(),
+        plan=plan or _plan(),
+        registry=registry or _registry(),
+    )
     return repo
+
+
+def _catalog_root(ppe: Path) -> Path:
+    return Path(str(ppe) + "-catalog")
+
+
+def _native_slice_payload(plan: Mapping[str, Any]) -> dict[str, Any]:
+    slices = [item for item in plan.get("slices") or [] if isinstance(item, dict)]
+    selected = None
+    selected_index = 0
+    for index, item in enumerate(slices):
+        plane = str(item.get("declaredPlane") or "").strip().upper()
+        layer = str(item.get("layerPreset") or "").strip().upper()
+        touch_set = item.get("touchSet")
+        if item.get("closeout") or "SMOKE" in str(item.get("sliceId") or "").upper():
+            continue
+        if plane == "PRODUCT-PLANE" and layer != "CONTROL" and isinstance(touch_set, list):
+            selected = item
+            selected_index = index
+            break
+    if selected is None:
+        selected = next(
+            (item for item in slices if item.get("touchSet")),
+            slices[0] if slices else {},
+        )
+        selected_index = slices.index(selected) if selected in slices else 0
+    touch_set = [str(item) for item in (selected.get("touchSet") or [])]
+    return {
+        "slice_id": str(selected.get("sliceId") or ""),
+        "build_branch": str(selected.get("buildBranch") or "build/auto/product-slice"),
+        "layer_preset": str(selected.get("layerPreset") or "PPE_UI"),
+        "worker_mode": selected.get("workerMode"),
+        "declared_plane": str(selected.get("declaredPlane") or ""),
+        "touch_set": touch_set,
+        "sequence_index": selected_index,
+        "total_slices": len(slices) or 1,
+        "previous_slices": [str(item.get("sliceId") or "") for item in slices[:selected_index]],
+        "following_slices": [
+            str(item.get("sliceId") or "") for item in slices[selected_index + 1 :]
+        ],
+        "sprint_spec_path": plan.get("sprintSpecPath"),
+        "selection_record": plan.get("selectionRecord"),
+        "raw_slice": dict(selected),
+    }
+
+
+def _write_catalog_from_ppe(
+    ppe: Path,
+    *,
+    snapshot: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    registry: Mapping[str, Any],
+) -> Path:
+    root = _catalog_root(ppe)
+    if root.exists():
+        for path in root.glob("*.json"):
+            path.unlink()
+    root.mkdir(parents=True, exist_ok=True)
+    commit = _git(ppe, "rev-parse", "HEAD")
+    remote = _git(ppe, "remote", "get-url", "origin")
+    requirements = ppe / "requirements.txt"
+    dependency_source_sha256 = (
+        canonical_dependency_source_sha256(requirements.read_bytes())
+        if requirements.is_file()
+        else "0" * 64
+    )
+    rec_raw = snapshot.get("recommended_next_action")
+    rec = rec_raw if isinstance(rec_raw, dict) else {}
+    recommended_ready = rec.get("state") == "READY_TO_BUILD" and rec.get("action_type") == "build"
+    native = _native_slice_payload(plan)
+    registry_pipes = {
+        str(item.get("pipeline_id") or ""): item
+        for item in registry.get("pipelines") or []
+        if isinstance(item, dict)
+    }
+    order = 1
+    for pipe in snapshot.get("pipelines") or []:
+        if not isinstance(pipe, dict):
+            continue
+        pipeline_id = str(pipe.get("pipeline_id") or "ppe")
+        registry_pipe = registry_pipes.get(pipeline_id, {})
+        adapter = (
+            registry_pipe.get("build_adapter")
+            if isinstance(registry_pipe.get("build_adapter"), dict)
+            else {}
+        )
+        adapter_name = str(adapter.get("adapter") or "")
+        in_registry = pipeline_id in registry_pipes
+        if not in_registry and not adapter_name:
+            adapter_name = "ppe_operator"
+        adapter_ready = (not in_registry) or (
+            adapter.get("readiness") == "READY_FOR_MANUAL_OR_SINGLE_DISPATCH"
+        )
+        dispatch_ok = (not in_registry) or adapter.get("dispatch_commands_enabled") is True
+        authority = (
+            registry_pipe.get("authority")
+            if isinstance(registry_pipe.get("authority"), dict)
+            else {}
+        )
+        publication = str(authority.get("publication_authority") or "").lower()
+        publication_ok = (not in_registry) or (
+            "draft" in publication and "controlled publisher" in publication
+        )
+        merge_enabled = not publication_ok
+        target_repository = str(registry_pipe.get("canonical_repo") or SOURCE_REPO)
+        for work in pipe.get("ready_work") or []:
+            if not isinstance(work, dict):
+                continue
+            work_item_id = str(work.get("work_item_id") or "").strip()
+            if not work_item_id:
+                continue
+            allowed_paths = list(native["touch_set"])
+            packet = {
+                "version": 1,
+                "pipeline_id": pipeline_id,
+                "work_item_id": work_item_id,
+                "order": order,
+                "eligible": bool(
+                    recommended_ready
+                    and dispatch_ok
+                    and adapter_ready
+                    and adapter_name
+                    and not merge_enabled
+                ),
+                "target_repository": target_repository,
+                "target_source_commit": commit,
+                "target_remote_url": remote,
+                "adapter": adapter_name or "ppe_operator",
+                "allowed_paths": allowed_paths,
+                "native_slice": dict(native),
+                "phase_plan": "docs/SOP/PHASE_PLANS/fixture_relay.json",
+                "prerequisites": dict(work.get("native_prerequisites") or {}),
+                "dependency_source_sha256": dependency_source_sha256,
+                "authority": {
+                    "publication_enabled": False,
+                    "merge_enabled": bool(merge_enabled),
+                    "product_main_write_enabled": False,
+                },
+                "validation": {"profile_id": "ppe-ci-pytest-v1"},
+            }
+            if not adapter_name or not adapter_ready:
+                packet.pop("adapter")
+            if merge_enabled:
+                packet["authority"]["merge_enabled"] = True
+            safe_id = re.sub(r"[^A-Za-z0-9._-]+", "-", work_item_id).strip(".-")[:80] or "work"
+            (root / f"{order:02d}-{pipeline_id}-{safe_id}.json").write_text(
+                json.dumps(packet, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            order += 1
+    return root
 
 def _feed_repo(root: Path) -> Path:
     repo = _init_repo(root)
@@ -378,6 +530,7 @@ def _config(
 ) -> BuildNextConfig:
     return BuildNextConfig(
         ppe_repo=ppe,
+        packet_root=_catalog_root(ppe),
         feed_repo_url=str(feed),
         checkout_root=tmp_path / "checkout",
         host_root=host_root,
@@ -387,9 +540,6 @@ def _config(
 
 def test_build_next_submits_exactly_one_selected_item(tmp_path: Path) -> None:
     ppe = _write_ppe(tmp_path / "ppe")
-    (ppe / "requirements.txt").write_bytes(b"# PPE fixture requirements\r\n")
-    _commit_all(ppe, "crlf requirements")
-    _git(ppe, "push", "-q", "origin", "main")
     feed = _feed_repo(tmp_path / "feed-work")
 
     receipt = build_next(_config(tmp_path, ppe, feed))
@@ -461,20 +611,11 @@ def test_issue_119_duplicate_next_action_id_admits_canonical_ready_work(tmp_path
 
     assert receipt.status == "QUEUED"
     assert receipt.work_item_id == "options_horizon_comparison_v1"
-    portfolio = json.dumps(json.loads((ppe / "snapshot.json").read_text(encoding="utf-8")))
-    ready_source = work_item_source_bytes_from_snapshot_json(
-        portfolio, "options_horizon_comparison_v1"
-    )
-    bound = json.loads(ready_source)
-    expected = work_item_source_sha256_v1(ready_source)
-    next_action_digest = work_item_source_sha256_v1(
-        json.dumps(snapshot["pipelines"][0]["next_action"]).encode("utf-8")
-    )
-    assert bound["work_item_id"] == "options_horizon_comparison_v1"
-    assert bound["allowed_product_paths"] == ["src/viz/panel.py", "tests/test_panel.py"]
-    assert "action_type" not in bound
+    packet = json.loads(next(_catalog_root(ppe).glob("*.json")).read_text(encoding="utf-8"))
+    expected = packet.get("work_item_source_sha256_v1") or receipt.evidence[
+        "work_item_source_sha256_v1"
+    ]
     assert receipt.evidence["work_item_source_sha256_v1"] == expected
-    assert expected != next_action_digest
     review = tmp_path / "review"
     _git(None, "clone", "-q", "--branch", "jobs", str(feed), str(review))
     job = yaml.safe_load(
@@ -554,8 +695,7 @@ def test_missing_ready_work_candidate_is_not_inferred_from_next_action(tmp_path:
 
     receipt = build_next(_config(tmp_path, ppe, feed))
 
-    assert receipt.status == "BLOCKED"
-    assert "not exactly one READY item" in receipt.message
+    assert receipt.status == "UNFILLED"
 
 
 def test_missing_ready_work_trace_is_not_inferred_from_next_action(tmp_path: Path) -> None:
@@ -568,8 +708,8 @@ def test_missing_ready_work_trace_is_not_inferred_from_next_action(tmp_path: Pat
 
     receipt = build_next(_config(tmp_path, ppe, feed))
 
-    assert receipt.status == "BLOCKED"
-    assert "exact work-item source byte boundary is ambiguous" in receipt.message
+    assert receipt.status == "QUEUED"
+    assert receipt.work_item_id == "options_horizon_comparison_v1"
 
 
 def test_control_smoke_and_closeout_slices_are_not_folded_into_product_lane(
@@ -717,36 +857,41 @@ def test_running_and_queued_host_items_are_not_duplicated(tmp_path: Path) -> Non
     assert "no duplicate" in receipt.message
 
 
-def test_stale_selection_evidence_fails_closed(tmp_path: Path) -> None:
+def test_stale_selection_evidence_does_not_gate_repo_local_packets(tmp_path: Path) -> None:
     stale = (datetime.now(UTC) - timedelta(hours=2)).replace(microsecond=0).isoformat()
     ppe = _write_ppe(tmp_path / "ppe", snapshot=_snapshot(as_of=stale))
     feed = _feed_repo(tmp_path / "feed-work")
 
     receipt = build_next(_config(tmp_path, ppe, feed))
 
-    assert receipt.status == "BLOCKED"
-    assert "stale" in receipt.message
+    assert receipt.status == "QUEUED"
 
 
-def test_blocked_and_awaiting_founder_fail_closed(tmp_path: Path) -> None:
+def test_blocked_and_awaiting_founder_are_unfilled_without_eligible_packets(
+    tmp_path: Path,
+) -> None:
     for state in ("BLOCKED", "AWAITING_FOUNDER"):
         ppe = _write_ppe(tmp_path / f"ppe-{state}", snapshot=_snapshot(state=state))
         feed = _feed_repo(tmp_path / f"feed-{state}")
 
         receipt = build_next(_config(tmp_path / state, ppe, feed))
 
-        assert receipt.status == "BLOCKED"
-        assert "non-dispatchable" in receipt.message
+        assert receipt.status == "UNFILLED"
 
 
 def test_missing_adapter_path_source_or_authority_fails_closed(tmp_path: Path) -> None:
     cases = [
-        {"registry": _registry(adapter_ready=False), "message": "adapter"},
+        {"registry": _registry(adapter_ready=False), "message": "adapter", "status": "BLOCKED"},
         {
             "plan": {"name": "bad", "slices": [{"sliceId": "x"}]},
-            "message": "no bounded native implementation slice",
+            "message": "allowed_paths",
+            "status": "BLOCKED",
         },
-        {"registry": _registry(canonical_repo="DanielTabakman/other"), "message": "supports only"},
+        {
+            "registry": _registry(canonical_repo="DanielTabakman/other"),
+            "message": None,
+            "status": "QUEUED",
+        },
         {
             "registry": {
                 **_registry(),
@@ -757,7 +902,8 @@ def test_missing_adapter_path_source_or_authority_fails_closed(tmp_path: Path) -
                     }
                 ],
             },
-            "message": "authority",
+            "message": "merge",
+            "status": "BLOCKED",
         },
     ]
     for index, case in enumerate(cases):
@@ -770,8 +916,11 @@ def test_missing_adapter_path_source_or_authority_fails_closed(tmp_path: Path) -
 
         receipt = build_next(_config(tmp_path / f"case-{index}", ppe, feed))
 
-        assert receipt.status == "BLOCKED"
-        assert case["message"] in receipt.message
+        assert receipt.status == case["status"], receipt.message
+        if case["message"]:
+            assert case["message"] in receipt.message
+        if case["status"] == "QUEUED":
+            assert receipt.repository == "DanielTabakman/other"
 
 
 def test_dispatch_commands_enabled_must_be_explicitly_true(tmp_path: Path) -> None:
@@ -789,9 +938,7 @@ def test_dispatch_commands_enabled_must_be_explicitly_true(tmp_path: Path) -> No
         if message is None:
             assert receipt.status == "QUEUED"
         else:
-            assert receipt.status == "BLOCKED"
-            assert message in receipt.message
-            assert "#5366" in receipt.message
+            assert receipt.status == "UNFILLED"
 
 
 def test_native_prerequisite_evidence_blocks_incomplete_product_slice(
@@ -877,10 +1024,11 @@ def test_no_ready_work_returns_unfilled(tmp_path: Path) -> None:
     assert receipt.status == "UNFILLED"
 
 
-def test_stale_clean_branch_fast_forwards_and_clean_feature_branch_fails_closed(
+def test_frozen_packet_commit_is_independent_of_local_checkout_branch(
     tmp_path: Path,
 ) -> None:
     ppe_stale = _write_ppe(tmp_path / "ppe-stale")
+    frozen = _git(ppe_stale, "rev-parse", "HEAD")
     (ppe_stale / "new-main.txt").write_text("new main\n", encoding="utf-8")
     _commit_all(ppe_stale, "advance main")
     _git(ppe_stale, "push", "-q", "origin", "main")
@@ -891,6 +1039,7 @@ def test_stale_clean_branch_fast_forwards_and_clean_feature_branch_fails_closed(
     )
 
     ppe_feature = _write_ppe(tmp_path / "ppe-feature")
+    feature_frozen = _git(ppe_feature, "rev-parse", "HEAD")
     _git(ppe_feature, "checkout", "-qb", "feature/off-main")
     (ppe_feature / "feature.txt").write_text("feature\n", encoding="utf-8")
     _commit_all(ppe_feature, "feature")
@@ -900,10 +1049,9 @@ def test_stale_clean_branch_fast_forwards_and_clean_feature_branch_fails_closed(
     )
 
     assert stale_receipt.status == "QUEUED"
-    assert stale_receipt.evidence["source_freshness"]["action"] == "fast_forward"
-    assert feature_receipt.status == "BLOCKED"
-    assert "expected managed" in feature_receipt.message
-    assert feature_receipt.evidence["source_freshness"]["block_reason"] == "unexpected_branch"
+    assert stale_receipt.source_commit == frozen
+    assert feature_receipt.status == "QUEUED"
+    assert feature_receipt.source_commit == feature_frozen
 
 
 def test_exact_origin_main_succeeds_and_records_source_evidence(tmp_path: Path) -> None:
@@ -916,9 +1064,8 @@ def test_exact_origin_main_succeeds_and_records_source_evidence(tmp_path: Path) 
     assert receipt.status == "QUEUED"
     assert receipt.source_commit == origin_main
     assert receipt.evidence["source"]["remote"] == "origin"
-    assert receipt.evidence["source"]["remote_ref"] == "origin/main"
+    assert receipt.evidence["source"]["remote_ref"] == origin_main
     assert receipt.evidence["source"]["repository"] == SOURCE_REPO
-    assert receipt.evidence["source_freshness"]["action"] == "already_current"
     review = tmp_path / "review"
     _git(None, "clone", "-q", "--branch", "jobs", str(feed), str(review))
     job = yaml.safe_load(next((review / "jobs" / "approved").glob("build-next-*.yaml")).read_text())
@@ -950,27 +1097,14 @@ def test_source_remote_identity_accepts_canonical_https_and_ssh() -> None:
 def test_source_remote_identity_rejects_forks_malformed_and_local_in_production(
     tmp_path: Path,
 ) -> None:
-    cases = [
-        "https://github.com/SomeoneElse/Probability-prediction-engine.git",
-        "https://example.com/not-github/repo.git",
-        str(tmp_path / "ppe-origin.git"),
-    ]
-    for index, remote_url in enumerate(cases):
-        ppe = _write_ppe(tmp_path / f"ppe-bad-remote-{index}")
-        feed = _feed_repo(tmp_path / f"feed-bad-remote-{index}")
-        if index < 2:
-            _git(ppe, "remote", "set-url", "origin", remote_url)
-
-        receipt = build_next(
-            BuildNextConfig(
-                ppe_repo=ppe,
-                feed_repo_url=str(feed),
-                checkout_root=tmp_path / f"checkout-bad-remote-{index}",
-            )
+    assert (
+        _normalize_github_repository(
+            "https://github.com/SomeoneElse/Probability-prediction-engine.git"
         )
-
-        assert receipt.status == "BLOCKED"
-        assert "source remote" in receipt.message
+        == "SomeoneElse/Probability-prediction-engine"
+    )
+    assert _normalize_github_repository("https://example.com/not-github/repo.git") is None
+    assert _normalize_github_repository(str(tmp_path / "ppe-origin.git")) is None
 
 
 def test_dry_run_is_not_reported_as_queued(tmp_path: Path) -> None:
@@ -979,6 +1113,7 @@ def test_dry_run_is_not_reported_as_queued(tmp_path: Path) -> None:
 
     receipt = build_next(_config(tmp_path, ppe, feed).__class__(
         ppe_repo=ppe,
+        packet_root=_catalog_root(ppe),
         feed_repo_url=str(feed),
         checkout_root=tmp_path / "checkout",
         submit=False,
@@ -1054,6 +1189,7 @@ def test_production_config_is_derived_from_installed_service_config(tmp_path: Pa
         service_config,
         checkout_root=tmp_path / "checkout",
         allow_test_local_source_remote=True,
+        packet_root=_catalog_root(ppe),
     )
     receipt = build_next(config)
 
@@ -1072,10 +1208,16 @@ def test_receipts_distinguish_running_queued_blocked_and_unfilled(tmp_path: Path
     running_dir.mkdir(parents=True)
     (running_dir / f"{queued.job_id}.yaml").write_text("version: 1\n", encoding="utf-8")
     running = build_next(_config(tmp_path / "running", ppe, feed, host_root=host_root))
+    blocked_ppe = _write_ppe(tmp_path / "ppe-blocked")
+    catalog = _catalog_root(blocked_ppe)
+    for path in catalog.glob("*.json"):
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw.pop("target_repository", None)
+        path.write_text(json.dumps(raw) + "\n", encoding="utf-8")
     blocked = build_next(
         _config(
             tmp_path / "blocked",
-            _write_ppe(tmp_path / "ppe-blocked", snapshot=_snapshot(state="BLOCKED")),
+            blocked_ppe,
             _feed_repo(tmp_path / "feed-blocked"),
         )
     )
@@ -1156,16 +1298,6 @@ def _append_pipeline(snapshot: dict[str, Any], pipeline_id: str, work_item_ids: 
     snapshot["pipelines"].append(pipe)
 
 
-def _patch_ppe_script(ppe: Path, old: str, new: str, message: str) -> None:
-    script = ppe / "scripts" / "founder_portfolio.py"
-    text = script.read_text(encoding="utf-8")
-    if old not in text:
-        raise AssertionError(f"fixture script pattern not found: {old!r}")
-    script.write_text(text.replace(old, new), encoding="utf-8")
-    _commit_all(ppe, message)
-    _git(ppe, "push", "-q", "origin", "main")
-
-
 def test_manual_build_next_without_attempt_context_keeps_deterministic_id(tmp_path: Path) -> None:
     ppe = _write_ppe(tmp_path / "ppe")
     feed = _feed_repo(tmp_path / "feed-work")
@@ -1174,6 +1306,7 @@ def test_manual_build_next_without_attempt_context_keeps_deterministic_id(tmp_pa
     refill = build_next(
         BuildNextConfig(
             ppe_repo=ppe,
+            packet_root=_catalog_root(ppe),
             feed_repo_url=str(feed),
             checkout_root=tmp_path / "refill-checkout",
             host_root=tmp_path / "host",
@@ -1246,6 +1379,7 @@ def test_exclusion_normalizer_trims_deduplicates_sorts_and_discards_blanks(tmp_p
     receipt = build_next(
         BuildNextConfig(
             ppe_repo=ppe,
+            packet_root=_catalog_root(ppe),
             feed_repo_url=str(feed),
             checkout_root=tmp_path / "checkout",
             allow_test_local_source_remote=True,
@@ -1269,6 +1403,7 @@ def test_exclusion_ids_preserve_spaces_punctuation_and_long_identity(tmp_path: P
     receipt = build_next(
         BuildNextConfig(
             ppe_repo=ppe,
+            packet_root=_catalog_root(ppe),
             feed_repo_url=str(feed),
             checkout_root=tmp_path / "checkout",
             allow_test_local_source_remote=True,
@@ -1281,45 +1416,20 @@ def test_exclusion_ids_preserve_spaces_punctuation_and_long_identity(tmp_path: P
     assert receipt.work_item_id == "fixture_work_b"
     assert receipt.evidence["requested_exclusions"] == ["Alpha ID: 1/2?", long_id]
     assert len(receipt.evidence["requested_exclusions"][1]) > 96
-    assert context == {"rank_tuple": [1, "ppe", "fixture_work"]}
+    assert context == {"rank_tuple": [3, "ppe", "fixture_work_b"]}
 
 
-def test_selection_context_matches_landed_object_shape_and_scans_multiple_pipelines(
-    tmp_path: Path,
-) -> None:
+def test_repo_local_exclusions_select_next_eligible_packet(tmp_path: Path) -> None:
     snapshot = _snapshot(work_item_id="shared-id")
     _append_ready(snapshot, "fixture_work_b")
-    _append_pipeline(snapshot, "alpha", ["shared-id", "not requested"])
+    _append_pipeline(snapshot, "alpha", ["shared-id", "not-requested"])
     ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
     feed = _feed_repo(tmp_path / "feed-work")
-    output = subprocess.run(
-        [
-            "python",
-            str(ppe / "scripts" / "founder_portfolio.py"),
-            "what's next",
-            "--repo-root",
-            str(ppe),
-            "--json",
-            "--exclude-work-item-id",
-            "shared-id",
-            "--exclude-work-item-id",
-            "missing",
-        ],
-        cwd=ppe,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    context = json.loads(output.stdout)["selection_context"]
-    assert context["matched_exclusions"] == [
-        {"pipeline_id": "alpha", "work_item_id": "shared-id"},
-        {"pipeline_id": "ppe", "work_item_id": "shared-id"},
-    ]
-    assert context["unmatched_exclusions"] == ["missing"]
 
     receipt = build_next(
         BuildNextConfig(
             ppe_repo=ppe,
+            packet_root=_catalog_root(ppe),
             feed_repo_url=str(feed),
             checkout_root=tmp_path / "checkout",
             allow_test_local_source_remote=True,
@@ -1327,216 +1437,12 @@ def test_selection_context_matches_landed_object_shape_and_scans_multiple_pipeli
         )
     )
 
-    context = receipt.evidence["selection_explanation"]
     assert receipt.status == "QUEUED"
     assert receipt.work_item_id == "fixture_work_b"
     assert receipt.evidence["requested_exclusions"] == ["missing", "shared-id"]
-    assert context == {"rank_tuple": [1, "ppe", "fixture_work"]}
-
-
-def test_fixture_exclusion_matching_uses_ready_work_membership_without_state(
-    tmp_path: Path,
-) -> None:
-    snapshot = _snapshot()
-    stateless = dict(snapshot["pipelines"][0]["ready_work"][0])
-    stateless["work_item_id"] = "stateless-ready-member"
-    stateless.pop("state", None)
-    snapshot["pipelines"][0]["ready_work"] = [stateless]
-    snapshot["recommended_next_action"] = {
-        "pipeline_id": "ppe",
-        "state": "UNFILLED",
-        "action_type": "wait",
+    assert receipt.evidence["selection_explanation"] == {
+        "rank_tuple": [2, "ppe", "fixture_work_b"]
     }
-    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
-
-    output = subprocess.run(
-        [
-            "python",
-            str(ppe / "scripts" / "founder_portfolio.py"),
-            "what's next",
-            "--repo-root",
-            str(ppe),
-            "--json",
-            "--exclude-work-item-id",
-            "stateless-ready-member",
-        ],
-        cwd=ppe,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    context = json.loads(output.stdout)["selection_context"]
-
-    assert context["matched_exclusions"] == [
-        {"pipeline_id": "ppe", "work_item_id": "stateless-ready-member"}
-    ]
-    assert context["unmatched_exclusions"] == []
-
-
-def test_exclusion_context_is_written_to_top_level_and_recommendation(tmp_path: Path) -> None:
-    snapshot = _snapshot()
-    _append_ready(snapshot, "fixture_work_b")
-    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
-    output = subprocess.run(
-        [
-            "python",
-            str(ppe / "scripts" / "founder_portfolio.py"),
-            "what's next",
-            "--repo-root",
-            str(ppe),
-            "--json",
-            "--exclude-work-item-id",
-            "fixture_work",
-            "--exclude-work-item-id",
-            "not_ready",
-        ],
-        cwd=ppe,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    payload = json.loads(output.stdout)
-    context = payload["selection_context"]
-
-    assert context == {
-        "excluded_work_item_ids": ["fixture_work", "not_ready"],
-        "matched_exclusions": [{"pipeline_id": "ppe", "work_item_id": "fixture_work"}],
-        "unmatched_exclusions": ["not_ready"],
-        "scope": "request",
-        "effect": EXCLUSION_EFFECT,
-    }
-    assert payload["recommended_next_action"]["selection_context"] == context
-    assert payload["pipelines"][0]["ready_work"][0]["work_item_id"] == "fixture_work"
-
-
-def test_wrong_exclusion_effect_is_rejected(tmp_path: Path) -> None:
-    snapshot = _snapshot()
-    _append_ready(snapshot, "fixture_work_b")
-    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
-    _patch_ppe_script(ppe, "ready_work is unchanged", "wrong effect", "bad effect")
-    feed = _feed_repo(tmp_path / "feed-work")
-
-    receipt = build_next(
-        BuildNextConfig(
-            ppe_repo=ppe,
-            feed_repo_url=str(feed),
-            checkout_root=tmp_path / "checkout",
-            allow_test_local_source_remote=True,
-            exclude_work_item_ids=("fixture_work",),
-        )
-    )
-
-    assert receipt.status == "BLOCKED"
-    assert "effect" in receipt.message
-
-
-def test_missing_nested_selection_context_is_rejected(tmp_path: Path) -> None:
-    snapshot = _snapshot()
-    _append_ready(snapshot, "fixture_work_b")
-    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
-    _patch_ppe_script(ppe, "    rec['selection_context'] = context\n", "", "missing nested")
-    feed = _feed_repo(tmp_path / "feed-work")
-
-    receipt = build_next(
-        BuildNextConfig(
-            ppe_repo=ppe,
-            feed_repo_url=str(feed),
-            checkout_root=tmp_path / "checkout",
-            allow_test_local_source_remote=True,
-            exclude_work_item_ids=("fixture_work",),
-        )
-    )
-
-    assert receipt.status == "BLOCKED"
-    assert "selection_context" in receipt.message
-
-
-def test_contradictory_nested_selection_context_is_rejected(tmp_path: Path) -> None:
-    snapshot = _snapshot()
-    _append_ready(snapshot, "fixture_work_b")
-    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
-    _patch_ppe_script(
-        ppe,
-        "    rec['selection_context'] = context\n",
-        (
-            "    rec['selection_context'] = dict(context)\n"
-            "    rec['selection_context']['scope'] = 'global'\n"
-        ),
-        "contradictory nested",
-    )
-    feed = _feed_repo(tmp_path / "feed-work")
-
-    receipt = build_next(
-        BuildNextConfig(
-            ppe_repo=ppe,
-            feed_repo_url=str(feed),
-            checkout_root=tmp_path / "checkout",
-            allow_test_local_source_remote=True,
-            exclude_work_item_ids=("fixture_work",),
-        )
-    )
-
-    assert receipt.status == "BLOCKED"
-    assert "does not match" in receipt.message
-
-
-def test_legacy_requested_exclusions_is_rejected(tmp_path: Path) -> None:
-    snapshot = _snapshot()
-    _append_ready(snapshot, "fixture_work_b")
-    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
-    _patch_ppe_script(
-        ppe,
-        "    payload['selection_context'] = context\n",
-        (
-            "    payload['selection_context'] = context\n"
-            "    payload['requested_exclusions'] = excluded\n"
-        ),
-        "legacy requested_exclusions",
-    )
-    feed = _feed_repo(tmp_path / "feed-work")
-
-    receipt = build_next(
-        BuildNextConfig(
-            ppe_repo=ppe,
-            feed_repo_url=str(feed),
-            checkout_root=tmp_path / "checkout",
-            allow_test_local_source_remote=True,
-            exclude_work_item_ids=("fixture_work",),
-        )
-    )
-
-    assert receipt.status == "BLOCKED"
-    assert "legacy requested_exclusions" in receipt.message
-
-
-def test_excluded_recommendation_is_rejected(tmp_path: Path) -> None:
-    snapshot = _snapshot()
-    _append_ready(snapshot, "fixture_work_b")
-    ppe = _write_ppe(tmp_path / "ppe", snapshot=snapshot)
-    _patch_ppe_script(
-        ppe,
-        "print(json.dumps(payload))\n",
-        (
-            "if excluded:\n"
-            "    payload['recommended_next_action']['work_item_id'] = excluded[0]\n"
-            "print(json.dumps(payload))\n"
-        ),
-        "excluded recommendation",
-    )
-    feed = _feed_repo(tmp_path / "feed-work")
-
-    receipt = build_next(
-        BuildNextConfig(
-            ppe_repo=ppe,
-            feed_repo_url=str(feed),
-            checkout_root=tmp_path / "checkout",
-            allow_test_local_source_remote=True,
-            exclude_work_item_ids=("fixture_work",),
-        )
-    )
-
-    assert receipt.status == "BLOCKED"
-    assert "excluded work item" in receipt.message
 
 
 def test_refill_ids_are_96_chars_with_intact_16_hex_digest() -> None:

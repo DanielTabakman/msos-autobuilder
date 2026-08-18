@@ -1,8 +1,8 @@
 """One-shot founder ``build next`` dispatcher.
 
-The dispatcher consumes PPE's read-only founder portfolio output and submits one
-already-approved immutable job to the existing Autobuilder feed. It does not own
-portfolio readiness or priority policy.
+The dispatcher selects one Autobuilder-owned immutable approved job packet and
+submits it to the existing Autobuilder feed. Target repositories are packet data,
+fetched only after admission at the exact frozen commit.
 """
 
 from __future__ import annotations
@@ -14,10 +14,8 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import urllib.error
-import urllib.parse
 import urllib.request
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -28,25 +26,31 @@ from typing import Any
 import yaml
 
 from .codex_shadow import load_codex_host_config
+from .job_packet import (
+    DEFAULT_CATALOG_RELPATH,
+    AdmittedTargetIdentity,
+    ApprovedJobPacket,
+    JobPacketError,
+    assert_identity_not_redirected,
+    fetch_declared_target,
+    freeze_admitted_identity,
+    load_packet_dir,
+    prove_declared_commit_fetchable,
+    select_next_packet,
+)
 from .lifecycle_evidence import (
-    LifecycleEvidenceError,
     SourceRef,
     attempt_identity,
     emit_lifecycle_evidence,
     record_producer_evidence_error,
-    work_item_source_bytes_from_snapshot_json,
-    work_item_source_sha256_v1,
 )
 from .managed_source import (
-    ManagedSourceSyncError,
     SourceIdentity,
-    ensure_managed_source_fresh,
     normalize_github_repository,
 )
 from .persistent_host import HostPaths, load_persistent_host_config, parse_host_job
 from .validation_contract import (
     build_ppe_validation_contract,
-    canonical_dependency_source_sha256,
 )
 from .work_admission import (
     AdmissionRequest,
@@ -62,8 +66,6 @@ from .work_admission import (
 class BuildNextError(RuntimeError):
     """Raised when build-next validation or feed submission fails closed."""
 
-
-SOURCE_REPOSITORY = "DanielTabakman/Probability-prediction-engine"
 
 FORBIDDEN_AUTHORITY_PATHS = (
     ".git/**",
@@ -196,8 +198,10 @@ class RefillAttemptContext:
 
 @dataclass(frozen=True)
 class BuildNextConfig:
-    ppe_repo: Path
     feed_repo_url: str
+    ppe_repo: Path | None = None
+    packet_root: Path | None = None
+    catalog_path: str = DEFAULT_CATALOG_RELPATH
     jobs_branch: str = "jobs"
     jobs_path: str = "jobs/approved"
     checkout_root: Path | None = None
@@ -206,12 +210,13 @@ class BuildNextConfig:
     requested_by: str = "founder build next"
     submit: bool = True
     source_remote: str = "origin"
-    source_ref: str = "main"
-    expected_source_repository: str = SOURCE_REPOSITORY
+    source_ref: str = "HEAD"
+    expected_source_repository: str = ""
     allow_test_local_source_remote: bool = False
     exclude_work_item_ids: tuple[str, ...] = ()
     refill_attempt: RefillAttemptContext | None = None
     expected_source_commit: str | None = None
+    target_checkout_root: Path | None = None
 
     def __post_init__(self) -> None:
         if not self.feed_repo_url.strip():
@@ -221,12 +226,13 @@ class BuildNextConfig:
         rel = Path(self.jobs_path)
         if rel.is_absolute() or ".." in rel.parts:
             raise ValueError("jobs_path must be a safe relative path")
+        catalog = Path(self.catalog_path)
+        if catalog.is_absolute() or ".." in catalog.parts:
+            raise ValueError("catalog_path must be a safe relative path")
         if self.max_snapshot_age_seconds < 1:
             raise ValueError("max_snapshot_age_seconds must be positive")
         if not self.source_remote.strip() or not self.source_ref.strip():
             raise ValueError("source remote/ref are required")
-        if not self.expected_source_repository.strip():
-            raise ValueError("expected_source_repository is required")
 
     @classmethod
     def from_service_config(
@@ -238,6 +244,7 @@ class BuildNextConfig:
         requested_by: str = "founder build next",
         submit: bool = True,
         allow_test_local_source_remote: bool = False,
+        packet_root: Path | None = None,
     ) -> BuildNextConfig:
         service = load_persistent_host_config(service_config)
         if service.feed is None:
@@ -245,6 +252,7 @@ class BuildNextConfig:
         host_config = load_codex_host_config(service.codex_host_config)
         return cls(
             ppe_repo=host_config.source_repo,
+            packet_root=packet_root,
             feed_repo_url=service.feed.repo_url,
             jobs_branch=service.feed.branch,
             jobs_path=service.feed.relative_path,
@@ -280,27 +288,14 @@ def _utc_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _parse_utc(value: Any) -> datetime | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        if text.endswith("Z"):
-            text = text[:-1] + "+00:00"
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
-
-
 def _run(
     argv: Sequence[str],
     *,
     cwd: Path | None = None,
     accepted: tuple[int, ...] = (0,),
 ) -> subprocess.CompletedProcess[str]:
+    if any("founder_portfolio.py" in str(part) for part in argv):
+        raise BuildNextError("selector/refill path must not invoke founder_portfolio.py")
     proc = subprocess.run(
         list(argv),
         cwd=cwd,
@@ -333,29 +328,86 @@ def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _load_json(path: Path, label: str) -> dict[str, Any]:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise BuildNextError(f"{label} is not valid JSON: {path}") from exc
-    if not isinstance(data, dict):
-        raise BuildNextError(f"{label} must be a JSON object")
-    return data
+def _load_catalog(config: BuildNextConfig) -> tuple[ApprovedJobPacket, ...]:
+    if config.packet_root is not None:
+        return load_packet_dir(config.packet_root.expanduser().resolve())
+    checkout = _prepare_feed_checkout(config)
+    return load_packet_dir(checkout / config.catalog_path)
 
 
-EXCLUSION_EFFECT = (
-    "exclusions remove matching READY candidates from recommendation eligibility only; "
-    "ready_work is unchanged"
-)
+def _source_identity_from_packet(packet: ApprovedJobPacket) -> SourceIdentity:
+    return SourceIdentity(
+        remote="origin",
+        remote_url=packet.target_remote_url,
+        repository=packet.target_repository,
+        ref="HEAD",
+        remote_ref=packet.target_source_commit,
+        commit=packet.target_source_commit,
+    )
+
+
+def _native_slice_from_packet(packet: ApprovedJobPacket) -> NativeSlicePacket:
+    raw = dict(packet.native_slice)
+    touch_set_raw = raw.get("touch_set") or raw.get("touchSet") or list(packet.allowed_paths)
+    if not isinstance(touch_set_raw, list) or not touch_set_raw:
+        raise BuildNextError("approved job packet lacks a writable touch set")
+    touch_set = tuple(_validate_writable_path(str(item)) for item in touch_set_raw)
+    if touch_set != packet.allowed_paths:
+        raise BuildNextError(
+            "approved job packet allowed_paths do not match native slice touch set"
+        )
+    if len(set(touch_set)) != len(touch_set):
+        raise BuildNextError("approved job packet has duplicate touch paths")
+    slice_id = str(raw.get("slice_id") or raw.get("sliceId") or "").strip()
+    build_branch = str(raw.get("build_branch") or raw.get("buildBranch") or "").strip()
+    layer_preset = str(raw.get("layer_preset") or raw.get("layerPreset") or "").strip()
+    if not slice_id or not build_branch or not layer_preset:
+        raise BuildNextError("approved job packet native slice is missing identity fields")
+    previous = raw.get("previous_slices") or raw.get("previousSlices") or ()
+    following = raw.get("following_slices") or raw.get("followingSlices") or ()
+    return NativeSlicePacket(
+        slice_id=slice_id,
+        build_branch=build_branch,
+        layer_preset=layer_preset,
+        worker_mode=str(raw.get("worker_mode") or raw.get("workerMode") or "").strip() or None,
+        declared_plane=str(raw.get("declared_plane") or raw.get("declaredPlane") or "").strip(),
+        touch_set=touch_set,
+        sequence_index=int(raw.get("sequence_index") or raw.get("sequenceIndex") or 0),
+        total_slices=int(raw.get("total_slices") or raw.get("totalSlices") or 1),
+        previous_slices=tuple(str(item) for item in previous),
+        following_slices=tuple(str(item) for item in following),
+        sprint_spec_path=(
+            _safe_relative(
+                raw.get("sprint_spec_path") or raw.get("sprintSpecPath"),
+                "sprintSpecPath",
+            )
+            if (raw.get("sprint_spec_path") or raw.get("sprintSpecPath"))
+            else None
+        ),
+        selection_record=(
+            _safe_relative(
+                raw.get("selection_record") or raw.get("selectionRecord"),
+                "selectionRecord",
+            )
+            if (raw.get("selection_record") or raw.get("selectionRecord"))
+            else None
+        ),
+        raw_slice=raw,
+    )
+
+
+def _target_checkout_root(config: BuildNextConfig, job_id: str) -> Path:
+    root = config.target_checkout_root
+    if root is None:
+        default_feed = Path(tempfile.gettempdir()) / "msos-autobuilder-build-next-feed"
+        base = config.checkout_root or default_feed
+        root = Path(base) / "admitted-targets"
+    return root.expanduser().resolve() / job_id
 
 
 def _safe_id(value: str, *, fallback: str = "item") -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip()).strip(".-")
     return cleaned[:96] or fallback
-
-
-def _normalize_work_item_id(value: Any) -> str:
-    return _safe_id(str(value or ""), fallback="work-item")
 
 
 def _normalize_excluded_work_item_ids(values: Sequence[Any]) -> list[str]:
@@ -368,107 +420,6 @@ def _safe_relative(value: Any, label: str) -> str:
     if not text or path.is_absolute() or ".." in path.parts:
         raise BuildNextError(f"{label} must be a safe relative path")
     return path.as_posix()
-
-
-def _collect_snapshot(ppe_repo: Path, exclude_work_item_ids: Sequence[str] = ()) -> dict[str, Any]:
-    script = ppe_repo / "scripts" / "founder_portfolio.py"
-    if not script.is_file():
-        raise BuildNextError(f"PPE founder portfolio script is missing: {script}")
-    argv = [
-        sys.executable,
-        str(script),
-        "what's next",
-        "--repo-root",
-        str(ppe_repo),
-        "--json",
-    ]
-    for work_item_id in _normalize_excluded_work_item_ids(exclude_work_item_ids):
-        argv.extend(["--exclude-work-item-id", work_item_id])
-    proc = _run(
-        argv,
-        cwd=ppe_repo,
-    )
-    try:
-        payload = json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        raise BuildNextError("PPE founder portfolio output was not JSON") from exc
-    if not isinstance(payload, dict):
-        raise BuildNextError("PPE founder portfolio output must be an object")
-    payload["__portfolio_output_json"] = proc.stdout
-    return payload
-
-
-def _validate_selection_context(
-    snapshot: Mapping[str, Any],
-    requested_exclusions: Sequence[str],
-) -> None:
-    requested = _normalize_excluded_work_item_ids(requested_exclusions)
-    if not requested:
-        return
-    if "requested_exclusions" in snapshot:
-        raise BuildNextError("PPE selection_context uses legacy requested_exclusions")
-    context = snapshot.get("selection_context")
-    if not isinstance(context, dict):
-        raise BuildNextError("PPE selection_context is missing for requested exclusions")
-    if set(context) != {
-        "scope",
-        "excluded_work_item_ids",
-        "matched_exclusions",
-        "unmatched_exclusions",
-        "effect",
-    }:
-        raise BuildNextError("PPE selection_context has unexpected fields")
-    if context.get("scope") != "request":
-        raise BuildNextError("PPE selection_context scope must be request-scoped")
-    if context.get("effect") != EXCLUSION_EFFECT:
-        raise BuildNextError("PPE selection_context effect does not match the landed contract")
-    for field in ("excluded_work_item_ids", "matched_exclusions", "unmatched_exclusions"):
-        if not isinstance(context.get(field), list):
-            raise BuildNextError(f"PPE selection_context {field} is malformed")
-    if context["excluded_work_item_ids"] != requested:
-        raise BuildNextError("PPE selection_context excluded_work_item_ids did not match request")
-    if not all(isinstance(item, str) for item in context["excluded_work_item_ids"]):
-        raise BuildNextError("PPE selection_context excluded_work_item_ids is malformed")
-    unmatched = context["unmatched_exclusions"]
-    if not all(isinstance(item, str) for item in unmatched):
-        raise BuildNextError("PPE selection_context unmatched_exclusions is malformed")
-    if unmatched != sorted(unmatched) or len(unmatched) != len(set(unmatched)):
-        raise BuildNextError("PPE selection_context unmatched_exclusions is not canonical")
-    matched_items = context["matched_exclusions"]
-    if not all(
-        isinstance(item, dict)
-        and set(item) == {"pipeline_id", "work_item_id"}
-        and isinstance(item["pipeline_id"], str)
-        and isinstance(item["work_item_id"], str)
-        and item["pipeline_id"].strip()
-        and item["work_item_id"].strip()
-        for item in matched_items
-    ):
-        raise BuildNextError("PPE selection_context matched_exclusions is malformed")
-    matched_pairs = [(item["pipeline_id"], item["work_item_id"]) for item in matched_items]
-    if matched_pairs != sorted(matched_pairs) or len(matched_pairs) != len(set(matched_pairs)):
-        raise BuildNextError("PPE selection_context matched_exclusions is not canonical")
-    requested_set = set(requested)
-    matched_ids = {work_item_id for _, work_item_id in matched_pairs}
-    unmatched_ids = set(unmatched)
-    if matched_ids & unmatched_ids:
-        raise BuildNextError("PPE selection_context matched and unmatched exclusions overlap")
-    if not matched_ids <= requested_set or not unmatched_ids <= requested_set:
-        raise BuildNextError("PPE selection_context includes unknown exclusions")
-    if matched_ids | unmatched_ids != requested_set:
-        raise BuildNextError("PPE selection_context did not account for every requested exclusion")
-    rec = snapshot.get("recommended_next_action")
-    if not isinstance(rec, dict):
-        raise BuildNextError("PPE recommended_next_action is missing for requested exclusions")
-    if "requested_exclusions" in rec:
-        raise BuildNextError("PPE recommended_next_action uses legacy requested_exclusions")
-    if rec.get("selection_context") != context:
-        raise BuildNextError(
-            "PPE recommended_next_action selection_context does not match top-level context"
-        )
-    rec_work_item_id = rec.get("work_item_id")
-    if isinstance(rec_work_item_id, str) and rec_work_item_id in requested_set:
-        raise BuildNextError("PPE recommended excluded work item despite request exclusions")
 
 
 def _normalize_github_repository(url: str) -> str | None:
@@ -618,105 +569,6 @@ class GitHubWorkDiscoveryClient:
                 )
             )
         return tuple(candidates)
-
-
-def _pipeline(registry: Mapping[str, Any], pipeline_id: str) -> dict[str, Any]:
-    for raw in registry.get("pipelines") or []:
-        if isinstance(raw, dict) and str(raw.get("pipeline_id") or "") == pipeline_id:
-            return raw
-    raise BuildNextError(f"pipeline {pipeline_id!r} is not registered")
-
-
-def _snapshot_pipeline(snapshot: Mapping[str, Any], pipeline_id: str) -> dict[str, Any]:
-    for raw in snapshot.get("pipelines") or []:
-        if isinstance(raw, dict) and str(raw.get("pipeline_id") or "") == pipeline_id:
-            return raw
-    raise BuildNextError(f"pipeline {pipeline_id!r} is missing from selection output")
-
-
-def _ready_work(pipe: Mapping[str, Any], work_item_id: str) -> dict[str, Any]:
-    matches = [
-        item
-        for item in pipe.get("ready_work") or []
-        if isinstance(item, dict) and str(item.get("work_item_id") or "") == work_item_id
-    ]
-    if len(matches) != 1:
-        raise BuildNextError(f"selected work item {work_item_id!r} is not exactly one READY item")
-    work = dict(matches[0])
-    if work.get("state") != "READY_TO_BUILD":
-        raise BuildNextError(f"selected work item {work_item_id!r} is not READY_TO_BUILD")
-    return work
-
-
-def _validate_snapshot(snapshot: Mapping[str, Any], max_age_seconds: int) -> None:
-    if snapshot.get("version") != 1 or snapshot.get("read_only") is not True:
-        raise BuildNextError("PPE selection output must be read-only version 1")
-    errors = snapshot.get("registry_errors") or []
-    if errors:
-        raise BuildNextError(f"PPE registry validation errors: {errors}")
-    as_of = _parse_utc(snapshot.get("as_of"))
-    if as_of is None:
-        raise BuildNextError("PPE selection output is missing a valid as_of timestamp")
-    age = (datetime.now(UTC) - as_of).total_seconds()
-    if age > max_age_seconds:
-        raise BuildNextError(f"PPE selection output is stale: age {int(age)}s")
-
-
-def _validate_registry_adapter(registry_pipe: Mapping[str, Any]) -> None:
-    if registry_pipe.get("registration_stage") not in {"EXECUTION_READY", "SCHEDULE_READY"}:
-        raise BuildNextError("selected pipeline is not execution-ready")
-    if registry_pipe.get("canonical_repo") != SOURCE_REPOSITORY:
-        raise BuildNextError("v1 supports only the registered PPE/MSOS product repository")
-    scheduling = (
-        registry_pipe.get("scheduling")
-        if isinstance(registry_pipe.get("scheduling"), dict)
-        else {}
-    )
-    if scheduling.get("build_next_eligible") is not True:
-        raise BuildNextError("selected pipeline is not build-next eligible")
-    adapter = (
-        registry_pipe.get("build_adapter")
-        if isinstance(registry_pipe.get("build_adapter"), dict)
-        else {}
-    )
-    if adapter.get("adapter") != "ppe_operator":
-        raise BuildNextError("selected pipeline does not use the registered PPE build adapter")
-    if adapter.get("readiness") != "READY_FOR_MANUAL_OR_SINGLE_DISPATCH":
-        raise BuildNextError("selected pipeline build adapter is not single-dispatch ready")
-    if adapter.get("dispatch_commands_enabled") is not True:
-        raise BuildNextError(
-            "selected pipeline build adapter has dispatch_commands_enabled disabled; "
-            "PPE issue #5366 must explicitly enable dispatch before Autobuilder can submit"
-        )
-    authority = (
-        registry_pipe.get("authority")
-        if isinstance(registry_pipe.get("authority"), dict)
-        else {}
-    )
-    publication = str(authority.get("publication_authority") or "").lower()
-    if "draft" not in publication or "controlled publisher" not in publication:
-        raise BuildNextError(
-            "selected pipeline authority does not preserve controlled draft publication"
-        )
-
-
-def _validate_pipeline_runtime(pipe: Mapping[str, Any]) -> None:
-    if pipe.get("state") != "READY_TO_BUILD":
-        raise BuildNextError("selected pipeline is not READY_TO_BUILD")
-    if pipe.get("running_work"):
-        raise BuildNextError("selected pipeline already has running work")
-    if pipe.get("queued_work"):
-        raise BuildNextError("selected pipeline already has queued work")
-    if pipe.get("backpressure"):
-        raise BuildNextError("selected pipeline has backpressure")
-    stale = pipe.get("stale_evidence") or []
-    if stale:
-        raise BuildNextError(f"selected pipeline has stale evidence: {stale}")
-    for item in pipe.get("evidence") or []:
-        if not isinstance(item, dict):
-            continue
-        if item.get("kind") == "stale":
-            raise BuildNextError("selected pipeline evidence is stale")
 
 
 def _path_covers(authority_path: str, forbidden_path: str) -> bool:
@@ -884,62 +736,17 @@ def _validate_native_prerequisites(
     }
 
 
-def _plan_text(ppe_repo: Path, rel: str) -> tuple[dict[str, Any], str, str]:
-    safe_rel = _safe_relative(rel, "phase plan trace")
-    path = (ppe_repo / safe_rel).resolve()
-    try:
-        path.relative_to(ppe_repo.resolve())
-    except ValueError as exc:
-        raise BuildNextError("phase plan trace escapes the PPE checkout") from exc
-    if not path.is_file():
-        raise BuildNextError(f"selected phase plan is missing: {safe_rel}")
-    text = path.read_text(encoding="utf-8")
-    data = _load_json(path, "phase plan")
-    return data, safe_rel, text
-
-
-def _source_freshness(
-    config: BuildNextConfig,
-    ppe_repo: Path,
-) -> tuple[SourceIdentity, dict[str, Any]]:
-    result = ensure_managed_source_fresh(
-        ppe_repo,
-        source_remote=config.source_remote,
-        source_ref=config.source_ref,
-        expected_source_repository=config.expected_source_repository,
-        allow_test_local_source_remote=config.allow_test_local_source_remote,
-        expected_source_commit=config.expected_source_commit,
-    )
-    return result.identity, result.evidence
-
-
-def _source_identity(config: BuildNextConfig, ppe_repo: Path) -> SourceIdentity:
-    return _source_freshness(config, ppe_repo)[0]
-
-
 def _evidence_identity(
-    ppe_repo: Path,
     *,
     source_identity: SourceIdentity,
-    snapshot: Mapping[str, Any],
     selected: Mapping[str, Any],
-    plan_rel: str,
     native_slice: NativeSlicePacket,
     prerequisite_evidence: Mapping[str, Any],
+    packet: ApprovedJobPacket,
+    admitted: AdmittedTargetIdentity,
     refill_attempt: Mapping[str, Any] | None = None,
     requested_exclusions: Sequence[str] = (),
 ) -> dict[str, Any]:
-    files = {
-        "registry": "config/founder_pipeline_registry.json",
-        "phase_queue": "docs/SOP/PHASE_QUEUE.json",
-        "active_manifest": "docs/SOP/ACTIVE_PHASE_MANIFEST.json",
-        "phase_plan": plan_rel,
-    }
-    file_hashes = {
-        key: _sha256_file(ppe_repo / rel)
-        for key, rel in files.items()
-        if (ppe_repo / rel).is_file()
-    }
     stable = {
         "version": 1,
         "source": asdict(source_identity),
@@ -957,10 +764,8 @@ def _evidence_identity(
             "following_slices": list(native_slice.following_slices),
         },
         "prerequisites": dict(prerequisite_evidence),
-        "file_hashes": file_hashes,
-        "selection_explanation": snapshot.get("recommended_next_action", {}).get(
-            "selection_explanation"
-        ),
+        "packet_sha256": packet.packet_sha256,
+        "admitted_target": asdict(admitted),
         "requested_exclusions": _normalize_excluded_work_item_ids(requested_exclusions),
     }
     if refill_attempt is not None:
@@ -994,11 +799,11 @@ def _instruction(
         [
             "Implementation thread. THREAD_ROLE: codex_build.",
             "",
-            "Implement only the bounded PPE/MSOS work item selected by the accepted "
-            "founder portfolio registry.",
+            "Implement only the bounded work item selected from Autobuilder-owned "
+            "approved job packets.",
             f"Pipeline ID: {pipeline_id}",
             f"Work-item ID: {work.get('work_item_id')}",
-            "Source repository: DanielTabakman/Probability-prediction-engine",
+            f"Source repository: {source_identity.repository}",
             f"Exact source commit: {source_identity.commit}",
             f"Canonical source ref: {source_identity.remote_ref}",
             f"Canonical source remote: {source_identity.remote_url}",
@@ -1125,6 +930,7 @@ def _build_job(
     requested_by: str,
     dependency_source_sha256: str,
     work_item_source_sha256: str,
+    target_repository: str,
     refill_attempt: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     lane_id = _safe_id(native_slice.slice_id, fallback="lane")
@@ -1135,8 +941,9 @@ def _build_job(
         native_slice_id=native_slice.slice_id,
         source_commit=source_identity.commit,
         allowed_changed_paths=native_slice.touch_set,
-        target_repository="DanielTabakman/Probability-prediction-engine",
+        target_repository=target_repository,
         dependency_source_sha256=dependency_source_sha256,
+        adapter=str(work.get("adapter") or "ppe_operator"),
     )
     return {
         "version": 1,
@@ -1149,8 +956,8 @@ def _build_job(
             "version": 1,
             "pipeline_id": pipeline_id,
             "work_item_id": work.get("work_item_id"),
-            "repository": "DanielTabakman/Probability-prediction-engine",
-            "registered_adapter": "ppe_operator",
+            "repository": target_repository,
+            "registered_adapter": str(work.get("adapter") or "ppe_operator"),
             "source": asdict(source_identity),
             "work_item_source_sha256_v1": work_item_source_sha256,
             "phase_plan": plan_rel,
@@ -1374,16 +1181,13 @@ def _blocked_receipt(message: str, evidence: Mapping[str, Any] | None = None) ->
 
 
 def build_next(config: BuildNextConfig) -> BuildNextReceipt:
-    ppe_repo = config.ppe_repo.expanduser().resolve()
-    source_freshness_evidence: dict[str, Any] | None = None
     try:
-        source_identity, source_freshness = _source_freshness(config, ppe_repo)
-        source_freshness_evidence = source_freshness
-        snapshot = _collect_snapshot(ppe_repo, config.exclude_work_item_ids)
-        _validate_selection_context(snapshot, config.exclude_work_item_ids)
-        _validate_snapshot(snapshot, config.max_snapshot_age_seconds)
-        rec = snapshot.get("recommended_next_action")
-        if not isinstance(rec, dict) or rec.get("state") == "UNFILLED":
+        packets = _load_catalog(config)
+        packet = select_next_packet(
+            packets,
+            exclude_work_item_ids=_normalize_excluded_work_item_ids(config.exclude_work_item_ids),
+        )
+        if packet is None:
             return BuildNextReceipt(
                 status="UNFILLED",
                 pipeline_id=None,
@@ -1393,35 +1197,20 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                 source_commit=None,
                 feed_path=None,
                 feed_commit=None,
-                message="No safe READY_TO_BUILD work item was selected by PPE.",
+                message="No safe Autobuilder-owned approved job packet was selected.",
                 evidence={
-                    "snapshot_as_of": snapshot.get("as_of"),
-                    "source_freshness": source_freshness,
+                    "catalog_count": len(packets),
+                    "requested_exclusions": _normalize_excluded_work_item_ids(
+                        config.exclude_work_item_ids
+                    ),
                 },
                 submitted=False,
             )
-        if rec.get("state") != "READY_TO_BUILD" or rec.get("action_type") != "build":
-            return BuildNextReceipt(
-                status="UNFILLED" if rec.get("state") == "UNFILLED" else "BLOCKED",
-                pipeline_id=rec.get("pipeline_id"),
-                work_item_id=rec.get("work_item_id"),
-                job_id=None,
-                repository=None,
-                source_commit=None,
-                feed_path=None,
-                feed_commit=None,
-                message=f"PPE selected non-dispatchable state {rec.get('state')!r}.",
-                evidence={
-                    "recommended_next_action": rec,
-                    "source_freshness": source_freshness,
-                },
-                submitted=False,
-            )
-
-        pipeline_id = str(rec.get("pipeline_id") or "")
-        work_item_id = str(rec.get("work_item_id") or "")
-        if pipeline_id != "ppe":
-            raise BuildNextError("v1 can dispatch only PPE/MSOS product jobs")
+        admitted = freeze_admitted_identity(packet)
+        assert_identity_not_redirected(admitted, packet)
+        source_identity = _source_identity_from_packet(packet)
+        pipeline_id = admitted.pipeline_id
+        work_item_id = admitted.work_item_id
         refill_attempt = (
             config.refill_attempt.evidence(work_item_id)
             if config.refill_attempt is not None
@@ -1429,52 +1218,54 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
         )
         if (
             refill_attempt is not None
+            and refill_attempt["selected_work_item_id"] not in {"", work_item_id}
             and refill_attempt["selected_work_item_id"] != work_item_id
         ):
-            raise BuildNextError("refill attempt selected work-item identity does not match PPE")
-        registry = _load_json(
-            ppe_repo / "config" / "founder_pipeline_registry.json",
-            "PPE registry",
-        )
-        registry_pipe = _pipeline(registry, pipeline_id)
-        _validate_registry_adapter(registry_pipe)
-        pipe = _snapshot_pipeline(snapshot, pipeline_id)
-        _validate_pipeline_runtime(pipe)
-        work = _ready_work(pipe, work_item_id)
-        if work.get("evidence") not in {"manual", "canonical", "native_runtime"}:
-            raise BuildNextError("selected work item lacks accepted evidence")
-        portfolio_output = snapshot.get("__portfolio_output_json")
-        if not isinstance(portfolio_output, str):
-            raise BuildNextError("PPE portfolio source output is unavailable")
-        try:
-            work_item_source_bytes = work_item_source_bytes_from_snapshot_json(
-                portfolio_output,
-                work_item_id,
-                pipeline_id=pipeline_id,
+            raise BuildNextError(
+                "refill attempt selected work-item identity does not match approved packet"
             )
-            work_item_source_sha256 = work_item_source_sha256_v1(work_item_source_bytes)
-        except LifecycleEvidenceError as exc:
-            raise BuildNextError(str(exc)) from exc
-        trace = str(work.get("trace") or rec.get("trace") or "")
-        plan, plan_rel, plan_raw = _plan_text(ppe_repo, trace)
-        native_slice = _select_native_slice(plan)
+        native_slice = _native_slice_from_packet(packet)
+        work = {
+            "work_item_id": work_item_id,
+            "adapter": admitted.adapter,
+            "native_prerequisites": dict(packet.prerequisites),
+            "evidence": "canonical",
+        }
+        plan = {
+            "slices": [
+                *[{"sliceId": item} for item in native_slice.previous_slices],
+                dict(native_slice.raw_slice),
+                *[{"sliceId": item} for item in native_slice.following_slices],
+            ]
+        }
         prerequisite_evidence = _validate_native_prerequisites(work, plan, native_slice)
         forbidden_paths = FORBIDDEN_AUTHORITY_PATHS
+        plan_rel = packet.phase_plan or "jobs/catalog"
         evidence_identity = _evidence_identity(
-            ppe_repo,
             source_identity=source_identity,
-            snapshot=snapshot,
-            selected={"pipeline_id": pipeline_id, "work_item_id": work_item_id, "trace": plan_rel},
-            plan_rel=plan_rel,
+            selected={
+                "pipeline_id": pipeline_id,
+                "work_item_id": work_item_id,
+                "trace": plan_rel,
+                "packet_sha256": packet.packet_sha256,
+            },
             native_slice=native_slice,
             prerequisite_evidence=prerequisite_evidence,
+            packet=packet,
+            admitted=admitted,
             refill_attempt=refill_attempt,
             requested_exclusions=config.exclude_work_item_ids,
         )
         receipt_evidence_identity = {
             **evidence_identity,
-            "source_freshness": source_freshness,
-            "work_item_source_sha256_v1": work_item_source_sha256,
+            "source": asdict(source_identity),
+            "work_item_source_sha256_v1": packet.work_item_source_sha256_v1,
+            "selection_explanation": {
+                "rank_tuple": [packet.order, packet.pipeline_id, packet.work_item_id],
+            },
+            "requested_exclusions": _normalize_excluded_work_item_ids(
+                config.exclude_work_item_ids
+            ),
         }
         job_id = _job_id(
             pipeline_id,
@@ -1490,7 +1281,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                 pipeline_id=pipeline_id,
                 work_item_id=work_item_id,
                 job_id=job_id,
-                repository="DanielTabakman/Probability-prediction-engine",
+                repository=admitted.target_repository,
                 source_commit=source_identity.commit,
                 feed_path=None,
                 feed_commit=None,
@@ -1500,9 +1291,6 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             )
         if state == "BLOCKED":
             raise BuildNextError(f"job {job_id} already completed or failed; refusing redispatch")
-        requirements_path = ppe_repo / "requirements.txt"
-        if not requirements_path.is_file():
-            raise BuildNextError("PPE dependency source is missing: requirements.txt")
         job = _build_job(
             job_id=job_id,
             pipeline_id=pipeline_id,
@@ -1514,24 +1302,35 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             evidence_identity=evidence_identity,
             prerequisite_evidence=prerequisite_evidence,
             requested_by=config.requested_by,
-            dependency_source_sha256=canonical_dependency_source_sha256(
-                requirements_path.read_bytes()
-            ),
-            work_item_source_sha256=work_item_source_sha256,
+            dependency_source_sha256=admitted.dependency_source_sha256,
+            work_item_source_sha256=packet.work_item_source_sha256_v1,
+            target_repository=admitted.target_repository,
             refill_attempt=refill_attempt,
         )
+        if (
+            job["founder_build_next"]["repository"] != admitted.target_repository
+            or job["expected_source_head"] != admitted.target_source_commit
+            or job["candidate_validation"]["target_repository"] != admitted.target_repository
+            or job["candidate_validation"]["source_commit"] != admitted.target_source_commit
+        ):
+            raise BuildNextError(
+                "target identity cannot redirect after immutable admission identity is established"
+            )
         admission_capability_contract = {
             "version": 1,
             "pipeline_id": pipeline_id,
             "work_item_id": work_item_id,
-            "adapter": "ppe_operator",
-            "target_repository": "DanielTabakman/Probability-prediction-engine",
+            "adapter": admitted.adapter,
+            "target_repository": admitted.target_repository,
             "native_slice_id": native_slice.slice_id,
             "authorized_paths": list(native_slice.touch_set),
             "forbidden_paths": list(forbidden_paths),
             "publication_enabled": False,
             "merge_enabled": False,
             "product_main_write_enabled": False,
+            "target_source_commit": admitted.target_source_commit,
+            "packet_sha256": admitted.packet_sha256,
+            "validation_identity": admitted.validation_identity,
         }
         admission_acceptance_sha256 = _sha256_text(
             json.dumps(
@@ -1541,7 +1340,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             )
         )
         admission_objective = objective_identity_from_work(
-            repository="DanielTabakman/Probability-prediction-engine",
+            repository=admitted.target_repository,
             linked_issue=None,
             work_item_id=work_item_id,
             stable_parts={
@@ -1555,7 +1354,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
         related_candidates: tuple[WorkCandidate, ...] = ()
         if config.submit and not config.allow_test_local_source_remote:
             related_candidates = GitHubWorkDiscoveryClient.from_git_credential(
-                "DanielTabakman/Probability-prediction-engine"
+                admitted.target_repository
             ).related_candidates(
                 objective_sha256=admission_objective.objective_sha256,
                 acceptance_contract_sha256=admission_acceptance_sha256,
@@ -1579,8 +1378,9 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                     "pipeline_id": pipeline_id,
                     "work_item_id": work_item_id,
                     "source_commit": source_identity.commit,
+                    "target_repository": admitted.target_repository,
                     "github_duplicate_discovery": {
-                        "repository": "DanielTabakman/Probability-prediction-engine",
+                        "repository": admitted.target_repository,
                         "searched_issues": bool(related_candidates)
                         or (
                             config.submit
@@ -1610,13 +1410,29 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                 pipeline_id=pipeline_id,
                 work_item_id=work_item_id,
                 job_id=job_id,
-                repository="DanielTabakman/Probability-prediction-engine",
+                repository=admitted.target_repository,
                 source_commit=source_identity.commit,
                 feed_path=None,
                 feed_commit=None,
                 message=admission.message,
                 evidence=receipt_evidence_identity,
                 submitted=False,
+            )
+        fetched_commit = prove_declared_commit_fetchable(
+            target_repository=admitted.target_repository,
+            target_source_commit=admitted.target_source_commit,
+            remote_url=packet.target_remote_url,
+        )
+        if config.target_checkout_root is not None:
+            fetched_commit = fetch_declared_target(
+                target_repository=admitted.target_repository,
+                target_source_commit=admitted.target_source_commit,
+                destination=_target_checkout_root(config, job_id),
+                remote_url=packet.target_remote_url,
+            )
+        if fetched_commit != admitted.target_source_commit:
+            raise BuildNextError(
+                "target identity cannot redirect after immutable admission identity is established"
             )
         job["founder_build_next"]["work_admission"] = {
             "status": admission.status.value,
@@ -1633,6 +1449,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             "execution_validation_contract_sha256": job["candidate_validation"][
                 "contract_sha256"
             ],
+            "admitted_target": asdict(admitted),
         }
         try:
             submission = _submit_feed_job(config, job)
@@ -1657,7 +1474,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                 pipeline_id=pipeline_id,
                 work_item_id=work_item_id,
                 job_id=job_id,
-                repository="DanielTabakman/Probability-prediction-engine",
+                repository=admitted.target_repository,
                 source_commit=source_identity.commit,
                 feed_path=submission.feed_path,
                 feed_commit=None,
@@ -1680,7 +1497,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                 identity = attempt_identity(
                     pipeline_id=pipeline_id,
                     work_item_id=work_item_id,
-                    work_item_digest=work_item_source_sha256,
+                    work_item_digest=packet.work_item_source_sha256_v1,
                     generation_id=str(refill_attempt["generation_id"]),
                     job_id=job_id,
                     attempt_ordinal=int(refill_attempt["attempt_ordinal"]),
@@ -1724,7 +1541,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             pipeline_id=pipeline_id,
             work_item_id=work_item_id,
             job_id=job_id,
-            repository="DanielTabakman/Probability-prediction-engine",
+            repository=admitted.target_repository,
             source_commit=source_identity.commit,
             feed_path=submission.feed_path,
             feed_commit=submission.feed_commit,
@@ -1739,13 +1556,8 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             evidence=receipt_evidence_identity,
             submitted=submission.created,
         )
-    except (BuildNextError, ManagedSourceSyncError) as exc:
-        evidence = None
-        if isinstance(exc, ManagedSourceSyncError):
-            evidence = {"source_freshness": exc.evidence}
-        elif source_freshness_evidence is not None:
-            evidence = {"source_freshness": source_freshness_evidence}
-        return _blocked_receipt(str(exc), evidence=evidence)
+    except (BuildNextError, JobPacketError) as exc:
+        return _blocked_receipt(str(exc))
 
 
 def render_receipt_json(receipt: BuildNextReceipt) -> str:

@@ -182,12 +182,13 @@ def _build_next_command(args: argparse.Namespace) -> int:
             submit=not args.dry_run,
         )
     else:
-        if not args.ppe_repo or not args.feed_repo_url:
+        if not args.feed_repo_url:
             raise SystemExit(
-                "build-next requires --service-config or both --ppe-repo and --feed-repo-url"
+                "build-next requires --service-config or --feed-repo-url"
             )
         config = BuildNextConfig(
-            ppe_repo=Path(args.ppe_repo),
+            ppe_repo=Path(args.ppe_repo) if args.ppe_repo else None,
+            packet_root=Path(args.packet_root) if args.packet_root else None,
             feed_repo_url=args.feed_repo_url,
             jobs_branch=args.jobs_branch,
             jobs_path=args.jobs_path,
@@ -446,10 +447,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     build_next_parser = subparsers.add_parser(
         "build-next",
-        help="dispatch exactly one PPE READY_TO_BUILD item through the approved job feed",
+        help="dispatch exactly one Autobuilder-owned approved job packet through the job feed",
     )
     build_next_parser.add_argument("--service-config")
     build_next_parser.add_argument("--ppe-repo")
+    build_next_parser.add_argument("--packet-root")
     build_next_parser.add_argument("--feed-repo-url")
     build_next_parser.add_argument("--jobs-branch", default="jobs")
     build_next_parser.add_argument("--jobs-path", default="jobs/approved")

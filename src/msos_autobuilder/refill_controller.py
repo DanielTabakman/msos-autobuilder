@@ -24,7 +24,6 @@ from .build_next import (
     BuildNextReceipt,
     RefillAttemptContext,
     _prepare_feed_checkout,
-    _source_identity,
     build_next,
 )
 from .codex_shadow import load_codex_host_config
@@ -37,7 +36,6 @@ from .lifecycle_evidence import (
     emit_lifecycle_evidence,
     record_producer_evidence_error,
 )
-from .managed_source import ManagedSourceSyncError, ensure_managed_source_fresh
 from .persistent_host import (
     HostPaths,
     HostProcessLock,
@@ -2338,49 +2336,6 @@ def _append_attempt(
         generation["source_ppe_identity"] = receipt.evidence["source"]
 
 
-def _pinned_source_commit(generation: Mapping[str, Any]) -> str | None:
-    source = generation.get("source_ppe_identity")
-    if isinstance(source, dict) and isinstance(source.get("commit"), str):
-        commit = source["commit"]
-        if commit:
-            return commit
-    return None
-
-
-def _source_pin_block(config: RefillConfig, generation: Mapping[str, Any]) -> dict[str, Any] | None:
-    pinned = _pinned_source_commit(generation)
-    if pinned is None:
-        return None
-    try:
-        identity = _source_identity(
-            replace(config.build_next, expected_source_commit=pinned),
-            config.build_next.ppe_repo.expanduser().resolve(),
-        )
-    except Exception as exc:
-        return {"reason": "source_pin_mismatch", "pinned_commit": pinned, "error": str(exc)}
-    return None if identity.commit == pinned else {
-        "reason": "source_pin_mismatch",
-        "pinned_commit": pinned,
-        "observed_commit": identity.commit,
-    }
-
-
-def _prove_refill_source_freshness(
-    config: RefillConfig,
-    *,
-    expected_source_commit: str | None,
-) -> dict[str, Any]:
-    result = ensure_managed_source_fresh(
-        config.build_next.ppe_repo,
-        source_remote=config.build_next.source_remote,
-        source_ref=config.build_next.source_ref,
-        expected_source_repository=config.build_next.expected_source_repository,
-        allow_test_local_source_remote=config.build_next.allow_test_local_source_remote,
-        expected_source_commit=expected_source_commit,
-    )
-    return result.evidence
-
-
 def _active_release_evidence(path: Path) -> dict[str, Any]:
     evidence: dict[str, Any] = {"ok": False, "path": str(path)}
     try:
@@ -3128,25 +3083,6 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
     retry_ordinal = 0
     decision_basis: dict[str, Any] | None = None
     if isinstance(current, dict):
-        pin_block = _source_pin_block(config, generation)
-        if pin_block is not None:
-            generation["state"] = "BLOCKED"
-            save_refill_generation(config, generation)
-            return _report(
-                config=config,
-                policy=policy,
-                status="BLOCKED",
-                message="Pinned PPE source moved; refill dispatch is blocked.",
-                active_running=active_running,
-                active_queued=active_queued,
-                feed_awaiting_import=feed_awaiting_import,
-                awaiting_review=awaiting_review,
-                evidence={
-                    **pin_block,
-                    "generation": generation,
-                    "health": snapshot.health,
-                },
-            )
         classification = _classify_attempt(config, paths, current)
         generation["last_attempt_classification"] = classification
         category = classification.get("category")
@@ -3272,31 +3208,6 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
     if retry_same_item:
         exclusions = tuple(item for item in exclusions if item != retry_same_item)
     attempt_ordinal = len(generation.get("attempt_sequence") or []) + 1
-    pinned_commit = _pinned_source_commit(generation)
-    try:
-        source_freshness = _prove_refill_source_freshness(
-            config,
-            expected_source_commit=pinned_commit,
-        )
-    except ManagedSourceSyncError as exc:
-        generation["state"] = "BLOCKED"
-        save_refill_generation(config, generation)
-        return _report(
-            config=config,
-            policy=policy,
-            status="BLOCKED",
-            message=str(exc),
-            active_running=active_running,
-            active_queued=active_queued,
-            feed_awaiting_import=feed_awaiting_import,
-            awaiting_review=awaiting_review,
-            evidence={
-                "reason": "source_freshness",
-                "source_freshness": exc.evidence,
-                "generation": generation,
-                "health": snapshot.health,
-            },
-        )
     prepared, dry_receipt = _prepare_dispatch(
         config,
         generation,
@@ -3305,35 +3216,12 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
         retry_ordinal=retry_ordinal,
         reason=retry_reason,
         selected_work_item_id=retry_same_item,
-        pinned_commit=pinned_commit,
+        pinned_commit=None,
         active_running=active_running,
         active_queued=active_queued,
         consume_provider_retry=retry_reason == "provider_retry",
         decision_basis=decision_basis or generation.get("last_refill_action_basis"),
     )
-    if (
-        dry_receipt.source_commit
-        and source_freshness.get("new_commit") != dry_receipt.source_commit
-    ):
-        generation["state"] = "BLOCKED"
-        save_refill_generation(config, generation)
-        return _report(
-            config=config,
-            policy=policy,
-            status="BLOCKED",
-            message="Refill source freshness proof disagrees with build-next source identity.",
-            active_running=active_running,
-            active_queued=active_queued,
-            feed_awaiting_import=feed_awaiting_import,
-            awaiting_review=awaiting_review,
-            evidence={
-                "reason": "source_freshness_mismatch",
-                "source_freshness": source_freshness,
-                "build_next": asdict(dry_receipt),
-                "generation": generation,
-                "health": snapshot.health,
-            },
-        )
     if not prepared:
         receipt = dry_receipt
     else:

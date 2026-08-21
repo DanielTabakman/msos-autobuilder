@@ -281,9 +281,90 @@ def test_authority_and_validation_remain_bound_to_immutable_job_identity(tmp_pat
     assert receipt.status == "QUEUED"
     assert admitted["target_repository"] == receipt.repository
     assert admitted["target_source_commit"] == receipt.source_commit
+    assert admitted["target_remote_url"] == _git(ppe, "remote", "get-url", "origin")
     assert admitted["allowed_paths"] == ("src/viz/panel.py", "tests/test_panel.py")
     assert admitted["dependency_source_sha256"] == canonical_dependency_source_sha256(
         b"# PPE fixture requirements\n"
     )
     assert validation["repository"] == receipt.repository
     assert validation["work_item_id"] == "fixture_work"
+
+
+def test_packet_remote_url_for_another_github_repo_is_rejected(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    packet = _packet_template(
+        ppe,
+        target_repository=SOURCE_REPO,
+        target_remote_url="https://github.com/SomeoneElse/Probability-prediction-engine.git",
+    )
+
+    with pytest.raises(JobPacketError, match="target_remote_url"):
+        parse_approved_job_packet(packet)
+
+
+def test_canonical_https_and_ssh_urls_for_same_repository_are_accepted(
+    tmp_path: Path,
+) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    urls = (
+        f"https://github.com/{SOURCE_REPO}.git",
+        f"git@github.com:{SOURCE_REPO}.git",
+        f"ssh://git@github.com/{SOURCE_REPO}.git",
+    )
+    packets = [
+        parse_approved_job_packet(_packet_template(ppe, target_remote_url=url))
+        for url in urls
+    ]
+
+    assert {packet.target_repository for packet in packets} == {SOURCE_REPO}
+    assert [packet.target_remote_url for packet in packets] == list(urls)
+    assert len({packet.packet_sha256 for packet in packets}) == len(urls)
+
+
+def test_changing_only_fetch_url_after_admission_cannot_redirect_target(
+    tmp_path: Path,
+) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    original = parse_approved_job_packet(_packet_template(ppe))
+    admitted = freeze_admitted_identity(original)
+    redirected = parse_approved_job_packet(
+        _packet_template(
+            ppe,
+            target_remote_url=f"https://github.com/{SOURCE_REPO}.git",
+        )
+    )
+
+    assert original.target_repository == redirected.target_repository
+    assert original.target_source_commit == redirected.target_source_commit
+    assert original.target_remote_url != redirected.target_remote_url
+    assert original.packet_sha256 != redirected.packet_sha256
+    assert admitted.target_remote_url == original.target_remote_url
+    with pytest.raises(JobPacketError, match="cannot redirect"):
+        assert_identity_not_redirected(admitted, redirected)
+
+
+def test_fetch_cannot_clone_different_repo_even_when_commit_sha_matches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    frozen = _git(ppe, "rev-parse", "HEAD")
+    wrong_dest = tmp_path / "fetched-wrong-repo"
+    real_run = subprocess.run
+
+    def guarded_run(*args: object, **kwargs: object):
+        argv = args[0] if args else kwargs.get("args")
+        if argv and "clone" in [str(part) for part in argv]:
+            raise AssertionError("clone of a non-admitted repository must not run")
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr("msos_autobuilder.job_packet.subprocess.run", guarded_run)
+    with pytest.raises(JobPacketError, match="target_remote_url"):
+        fetch_declared_target(
+            target_repository=SOURCE_REPO,
+            target_source_commit=frozen,
+            destination=wrong_dest,
+            remote_url="https://github.com/SomeoneElse/Probability-prediction-engine.git",
+        )
+
+    assert not wrong_dest.exists()

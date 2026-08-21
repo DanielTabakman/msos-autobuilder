@@ -1421,14 +1421,14 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
         fetched_commit = prove_declared_commit_fetchable(
             target_repository=admitted.target_repository,
             target_source_commit=admitted.target_source_commit,
-            remote_url=packet.target_remote_url,
+            remote_url=admitted.target_remote_url,
         )
         if config.target_checkout_root is not None:
             fetched_commit = fetch_declared_target(
                 target_repository=admitted.target_repository,
                 target_source_commit=admitted.target_source_commit,
                 destination=_target_checkout_root(config, job_id),
-                remote_url=packet.target_remote_url,
+                remote_url=admitted.target_remote_url,
             )
         if fetched_commit != admitted.target_source_commit:
             raise BuildNextError(

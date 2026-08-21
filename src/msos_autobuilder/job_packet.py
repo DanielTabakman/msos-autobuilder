@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .managed_source import normalize_github_repository
+
 
 class JobPacketError(ValueError):
     """Raised when an approved job packet is missing, ambiguous, or redirected."""
@@ -53,6 +55,7 @@ class ApprovedJobPacket:
 class AdmittedTargetIdentity:
     target_repository: str
     target_source_commit: str
+    target_remote_url: str
     work_item_id: str
     pipeline_id: str
     allowed_paths: tuple[str, ...]
@@ -95,6 +98,26 @@ def _required_repository(value: Any) -> str:
     text = str(value or "").strip()
     if not _REPO_RE.fullmatch(text):
         raise JobPacketError("target_repository is missing or malformed")
+    return text
+
+
+def _required_target_remote_url(
+    target_repository: str,
+    remote_url: Any,
+    *,
+    default_if_missing: bool = True,
+) -> str:
+    repository = _required_repository(target_repository)
+    text = str(remote_url or "").strip()
+    if not text:
+        if not default_if_missing:
+            raise JobPacketError("target remote URL is missing")
+        text = f"https://github.com/{repository}.git"
+    fetched_repository = normalize_github_repository(text)
+    if fetched_repository is None:
+        return text
+    if fetched_repository != repository:
+        raise JobPacketError("target_remote_url does not match target_repository")
     return text
 
 
@@ -142,6 +165,7 @@ def canonical_packet_identity(raw: Mapping[str, Any]) -> dict[str, Any]:
         "native_slice": raw.get("native_slice"),
         "pipeline_id": raw.get("pipeline_id"),
         "target_repository": raw.get("target_repository"),
+        "target_remote_url": raw.get("target_remote_url"),
         "target_source_commit": raw.get("target_source_commit"),
         "work_item_id": raw.get("work_item_id"),
         "validation": raw.get("validation"),
@@ -165,9 +189,10 @@ def parse_approved_job_packet(
         raise JobPacketError("approved job packet eligible must be a boolean")
     target_repository = _required_repository(raw.get("target_repository"))
     target_source_commit = _required_commit(raw.get("target_source_commit"))
-    target_remote_url = str(raw.get("target_remote_url") or "").strip()
-    if not target_remote_url:
-        target_remote_url = f"https://github.com/{target_repository}.git"
+    target_remote_url = _required_target_remote_url(
+        target_repository,
+        raw.get("target_remote_url"),
+    )
     adapter = _required_id(raw.get("adapter"), "adapter")
     allowed_paths = _required_paths(raw.get("allowed_paths"), "allowed_paths")
     native_slice = _mapping(raw.get("native_slice"), "native_slice")
@@ -207,6 +232,7 @@ def parse_approved_job_packet(
             "native_slice": native_slice,
             "pipeline_id": pipeline_id,
             "target_repository": target_repository,
+            "target_remote_url": target_remote_url,
             "target_source_commit": target_source_commit,
             "work_item_id": work_item_id,
             "validation": validation,
@@ -307,6 +333,7 @@ def freeze_admitted_identity(packet: ApprovedJobPacket) -> AdmittedTargetIdentit
     return AdmittedTargetIdentity(
         target_repository=packet.target_repository,
         target_source_commit=packet.target_source_commit,
+        target_remote_url=packet.target_remote_url,
         work_item_id=packet.work_item_id,
         pipeline_id=packet.pipeline_id,
         allowed_paths=packet.allowed_paths,
@@ -325,6 +352,7 @@ def assert_identity_not_redirected(
     if (
         current.target_repository != admitted.target_repository
         or current.target_source_commit != admitted.target_source_commit
+        or current.target_remote_url != admitted.target_remote_url
         or current.work_item_id != admitted.work_item_id
         or current.pipeline_id != admitted.pipeline_id
         or current.packet_sha256 != admitted.packet_sha256
@@ -365,9 +393,11 @@ def prove_declared_commit_fetchable(
     """Prove the frozen commit is still fetchable without following target main."""
     _required_repository(target_repository)
     commit = _required_commit(target_source_commit)
-    url = str(remote_url or "").strip()
-    if not url:
-        raise JobPacketError("target remote URL is missing")
+    url = _required_target_remote_url(
+        target_repository,
+        remote_url,
+        default_if_missing=False,
+    )
     local = Path(url)
     if local.exists():
         git_dir = local / ".git"
@@ -395,9 +425,11 @@ def fetch_declared_target(
     """Fetch only the declared repository at the declared exact commit after admission."""
     _required_repository(target_repository)
     commit = _required_commit(target_source_commit)
-    url = str(remote_url or "").strip()
-    if not url:
-        raise JobPacketError("target remote URL is missing")
+    url = _required_target_remote_url(
+        target_repository,
+        remote_url,
+        default_if_missing=False,
+    )
     prove_declared_commit_fetchable(
         target_repository=target_repository,
         target_source_commit=commit,
@@ -407,6 +439,12 @@ def fetch_declared_target(
         shutil.rmtree(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     _git(None, "clone", "--no-tags", url, str(destination))
+    cloned_origin = _git(destination, "remote", "get-url", "origin")
+    cloned_repository = normalize_github_repository(cloned_origin)
+    if cloned_repository is not None and cloned_repository != target_repository:
+        raise JobPacketError(
+            "fetched target origin does not match admitted target_repository"
+        )
     _git(destination, "checkout", "--detach", commit)
     head = _git(destination, "rev-parse", "HEAD").lower()
     if head != commit:

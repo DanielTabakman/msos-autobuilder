@@ -47,6 +47,13 @@ def _packet_template(ppe: Path, **overrides: object) -> dict[str, object]:
     return raw
 
 
+def _parse_fixture_packet(ppe: Path, **overrides: object):
+    return parse_approved_job_packet(
+        _packet_template(ppe, **overrides),
+        allow_test_local_source_remote=True,
+    )
+
+
 def test_admission_succeeds_without_ppe_checkout_or_founder_portfolio(tmp_path: Path) -> None:
     ppe = _write_ppe(tmp_path / "ppe")
     catalog = _catalog_root(ppe)
@@ -104,6 +111,7 @@ def test_packet_targeting_frozen_commit_stays_valid_after_target_main_moves(
         target_source_commit=frozen,
         destination=dest,
         remote_url=_git(ppe, "remote", "get-url", "origin"),
+        allow_test_local_source_remote=True,
     )
 
     assert moved != frozen
@@ -114,6 +122,7 @@ def test_packet_targeting_frozen_commit_stays_valid_after_target_main_moves(
             target_repository=SOURCE_REPO,
             target_source_commit=frozen,
             remote_url=_git(ppe, "remote", "get-url", "origin"),
+            allow_test_local_source_remote=True,
         )
         == frozen
     )
@@ -169,11 +178,9 @@ def test_missing_or_non_commit_target_source_identity_fails_closed(tmp_path: Pat
 
 def test_target_identity_cannot_redirect_after_admission(tmp_path: Path) -> None:
     ppe = _write_ppe(tmp_path / "ppe")
-    original = parse_approved_job_packet(_packet_template(ppe))
+    original = _parse_fixture_packet(ppe)
     admitted = freeze_admitted_identity(original)
-    redirected = parse_approved_job_packet(
-        _packet_template(ppe, target_repository="SomeoneElse/other-product")
-    )
+    redirected = _parse_fixture_packet(ppe, target_repository="SomeoneElse/other-product")
 
     with pytest.raises(JobPacketError, match="cannot redirect"):
         assert_identity_not_redirected(admitted, redirected)
@@ -214,7 +221,10 @@ def test_ab_ordering_is_represented_entirely_in_repo_local_state(tmp_path: Path)
         )
     )
     packets = [
-        parse_approved_job_packet(json.loads(path.read_text(encoding="utf-8")))
+        parse_approved_job_packet(
+            json.loads(path.read_text(encoding="utf-8")),
+            allow_test_local_source_remote=True,
+        )
         for path in sorted(catalog.glob("*.json"))
     ]
 
@@ -264,6 +274,7 @@ def test_fetch_declared_target_uses_exact_commit_not_moving_main(tmp_path: Path)
         target_source_commit=frozen,
         destination=dest,
         remote_url=_git(repo, "remote", "get-url", "origin"),
+        allow_test_local_source_remote=True,
     )
     assert later != frozen
     assert fetched == frozen
@@ -325,7 +336,7 @@ def test_changing_only_fetch_url_after_admission_cannot_redirect_target(
     tmp_path: Path,
 ) -> None:
     ppe = _write_ppe(tmp_path / "ppe")
-    original = parse_approved_job_packet(_packet_template(ppe))
+    original = _parse_fixture_packet(ppe)
     admitted = freeze_admitted_identity(original)
     redirected = parse_approved_job_packet(
         _packet_template(
@@ -368,3 +379,64 @@ def test_fetch_cannot_clone_different_repo_even_when_commit_sha_matches(
         )
 
     assert not wrong_dest.exists()
+
+
+def test_production_packet_rejects_local_filesystem_remote(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    packet = _packet_template(ppe)
+    dest = tmp_path / "fetched-local"
+
+    with pytest.raises(JobPacketError, match="target_remote_url"):
+        parse_approved_job_packet(packet)
+    with pytest.raises(JobPacketError, match="target_remote_url"):
+        fetch_declared_target(
+            target_repository=SOURCE_REPO,
+            target_source_commit=_git(ppe, "rev-parse", "HEAD"),
+            destination=dest,
+            remote_url=_git(ppe, "remote", "get-url", "origin"),
+        )
+    receipt = build_next(
+        BuildNextConfig(
+            packet_root=_catalog_root(ppe),
+            feed_repo_url=str(_feed_repo(tmp_path / "feed-work")),
+            checkout_root=tmp_path / "checkout",
+        )
+    )
+
+    assert receipt.status == "BLOCKED"
+    assert "target_remote_url" in receipt.message
+    assert not dest.exists()
+
+
+def test_production_packet_rejects_non_github_remote(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    packet = _packet_template(
+        ppe,
+        target_remote_url="https://example.com/not-github/repo.git",
+    )
+
+    with pytest.raises(JobPacketError, match="target_remote_url"):
+        parse_approved_job_packet(packet)
+
+
+def test_explicit_test_local_remote_escape_hatch_still_works(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    local_url = _git(ppe, "remote", "get-url", "origin")
+    frozen = _git(ppe, "rev-parse", "HEAD")
+    packet = _parse_fixture_packet(ppe)
+    dest = tmp_path / "fetched-hatch"
+    fetched = fetch_declared_target(
+        target_repository=SOURCE_REPO,
+        target_source_commit=frozen,
+        destination=dest,
+        remote_url=local_url,
+        allow_test_local_source_remote=True,
+    )
+    receipt = build_next(_config(tmp_path, ppe, _feed_repo(tmp_path / "feed-work")))
+
+    assert packet.target_repository == SOURCE_REPO
+    assert packet.target_remote_url == local_url
+    assert fetched == frozen
+    assert _git(dest, "rev-parse", "HEAD") == frozen
+    assert receipt.status == "QUEUED", receipt.message
+    assert receipt.evidence["admitted_target"]["target_remote_url"] == local_url

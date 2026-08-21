@@ -330,9 +330,15 @@ def _sha256_file(path: Path) -> str:
 
 def _load_catalog(config: BuildNextConfig) -> tuple[ApprovedJobPacket, ...]:
     if config.packet_root is not None:
-        return load_packet_dir(config.packet_root.expanduser().resolve())
+        return load_packet_dir(
+            config.packet_root.expanduser().resolve(),
+            allow_test_local_source_remote=config.allow_test_local_source_remote,
+        )
     checkout = _prepare_feed_checkout(config)
-    return load_packet_dir(checkout / config.catalog_path)
+    return load_packet_dir(
+        checkout / config.catalog_path,
+        allow_test_local_source_remote=config.allow_test_local_source_remote,
+    )
 
 
 def _source_identity_from_packet(packet: ApprovedJobPacket) -> SourceIdentity:
@@ -1422,6 +1428,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             target_repository=admitted.target_repository,
             target_source_commit=admitted.target_source_commit,
             remote_url=admitted.target_remote_url,
+            allow_test_local_source_remote=config.allow_test_local_source_remote,
         )
         if config.target_checkout_root is not None:
             fetched_commit = fetch_declared_target(
@@ -1429,6 +1436,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                 target_source_commit=admitted.target_source_commit,
                 destination=_target_checkout_root(config, job_id),
                 remote_url=admitted.target_remote_url,
+                allow_test_local_source_remote=config.allow_test_local_source_remote,
             )
         if fetched_commit != admitted.target_source_commit:
             raise BuildNextError(

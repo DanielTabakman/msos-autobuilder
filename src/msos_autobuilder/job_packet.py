@@ -106,6 +106,7 @@ def _required_target_remote_url(
     remote_url: Any,
     *,
     default_if_missing: bool = True,
+    allow_test_local_source_remote: bool = False,
 ) -> str:
     repository = _required_repository(target_repository)
     text = str(remote_url or "").strip()
@@ -115,7 +116,9 @@ def _required_target_remote_url(
         text = f"https://github.com/{repository}.git"
     fetched_repository = normalize_github_repository(text)
     if fetched_repository is None:
-        return text
+        if allow_test_local_source_remote:
+            return text
+        raise JobPacketError("target_remote_url does not match target_repository")
     if fetched_repository != repository:
         raise JobPacketError("target_remote_url does not match target_repository")
     return text
@@ -176,6 +179,7 @@ def parse_approved_job_packet(
     raw: Mapping[str, Any],
     *,
     source_path: str = "packet",
+    allow_test_local_source_remote: bool = False,
 ) -> ApprovedJobPacket:
     if raw.get("version") != 1:
         raise JobPacketError("approved job packet must be version 1")
@@ -192,6 +196,7 @@ def parse_approved_job_packet(
     target_remote_url = _required_target_remote_url(
         target_repository,
         raw.get("target_remote_url"),
+        allow_test_local_source_remote=allow_test_local_source_remote,
     )
     adapter = _required_id(raw.get("adapter"), "adapter")
     allowed_paths = _required_paths(raw.get("allowed_paths"), "allowed_paths")
@@ -279,7 +284,11 @@ def parse_approved_job_packet(
     )
 
 
-def load_packet_dir(root: Path) -> tuple[ApprovedJobPacket, ...]:
+def load_packet_dir(
+    root: Path,
+    *,
+    allow_test_local_source_remote: bool = False,
+) -> tuple[ApprovedJobPacket, ...]:
     if not root.exists():
         return ()
     if not root.is_dir():
@@ -292,7 +301,13 @@ def load_packet_dir(root: Path) -> tuple[ApprovedJobPacket, ...]:
             raise JobPacketError(f"approved job packet is not valid JSON: {path}") from exc
         if not isinstance(raw, dict):
             raise JobPacketError(f"approved job packet must be an object: {path}")
-        packets.append(parse_approved_job_packet(raw, source_path=path.as_posix()))
+        packets.append(
+            parse_approved_job_packet(
+                raw,
+                source_path=path.as_posix(),
+                allow_test_local_source_remote=allow_test_local_source_remote,
+            )
+        )
     return tuple(packets)
 
 
@@ -389,6 +404,7 @@ def prove_declared_commit_fetchable(
     target_repository: str,
     target_source_commit: str,
     remote_url: str,
+    allow_test_local_source_remote: bool = False,
 ) -> str:
     """Prove the frozen commit is still fetchable without following target main."""
     _required_repository(target_repository)
@@ -397,6 +413,7 @@ def prove_declared_commit_fetchable(
         target_repository,
         remote_url,
         default_if_missing=False,
+        allow_test_local_source_remote=allow_test_local_source_remote,
     )
     local = Path(url)
     if local.exists():
@@ -421,6 +438,7 @@ def fetch_declared_target(
     target_source_commit: str,
     destination: Path,
     remote_url: str,
+    allow_test_local_source_remote: bool = False,
 ) -> str:
     """Fetch only the declared repository at the declared exact commit after admission."""
     _required_repository(target_repository)
@@ -429,11 +447,13 @@ def fetch_declared_target(
         target_repository,
         remote_url,
         default_if_missing=False,
+        allow_test_local_source_remote=allow_test_local_source_remote,
     )
     prove_declared_commit_fetchable(
         target_repository=target_repository,
         target_source_commit=commit,
         remote_url=url,
+        allow_test_local_source_remote=allow_test_local_source_remote,
     )
     if destination.exists():
         shutil.rmtree(destination)
@@ -441,7 +461,9 @@ def fetch_declared_target(
     _git(None, "clone", "--no-tags", url, str(destination))
     cloned_origin = _git(destination, "remote", "get-url", "origin")
     cloned_repository = normalize_github_repository(cloned_origin)
-    if cloned_repository is not None and cloned_repository != target_repository:
+    if cloned_repository != target_repository and not (
+        allow_test_local_source_remote and cloned_repository is None
+    ):
         raise JobPacketError(
             "fetched target origin does not match admitted target_repository"
         )

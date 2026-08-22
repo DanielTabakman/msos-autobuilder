@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from test_build_next import _catalog_root, _write_catalog_from_ppe
 
 from msos_autobuilder.build_next import BuildNextConfig, build_next
 from msos_autobuilder.completion_controller import (
@@ -1024,6 +1025,12 @@ print(json.dumps(payload))
     subprocess.run(["git", "clone", "--bare", str(ppe), str(ppe_bare)], check=True)
     subprocess.run(["git", "-C", str(ppe), "remote", "add", "origin", str(ppe_bare)], check=True)
     subprocess.run(["git", "-C", str(ppe), "push", "-u", "origin", "main"], check=True)
+    _write_catalog_from_ppe(
+        ppe,
+        snapshot=snapshot,
+        plan=json.loads((ppe / "docs" / "SOP" / "PHASE_PLANS" / "fixture.json").read_text()),
+        registry=json.loads((ppe / "config" / "founder_pipeline_registry.json").read_text()),
+    )
 
     feed_work = tmp_path / "feed"
     feed_work.mkdir()
@@ -1043,6 +1050,7 @@ print(json.dumps(payload))
     receipt = build_next(
         BuildNextConfig(
             ppe_repo=ppe,
+            packet_root=_catalog_root(ppe),
             feed_repo_url=str(feed_bare),
             checkout_root=tmp_path / "feed-checkout",
             allow_test_local_source_remote=True,

@@ -1,0 +1,147 @@
+{
+  "version": 1,
+  "pipeline_id": "ppe",
+  "work_item_id": "options_expression_fit_ranking_v1",
+  "order": 2,
+  "eligible": true,
+  "target_repository": "DanielTabakman/Probability-prediction-engine",
+  "target_source_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+  "target_remote_url": "https://github.com/DanielTabakman/Probability-prediction-engine.git",
+  "adapter": "ppe_operator",
+  "allowed_paths": [
+    "src/engine/options_expression_fit_ranking.py",
+    "src/viz/options_expression_fit_ranking_boundary.py",
+    "scripts/rank_options_expression_fit.py",
+    "apps/msos-web/src/lib/optionsExpressionFitRanking.ts",
+    "apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx",
+    "apps/msos-web/src/components/ExpressionPlanningPanel.tsx",
+    "tests/test_options_expression_fit_ranking.py",
+    "tests/test_msos_web_options_expression_fit_ranking.py"
+  ],
+  "native_slice": {
+    "slice_id": "Options-ExpressionFit-Product-Slice002",
+    "build_branch": "build/auto/Options-ExpressionFit-Product-Slice002",
+    "layer_preset": "PPE_UI",
+    "worker_mode": "local-agent",
+    "declared_plane": "PRODUCT-PLANE",
+    "touch_set": [
+      "src/engine/options_expression_fit_ranking.py",
+      "src/viz/options_expression_fit_ranking_boundary.py",
+      "scripts/rank_options_expression_fit.py",
+      "apps/msos-web/src/lib/optionsExpressionFitRanking.ts",
+      "apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx",
+      "apps/msos-web/src/components/ExpressionPlanningPanel.tsx",
+      "tests/test_options_expression_fit_ranking.py",
+      "tests/test_msos_web_options_expression_fit_ranking.py"
+    ],
+    "sequence_index": 1,
+    "total_slices": 4,
+    "previous_slices": [
+      "Options-ExpressionFit-Control-Slice001"
+    ],
+    "following_slices": [
+      "Options-ExpressionFit-Witness-Slice003",
+      "Options-ExpressionFit-Closeout-Slice004"
+    ],
+    "sprint_spec_path": "docs/SOP/SPRINT_OPTIONS_EXPRESSION_FIT_RANKING_V1.md",
+    "selection_record": "docs/SOP/POST_OPTIONS_EXPRESSION_FIT_RANKING_V1_SELECTION.md",
+    "raw_slice": {
+      "sliceId": "Options-ExpressionFit-Product-Slice002",
+      "layerPreset": "PPE_UI",
+      "sprintSpecPath": "docs/SOP/SPRINT_OPTIONS_EXPRESSION_FIT_RANKING_V1.md",
+      "buildBranch": "build/auto/Options-ExpressionFit-Product-Slice002",
+      "declaredPlane": "PRODUCT-PLANE",
+      "implementationStatus": "PENDING",
+      "workerMode": "local-agent",
+      "susMinutes": 90,
+      "hardMinutes": 240,
+      "maxAttempts": 2,
+      "touchSet": [
+        "src/engine/options_expression_fit_ranking.py",
+        "src/viz/options_expression_fit_ranking_boundary.py",
+        "scripts/rank_options_expression_fit.py",
+        "apps/msos-web/src/lib/optionsExpressionFitRanking.ts",
+        "apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx",
+        "apps/msos-web/src/components/ExpressionPlanningPanel.tsx",
+        "tests/test_options_expression_fit_ranking.py",
+        "tests/test_msos_web_options_expression_fit_ranking.py"
+      ]
+    }
+  },
+  "phase_plan": "docs/SOP/PHASE_PLANS/options_expression_fit_ranking_v1_relay.json",
+  "prerequisites": {
+    "version": 1,
+    "read_only": true,
+    "source": "ppe_native_read_only",
+    "evidence": {
+      "frozen_target_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+      "target_remote_url": "https://github.com/DanielTabakman/Probability-prediction-engine.git",
+      "phase_plan": "docs/SOP/PHASE_PLANS/options_expression_fit_ranking_v1_relay.json",
+      "phase_plan_blob_sha": "e294cf9e2fd94c84f966a91350f908a4994a53a3",
+      "control_slice": {
+        "slice_id": "Options-ExpressionFit-Control-Slice001",
+        "implementationStatus": "COMPLETE",
+        "nonBlocking": true
+      },
+      "independence_contract": {
+        "buildsFromFrozenCurrentMain": true,
+        "doesNotImportJobA": true,
+        "doesNotAssumeJobAMerged": true,
+        "nativePrerequisiteOnJobA": false
+      },
+      "source_files": [
+        {
+          "path": "docs/SOP/PHASE_PLANS/options_expression_fit_ranking_v1_relay.json",
+          "exists": true,
+          "git_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+          "blob_sha": "e294cf9e2fd94c84f966a91350f908a4994a53a3",
+          "sha256": "4676f5786bb1bda2b392029868c86688a9fedde5494c7d6e594b0d4f6e03d531"
+        },
+        {
+          "path": "docs/SOP/SPRINT_OPTIONS_EXPRESSION_FIT_RANKING_V1.md",
+          "exists": true,
+          "git_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+          "blob_sha": "2e1fe7a3eef9b9a0aba98aac772331ce7fdb61fa",
+          "sha256": "5a5b8d2f81021ec21aae09c1037d08091dc056b39d7d8809c1719623c8faa98f"
+        },
+        {
+          "path": "docs/SOP/POST_OPTIONS_EXPRESSION_FIT_RANKING_V1_SELECTION.md",
+          "exists": true,
+          "git_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+          "blob_sha": "f148cccfcaaeb4e27dcedd0235adfb600c9c7acc",
+          "sha256": "d6802294683eb965f432b621b149297136c9b894021be5fd6ccaa622bc2cdb74"
+        },
+        {
+          "path": "docs/SOP/OPTIONS_EXPRESSION_FIT_RANKING_V1_EVIDENCE_STATUS.md",
+          "exists": true,
+          "git_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+          "blob_sha": "3668455cc5e30bfb6135767e86e0b4beb3bd44ac",
+          "sha256": "fc7d604f9857d0b88588484fb767cfde146abd7857435412768e526184fa25ac"
+        },
+        {
+          "path": "docs/SOP/ACTIVE_PHASE_MANIFEST.json",
+          "exists": true,
+          "git_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+          "blob_sha": "bef16bafa160f5240b85c69b119b6ba627e041bb",
+          "sha256": "c1425fc9fda014c0379113ff849a0466e3c31e5c4f489975becfbb913bf067dc"
+        }
+      ]
+    },
+    "statuses": [
+      {
+        "slice_id": "Options-ExpressionFit-Control-Slice001",
+        "status": "complete",
+        "non_blocking": true
+      }
+    ]
+  },
+  "dependency_source_sha256": "47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394",
+  "authority": {
+    "publication_enabled": false,
+    "merge_enabled": false,
+    "product_main_write_enabled": false
+  },
+  "validation": {
+    "profile_id": "ppe-ci-pytest-v1"
+  }
+}

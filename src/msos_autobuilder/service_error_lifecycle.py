@@ -151,10 +151,21 @@ def _associated_matches(raw: Mapping[str, Any], job_id: str) -> bool:
     return isinstance(associated_jobs, list) and job_id in associated_jobs
 
 
+def _supervisor_root_for_host(host_root: Path) -> Path:
+    """Return the deterministic supervisor sibling of *host_root*.
+
+    Generic `.msos-autobuilder` maps to `.msos-autobuilder-supervisor`. A
+    namespaced host such as `...-c` maps to `...-c-supervisor`. There is no
+    glob, newest-directory selection, or fallback to an unrelated runtime.
+    """
+
+    resolved = host_root.expanduser().resolve()
+    return resolved.parent / f"{resolved.name}-supervisor"
+
+
 def _witness_metadata(host_root: Path, service: str) -> dict[str, Any]:
     witness_path = (
-        host_root.expanduser().resolve().parent
-        / ".msos-autobuilder-supervisor"
+        _supervisor_root_for_host(host_root)
         / "state"
         / "service-witnesses"
         / f"{service}.json"

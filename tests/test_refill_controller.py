@@ -44,10 +44,20 @@ from msos_autobuilder.refill_controller import (
     save_refill_policy,
     supersede_refill_generation,
 )
+from msos_autobuilder.service_error_lifecycle import (
+    GATE_ERROR_SPEC,
+    evaluate_service_error_marker,
+    record_service_cycle_success,
+    write_service_error_marker,
+)
 from msos_autobuilder.work_admission import AdmissionError, release_claim
 
 SOURCE_REPO = "DanielTabakman/Probability-prediction-engine"
 EXACT_RELEASE = "a" * 40
+NAMESPACED_HOST_NAME = ".msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c"
+_GENERIC_HOST_NAME = ".msos-autobuilder"
+_WITNESS_STARTED = "2026-08-24T17:48:24.2081623+00:00"
+_WITNESS_PID = 4608
 
 
 def _refill_config(
@@ -451,6 +461,67 @@ def _generation_id(
     return hashlib.sha256(f"{release_commit}\n{started_at}\n{pid}\n".encode()).hexdigest()
 
 
+def _supervisor_sibling(host_root: Path) -> Path:
+    return host_root.parent / f"{host_root.name}-supervisor"
+
+
+def _write_lifecycle_witness(
+    supervisor_root: Path,
+    service: str,
+    *,
+    release_commit: str = EXACT_RELEASE,
+    started_at: str = _WITNESS_STARTED,
+    pid: int = _WITNESS_PID,
+    raw_text: str | None = None,
+) -> dict[str, object]:
+    path = supervisor_root / "state" / "service-witnesses" / f"{service}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, object] = {
+        "version": 1,
+        "service": service,
+        "state": "running",
+        "release_commit": release_commit,
+        "child_pid": pid,
+        "started_at": started_at,
+    }
+    path.write_text(
+        raw_text if raw_text is not None else json.dumps(payload) + "\n",
+        encoding="utf-8",
+    )
+    return payload
+
+
+def _service_checks_from_witness(
+    service: str,
+    witness: dict[str, object],
+    *,
+    release_commit: str | None = None,
+) -> dict[str, object]:
+    return {
+        "ok": True,
+        "services": {
+            service: {
+                "ok": True,
+                "state": "running",
+                "release_commit": release_commit or witness["release_commit"],
+                "started_at": witness["started_at"],
+                "pid": witness["child_pid"],
+            }
+        },
+    }
+
+
+def _assert_generation_metadata(payload: dict[str, object], witness: dict[str, object]) -> None:
+    assert payload["release_commit"] == witness["release_commit"]
+    assert payload["witness_started_at"] == witness["started_at"]
+    assert payload["witness_pid"] == witness["child_pid"]
+    assert payload["generation_id"] == _generation_id(
+        release_commit=str(witness["release_commit"]),
+        started_at=str(witness["started_at"]),
+        pid=int(witness["child_pid"]),
+    )
+
+
 def test_historical_publisher_error_after_later_exact_release_start_does_not_block(
     tmp_path: Path,
 ) -> None:
@@ -659,6 +730,309 @@ def test_idle_revision_success_supersedes_unassociated_same_generation_marker(
     ]
     assert revision["ok"] is True
     assert revision["superseded_by"] == "later_same_generation_service_success"
+
+
+def test_generic_host_root_reads_generic_supervisor_sibling(tmp_path: Path) -> None:
+    host_root = tmp_path / _GENERIC_HOST_NAME
+    state_root = host_root / "state"
+    state_root.mkdir(parents=True)
+    generic = _write_lifecycle_witness(_supervisor_sibling(host_root), "gate")
+    _write_lifecycle_witness(
+        tmp_path / f"{NAMESPACED_HOST_NAME}-supervisor",
+        "gate",
+        release_commit="b" * 40,
+        pid=1,
+    )
+
+    write_service_error_marker(
+        state_root=state_root,
+        host_root=host_root,
+        service="gate",
+        marker_name=GATE_ERROR_SPEC.marker_name,
+        error_type="CandidateGateError",
+        message="Could not resolve host: github.com",
+    )
+
+    marker = json.loads((state_root / GATE_ERROR_SPEC.marker_name).read_text(encoding="utf-8"))
+    _assert_generation_metadata(marker, generic)
+
+
+def test_namespaced_host_root_reads_matching_supervisor_sibling(tmp_path: Path) -> None:
+    host_root = tmp_path / NAMESPACED_HOST_NAME
+    state_root = host_root / "state"
+    state_root.mkdir(parents=True)
+    namespaced = _write_lifecycle_witness(_supervisor_sibling(host_root), "gate")
+    _write_lifecycle_witness(
+        tmp_path / f"{_GENERIC_HOST_NAME}-supervisor",
+        "gate",
+        release_commit="b" * 40,
+        pid=1,
+    )
+
+    write_service_error_marker(
+        state_root=state_root,
+        host_root=host_root,
+        service="gate",
+        marker_name=GATE_ERROR_SPEC.marker_name,
+        error_type="CandidateGateError",
+        message="Could not resolve host: github.com",
+    )
+
+    marker = json.loads((state_root / GATE_ERROR_SPEC.marker_name).read_text(encoding="utf-8"))
+    _assert_generation_metadata(marker, namespaced)
+
+
+def test_namespaced_marker_and_success_carry_generation_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host_root = tmp_path / NAMESPACED_HOST_NAME
+    state_root = host_root / "state"
+    state_root.mkdir(parents=True)
+    witness = _write_lifecycle_witness(_supervisor_sibling(host_root), "gate")
+    clock = iter(["2026-08-24T22:12:22.447102+00:00", "2026-08-24T22:16:41.526941+00:00"])
+    monkeypatch.setattr(
+        "msos_autobuilder.service_error_lifecycle.utc_now",
+        lambda: next(clock),
+    )
+
+    write_service_error_marker(
+        state_root=state_root,
+        host_root=host_root,
+        service="gate",
+        marker_name=GATE_ERROR_SPEC.marker_name,
+        error_type="CandidateGateError",
+        message="Could not resolve host: github.com",
+    )
+    record_service_cycle_success(
+        state_root=state_root,
+        host_root=host_root,
+        service="gate",
+        cycle_started_at="2026-08-24T22:16:14.065489+00:00",
+    )
+
+    marker = json.loads((state_root / GATE_ERROR_SPEC.marker_name).read_text(encoding="utf-8"))
+    success = json.loads((state_root / "gate-service-success.json").read_text(encoding="utf-8"))
+    _assert_generation_metadata(marker, witness)
+    _assert_generation_metadata(success, witness)
+
+
+def test_namespaced_later_same_generation_success_supersedes_transient_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host_root = tmp_path / NAMESPACED_HOST_NAME
+    state_root = host_root / "state"
+    state_root.mkdir(parents=True)
+    witness = _write_lifecycle_witness(_supervisor_sibling(host_root), "gate")
+    checks = _service_checks_from_witness("gate", witness)
+    marker_path = state_root / GATE_ERROR_SPEC.marker_name
+    clock = iter(["2026-08-24T22:12:22.447102+00:00", "2026-08-24T22:16:41.526941+00:00"])
+    monkeypatch.setattr(
+        "msos_autobuilder.service_error_lifecycle.utc_now",
+        lambda: next(clock),
+    )
+
+    write_service_error_marker(
+        state_root=state_root,
+        host_root=host_root,
+        service="gate",
+        marker_name=GATE_ERROR_SPEC.marker_name,
+        error_type="CandidateGateError",
+        message="Could not resolve host: github.com",
+    )
+    before = marker_path.read_bytes()
+    blocked = evaluate_service_error_marker(
+        state_root=state_root,
+        service_checks=checks,
+        spec=GATE_ERROR_SPEC,
+    )
+    assert blocked["ok"] is False
+    assert blocked["state"] == "active"
+    assert blocked["error"] == "current-generation error marker remains unresolved"
+
+    record_service_cycle_success(
+        state_root=state_root,
+        host_root=host_root,
+        service="gate",
+        cycle_started_at="2026-08-24T22:16:14.065489+00:00",
+    )
+    recovered = evaluate_service_error_marker(
+        state_root=state_root,
+        service_checks=checks,
+        spec=GATE_ERROR_SPEC,
+    )
+
+    assert recovered["ok"] is True
+    assert recovered["state"] == "superseded"
+    assert recovered["superseded_by"] == "later_same_generation_service_success"
+    assert recovered["preserved"] is True
+    assert marker_path.read_bytes() == before
+
+
+def test_missing_namespaced_supervisor_evidence_stays_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host_root = tmp_path / NAMESPACED_HOST_NAME
+    state_root = host_root / "state"
+    state_root.mkdir(parents=True)
+    generic = _write_lifecycle_witness(
+        tmp_path / f"{_GENERIC_HOST_NAME}-supervisor",
+        "gate",
+    )
+    checks = _service_checks_from_witness("gate", generic)
+    clock = iter(["2026-08-24T22:12:22.447102+00:00", "2026-08-24T22:16:41.526941+00:00"])
+    monkeypatch.setattr(
+        "msos_autobuilder.service_error_lifecycle.utc_now",
+        lambda: next(clock),
+    )
+
+    write_service_error_marker(
+        state_root=state_root,
+        host_root=host_root,
+        service="gate",
+        marker_name=GATE_ERROR_SPEC.marker_name,
+        error_type="CandidateGateError",
+        message="Could not resolve host: github.com",
+    )
+    record_service_cycle_success(
+        state_root=state_root,
+        host_root=host_root,
+        service="gate",
+        cycle_started_at="2026-08-24T22:12:22.447102+00:00",
+    )
+
+    marker = json.loads((state_root / GATE_ERROR_SPEC.marker_name).read_text(encoding="utf-8"))
+    success = json.loads((state_root / "gate-service-success.json").read_text(encoding="utf-8"))
+    assert "generation_id" not in marker
+    assert "release_commit" not in marker
+    assert "generation_id" not in success
+    evidence = evaluate_service_error_marker(
+        state_root=state_root,
+        service_checks=checks,
+        spec=GATE_ERROR_SPEC,
+    )
+    assert evidence["ok"] is False
+    assert evidence["state"] == "active"
+    assert evidence["error"] == "service success release does not match current release"
+
+
+def test_namespaced_host_does_not_fall_back_to_generic_supervisor(tmp_path: Path) -> None:
+    host_root = tmp_path / NAMESPACED_HOST_NAME
+    state_root = host_root / "state"
+    state_root.mkdir(parents=True)
+    namespaced = _write_lifecycle_witness(
+        _supervisor_sibling(host_root),
+        "gate",
+        release_commit="c" * 40,
+        pid=26616,
+    )
+    _write_lifecycle_witness(
+        tmp_path / f"{_GENERIC_HOST_NAME}-supervisor",
+        "gate",
+        release_commit=EXACT_RELEASE,
+        pid=_WITNESS_PID,
+    )
+
+    write_service_error_marker(
+        state_root=state_root,
+        host_root=host_root,
+        service="gate",
+        marker_name=GATE_ERROR_SPEC.marker_name,
+        error_type="CandidateGateError",
+        message="Could not resolve host: github.com",
+    )
+
+    marker = json.loads((state_root / GATE_ERROR_SPEC.marker_name).read_text(encoding="utf-8"))
+    _assert_generation_metadata(marker, namespaced)
+    assert marker["release_commit"] != EXACT_RELEASE
+
+
+def test_wrong_namespaced_witness_release_stays_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host_root = tmp_path / NAMESPACED_HOST_NAME
+    state_root = host_root / "state"
+    state_root.mkdir(parents=True)
+    witness = _write_lifecycle_witness(
+        _supervisor_sibling(host_root),
+        "gate",
+        release_commit="b" * 40,
+    )
+    checks = _service_checks_from_witness(
+        "gate",
+        witness,
+        release_commit=EXACT_RELEASE,
+    )
+    clock = iter(["2026-08-24T22:12:22.447102+00:00", "2026-08-24T22:16:41.526941+00:00"])
+    monkeypatch.setattr(
+        "msos_autobuilder.service_error_lifecycle.utc_now",
+        lambda: next(clock),
+    )
+
+    write_service_error_marker(
+        state_root=state_root,
+        host_root=host_root,
+        service="gate",
+        marker_name=GATE_ERROR_SPEC.marker_name,
+        error_type="CandidateGateError",
+        message="Could not resolve host: github.com",
+    )
+    record_service_cycle_success(
+        state_root=state_root,
+        host_root=host_root,
+        service="gate",
+        cycle_started_at="2026-08-24T22:16:14.065489+00:00",
+    )
+    evidence = evaluate_service_error_marker(
+        state_root=state_root,
+        service_checks=checks,
+        spec=GATE_ERROR_SPEC,
+    )
+    assert evidence["ok"] is False
+    assert evidence["state"] == "active"
+    assert "release" in str(evidence.get("error", "")).lower()
+
+
+def test_malformed_namespaced_witness_stays_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host_root = tmp_path / NAMESPACED_HOST_NAME
+    state_root = host_root / "state"
+    state_root.mkdir(parents=True)
+    _write_lifecycle_witness(
+        _supervisor_sibling(host_root),
+        "gate",
+        raw_text="{not-json",
+    )
+    checks = _service_checks_from_witness(
+        "gate",
+        {
+            "release_commit": EXACT_RELEASE,
+            "started_at": _WITNESS_STARTED,
+            "child_pid": _WITNESS_PID,
+        },
+    )
+    monkeypatch.setattr(
+        "msos_autobuilder.service_error_lifecycle.utc_now",
+        lambda: "2026-08-24T22:12:22.447102+00:00",
+    )
+
+    write_service_error_marker(
+        state_root=state_root,
+        host_root=host_root,
+        service="gate",
+        marker_name=GATE_ERROR_SPEC.marker_name,
+        error_type="CandidateGateError",
+        message="Could not resolve host: github.com",
+    )
+    marker = json.loads((state_root / GATE_ERROR_SPEC.marker_name).read_text(encoding="utf-8"))
+    assert "generation_id" not in marker
+    evidence = evaluate_service_error_marker(
+        state_root=state_root,
+        service_checks=checks,
+        spec=GATE_ERROR_SPEC,
+    )
+    assert evidence["ok"] is False
+    assert evidence["state"] == "active"
 
 
 def test_stale_gate_error_superseded_by_later_terminal_gate_evidence(

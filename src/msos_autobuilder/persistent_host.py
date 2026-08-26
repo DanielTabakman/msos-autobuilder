@@ -37,6 +37,7 @@ from .lifecycle_evidence import (
     emit_lifecycle_evidence,
     record_producer_evidence_error,
 )
+from .work_admission import AdmissionError, release_claim
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
@@ -232,6 +233,36 @@ def _host_relative(host_root: Path, path: Path) -> str:
         return path.resolve().relative_to(host_root.resolve()).as_posix()
     except ValueError:
         return path.as_posix()
+
+
+def _claim_release_fields(path: Path) -> tuple[str, str, int] | None:
+    """Read the writer-claim coordinates build_next stamped into a job packet.
+
+    Returns None whenever the packet cannot name a single claim generation, so a
+    job that never took a claim is left alone instead of guessed at.
+    """
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError, yaml.YAMLError):
+        return None
+    if not isinstance(raw, Mapping):
+        return None
+    build_next = raw.get("founder_build_next")
+    if not isinstance(build_next, Mapping):
+        return None
+    admission = build_next.get("work_admission")
+    if not isinstance(admission, Mapping):
+        return None
+    objective_sha256 = admission.get("objective_sha256")
+    writer_id = admission.get("claim_writer_id")
+    generation = admission.get("claim_generation")
+    if not isinstance(objective_sha256, str) or not objective_sha256:
+        return None
+    if not isinstance(writer_id, str) or not writer_id:
+        return None
+    if not isinstance(generation, int) or isinstance(generation, bool):
+        return None
+    return objective_sha256, writer_id, generation
 
 
 def _host_transition_receipt_path(
@@ -889,6 +920,58 @@ class PersistentHost:
                 },
             )
 
+    def _release_claim_for_failure(
+        self,
+        archive: Path,
+        job_id: str,
+        error: BaseException,
+        *,
+        outcome: str,
+    ) -> None:
+        """Give the archived attempt's writer claim a bounded failure disposition.
+
+        An execution failure is terminal for the attempt but not for the work item,
+        and a successor attempt is issued under a fresh job id, so it also gets a
+        fresh writer id. Leaving the claim active would hand the objective to a
+        writer that can never run again and refuse every successor with
+        BLOCKED_BY_OWNERSHIP_CONFLICT.
+        """
+        fields = _claim_release_fields(archive / "job.yaml")
+        if fields is None:
+            return
+        objective_sha256, writer_id, generation = fields
+        try:
+            release_claim(
+                self.config.host_root / "state",
+                objective_sha256,
+                writer_id=writer_id,
+                terminal_state="failed",
+                expected_generation=generation,
+                evidence={
+                    "bounded_failure_disposition": "host_execution_failed",
+                    "job_id": job_id,
+                    "execution_outcome": outcome,
+                    "error_class": type(error).__name__,
+                    "error": str(error),
+                    "host_archive_path": _host_relative(self.config.host_root, archive),
+                },
+            )
+        except (AdmissionError, OSError) as exc:
+            # A writer or generation mismatch means a later claim legitimately owns
+            # this objective now, so record the refusal instead of clobbering it.
+            _atomic_write_json(
+                archive / "claim-release-error.json",
+                {
+                    "job_id": job_id,
+                    "objective_sha256": objective_sha256,
+                    "writer_id": writer_id,
+                    "claim_generation": generation,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                    "recorded_at": _timestamp(),
+                },
+            )
+
     def _archive_failure(
         self,
         running_path: Path,
@@ -920,6 +1003,7 @@ class PersistentHost:
             },
         )
         os.replace(staging, destination)
+        self._release_claim_for_failure(destination, job_id, error, outcome=outcome)
         identity = None
         try:
             identity = attempt_identity_from_job_yaml(destination / "job.yaml")

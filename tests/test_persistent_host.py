@@ -26,6 +26,13 @@ from msos_autobuilder.persistent_host import (
     parse_host_job,
     sync_git_job_feed,
 )
+from msos_autobuilder.work_admission import (
+    AdmissionRequest,
+    AdmissionStatus,
+    admit_work,
+    objective_identity_from_work,
+    release_claim,
+)
 
 
 def _git(path: Path, *args: str) -> str:
@@ -530,6 +537,212 @@ def test_host_completed_and_failed_terminal_evidence_uses_actual_archives(
         ).as_posix()
         assert envelope["payload"].get("error_class") == expected_error
         assert (config.host_root / head["envelope_path"]).exists()
+
+
+def _claim_objective(work_item_id: str = "claim-release-work"):
+    return objective_identity_from_work(
+        repository="DanielTabakman/Probability-prediction-engine",
+        linked_issue=None,
+        work_item_id=work_item_id,
+        stable_parts={"work_item_id": work_item_id},
+        acceptance_contract_sha256="2" * 64,
+    )
+
+
+_CLAIM_PATHS = ("src/engine/claim_release.py", "tests/test_claim_release.py")
+
+
+def _job_identity_with_claim(
+    *,
+    objective_sha256: str,
+    writer_id: str,
+    claim_generation: int,
+) -> dict[str, Any]:
+    payload = _job_identity()
+    payload["founder_build_next"]["work_admission"] = {
+        "status": "NEW_WORK_ADMITTED",
+        "objective_sha256": objective_sha256,
+        "claim_writer_id": writer_id,
+        "claim_generation": claim_generation,
+        "authorized_paths": list(_CLAIM_PATHS),
+    }
+    return payload
+
+
+def _claim_state(host_root: Path, objective_sha256: str) -> dict[str, Any]:
+    path = host_root / "state" / "work-admission" / "claims" / f"{objective_sha256}.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _run_failing_claimed_job(
+    tmp_path: Path,
+    *,
+    job_id: str,
+    objective_sha256: str,
+    writer_id: str,
+    claim_generation: int,
+    claim_setup: Any,
+) -> PersistentHostConfig:
+    """Import a claimed job packet that fails before the runner, and archive it."""
+    payload = {
+        "version": 1,
+        "job_id": job_id,
+        "approved": True,
+        "publication_enabled": False,
+        # A stale expected head fails the attempt before any lane runs.
+        "expected_source_head": "deadbee",
+        **_job_identity_with_claim(
+            objective_sha256=objective_sha256,
+            writer_id=writer_id,
+            claim_generation=claim_generation,
+        ),
+        "manifest": _manifest(),
+    }
+    feed_repo, _source_job = _write_feed_job(tmp_path / job_id, job_id=job_id, payload=payload)
+    config, _ = _host_config_with_feed(tmp_path / f"{job_id}-case", feed_repo)
+    paths = HostPaths.from_root(config.host_root)
+    claim_setup(config)
+    assert sync_git_job_feed(config, paths) == (job_id,)
+
+    result = PersistentHost(config, runner=_fake_runner).run_once(sync_feed=False)
+    assert result.outcome == "failed"
+    return config
+
+
+def test_host_execution_failure_releases_the_writer_claim(tmp_path: Path) -> None:
+    objective = _claim_objective()
+    writer_id = "build-next:claim-release-first"
+
+    def claim_setup(config: PersistentHostConfig) -> None:
+        admitted = admit_work(
+            AdmissionRequest(
+                objective=objective,
+                writer_id=writer_id,
+                branch="build/auto/claim-release-first",
+                authorized_paths=_CLAIM_PATHS,
+                claim_root=config.host_root / "state",
+            )
+        )
+        assert admitted.status == AdmissionStatus.NEW_WORK_ADMITTED
+        assert admitted.claim is not None
+        assert admitted.claim.generation == 1
+
+    config = _run_failing_claimed_job(
+        tmp_path,
+        job_id="claim-release-failed",
+        objective_sha256=objective.objective_sha256,
+        writer_id=writer_id,
+        claim_generation=1,
+        claim_setup=claim_setup,
+    )
+
+    claim = _claim_state(config.host_root, objective.objective_sha256)
+    assert claim["state"] == "failed"
+    assert claim["evidence"]["bounded_failure_disposition"] == "host_execution_failed"
+    assert claim["evidence"]["job_id"] == "claim-release-failed"
+    assert claim["evidence"]["error_class"] == "HostJobError"
+
+    # A retry is issued under a fresh job id, so it is also a fresh writer. Without the
+    # bounded failure disposition above it would be refused forever.
+    successor = admit_work(
+        AdmissionRequest(
+            objective=objective,
+            writer_id="build-next:claim-release-successor",
+            branch="build/auto/claim-release-successor",
+            authorized_paths=_CLAIM_PATHS,
+            claim_root=config.host_root / "state",
+        )
+    )
+    assert successor.status == AdmissionStatus.NEW_WORK_ADMITTED
+    assert successor.claim is not None
+    assert successor.claim.generation == 2
+
+
+def test_host_execution_failure_does_not_clobber_a_newer_writer_claim(tmp_path: Path) -> None:
+    objective = _claim_objective("claim-release-superseded")
+    stale_writer = "build-next:claim-release-stale"
+    current_writer = "build-next:claim-release-current"
+
+    def claim_setup(config: PersistentHostConfig) -> None:
+        state = config.host_root / "state"
+        admit_work(
+            AdmissionRequest(
+                objective=objective,
+                writer_id=stale_writer,
+                branch="build/auto/claim-release-stale",
+                authorized_paths=_CLAIM_PATHS,
+                claim_root=state,
+            )
+        )
+        release_claim(
+            state,
+            objective.objective_sha256,
+            writer_id=stale_writer,
+            terminal_state="failed",
+            evidence={"bounded_failure_disposition": "fixture"},
+        )
+        current = admit_work(
+            AdmissionRequest(
+                objective=objective,
+                writer_id=current_writer,
+                branch="build/auto/claim-release-current",
+                authorized_paths=_CLAIM_PATHS,
+                claim_root=state,
+            )
+        )
+        assert current.claim is not None
+        assert current.claim.generation == 2
+
+    config = _run_failing_claimed_job(
+        tmp_path,
+        job_id="claim-release-stale-packet",
+        objective_sha256=objective.objective_sha256,
+        writer_id=stale_writer,
+        claim_generation=1,
+        claim_setup=claim_setup,
+    )
+
+    claim = _claim_state(config.host_root, objective.objective_sha256)
+    assert claim["state"] == "active"
+    assert claim["writer_id"] == current_writer
+    assert claim["generation"] == 2
+
+    refusal = json.loads(
+        (
+            HostPaths.from_root(config.host_root).failed
+            / "claim-release-stale-packet"
+            / "claim-release-error.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert refusal["writer_id"] == stale_writer
+    assert refusal["claim_generation"] == 1
+    assert refusal["error_type"] == "AdmissionError"
+
+
+def test_host_execution_failure_without_a_claim_records_no_release(tmp_path: Path) -> None:
+    payload = {
+        "version": 1,
+        "job_id": "unclaimed-failure",
+        "approved": True,
+        "publication_enabled": False,
+        "expected_source_head": "deadbee",
+        **_job_identity(),
+        "manifest": _manifest(),
+    }
+    feed_repo, _source_job = _write_feed_job(
+        tmp_path / "unclaimed", job_id="unclaimed-failure", payload=payload
+    )
+    config, _ = _host_config_with_feed(tmp_path / "unclaimed-case", feed_repo)
+    paths = HostPaths.from_root(config.host_root)
+    assert sync_git_job_feed(config, paths) == ("unclaimed-failure",)
+
+    result = PersistentHost(config, runner=_fake_runner).run_once(sync_feed=False)
+
+    assert result.outcome == "failed"
+    archive = paths.failed / "unclaimed-failure"
+    assert (archive / "error.json").exists()
+    assert not (archive / "claim-release-error.json").exists()
+    assert not (config.host_root / "state" / "work-admission" / "claims").exists()
 
 
 def test_unapproved_feed_job_is_not_imported(tmp_path: Path) -> None:

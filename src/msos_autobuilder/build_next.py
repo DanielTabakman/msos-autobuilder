@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -494,6 +495,40 @@ class GitHubWorkDiscoveryClient:
                 return items
         raise BuildNextError(f"GitHub {label} discovery exceeded bounded page limit")
 
+    def _search(self, query: str, label: str) -> list[dict[str, Any]]:
+        """Resolve one bounded search query.
+
+        Discovery must stay independent of repository history size. Enumerating every
+        issue and pull request costs one page per hundred items plus one file listing
+        per pull request, which exceeds the REST budget on any long-lived repository.
+        """
+        items: list[dict[str, Any]] = []
+        encoded = urllib.parse.quote_plus(query)
+        for page in range(1, 11):
+            payload = self._request(f"/search/issues?q={encoded}&per_page=100&page={page}")
+            if not isinstance(payload, dict):
+                raise BuildNextError(f"GitHub {label} search returned invalid payload")
+            batch = payload.get("items")
+            if not isinstance(batch, list):
+                raise BuildNextError(f"GitHub {label} search returned invalid items")
+            items.extend(item for item in batch if isinstance(item, dict))
+            if len(batch) < 100:
+                return items
+        raise BuildNextError(f"GitHub {label} search exceeded bounded page limit")
+
+    def _pull_paths(self, number: int) -> tuple[str, ...]:
+        file_items = self._paged_list(
+            f"/repos/{self.repo_full_name}/pulls/{number}/files",
+            "PR file",
+        )
+        return tuple(
+            sorted(
+                str(file.get("filename") or "").replace("\\", "/")
+                for file in file_items
+                if file.get("filename")
+            )
+        )
+
     def related_candidates(
         self,
         *,
@@ -502,15 +537,32 @@ class GitHubWorkDiscoveryClient:
         changed_paths: Sequence[str],
     ) -> tuple[WorkCandidate, ...]:
         requested_paths = {path.replace("\\", "/").strip("/") for path in changed_paths}
+        scope = f"repo:{self.repo_full_name}"
+
+        # Equivalence is matched by exact SHA-256 search so already-completed work is still
+        # recognized in closed and merged pull requests without walking repository history.
+        equivalent: dict[tuple[str, int], dict[str, Any]] = {}
+        for digest in dict.fromkeys(
+            value for value in (objective_sha256, acceptance_contract_sha256) if value
+        ):
+            for item in self._search(f'{scope} "{digest}"', "equivalence"):
+                number = item.get("number")
+                if isinstance(number, int):
+                    kind = "pr" if "pull_request" in item else "issue"
+                    equivalent[(kind, number)] = item
+
+        issues: dict[int, dict[str, Any]] = {
+            number: item for (kind, number), item in equivalent.items() if kind == "issue"
+        }
+        for item in self._search(f"{scope} is:issue", "issue"):
+            number = item.get("number")
+            if isinstance(number, int):
+                issues.setdefault(number, item)
+
         candidates: list[WorkCandidate] = []
-        for issue in self._paged_list(f"/repos/{self.repo_full_name}/issues?state=all", "issue"):
-            if "pull_request" in issue:
-                continue
+        for number, issue in sorted(issues.items()):
             body = str(issue.get("body") or "")
             title = str(issue.get("title") or "")
-            number = issue.get("number")
-            if not isinstance(number, int):
-                continue
             same_objective = objective_sha256 in body or objective_sha256 in title
             same_contract = (
                 acceptance_contract_sha256 in body
@@ -537,33 +589,34 @@ class GitHubWorkDiscoveryClient:
                     url=str(issue.get("html_url") or ""),
                 )
             )
-        for pull in self._paged_list(f"/repos/{self.repo_full_name}/pulls?state=all", "PR"):
-            number = pull.get("number")
-            if not isinstance(number, int):
-                continue
-            file_items = self._paged_list(
-                f"/repos/{self.repo_full_name}/pulls/{number}/files",
-                "PR file",
-            )
-            pr_paths = tuple(
-                sorted(
-                    str(file.get("filename") or "").replace("\\", "/")
-                    for file in file_items
-                    if file.get("filename")
-                )
-            )
+        # Path overlap is an ownership conflict only against work that can still be written.
+        # Merged pull requests are already part of the frozen source, and closed ones have no
+        # writer, so both are reached through equivalence search rather than history scanning.
+        pulls: dict[int, dict[str, Any]] = {
+            number: item for (kind, number), item in equivalent.items() if kind == "pr"
+        }
+        for item in self._search(f"{scope} is:pr is:open", "open PR"):
+            number = item.get("number")
+            if isinstance(number, int):
+                pulls.setdefault(number, item)
+
+        for number, pull in sorted(pulls.items()):
+            pr_paths = self._pull_paths(number)
             body = str(pull.get("body") or "")
             same_objective = objective_sha256 in body
             same_contract = acceptance_contract_sha256 in body
             path_overlap = bool(requested_paths & set(pr_paths))
             if not (same_objective or same_contract or path_overlap):
                 continue
-            head = pull.get("head") if isinstance(pull.get("head"), dict) else {}
+            detail = self._request(f"/repos/{self.repo_full_name}/pulls/{number}")
+            if not isinstance(detail, dict):
+                raise BuildNextError(f"GitHub PR {number} detail returned invalid payload")
+            head = detail.get("head") if isinstance(detail.get("head"), dict) else {}
             candidates.append(
                 candidate_from_pr(
                     number=number,
-                    title=str(pull.get("title") or ""),
-                    state=str(pull.get("state") or ""),
+                    title=str(detail.get("title") or pull.get("title") or ""),
+                    state=str(detail.get("state") or pull.get("state") or ""),
                     branch=str(head.get("ref") or ""),
                     linked_issue=_linked_issue_from_text(body),
                     objective_sha256=objective_sha256 if same_objective else None,
@@ -571,9 +624,9 @@ class GitHubWorkDiscoveryClient:
                         acceptance_contract_sha256 if same_contract else None
                     ),
                     changed_paths=pr_paths,
-                    canonical=bool(pull.get("merged_at")),
-                    merged=bool(pull.get("merged_at")),
-                    url=str(pull.get("html_url") or ""),
+                    canonical=bool(detail.get("merged_at")),
+                    merged=bool(detail.get("merged_at")),
+                    url=str(detail.get("html_url") or pull.get("html_url") or ""),
                 )
             )
         return tuple(candidates)

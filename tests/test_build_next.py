@@ -5,6 +5,7 @@ import inspect
 import json
 import re
 import subprocess
+import urllib.parse
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -1646,6 +1647,203 @@ def test_work_discovery_client_fails_closed_when_credential_helper_fails(
 
     with pytest.raises(BuildNextError, match="credential helper unavailable"):
         GitHubWorkDiscoveryClient.from_git_credential(SOURCE_REPO)
+
+
+OBJECTIVE_SHA = "a" * 64
+CONTRACT_SHA = "b" * 64
+
+
+class _FakeGitHubApi:
+    """Minimal GitHub stand-in that mirrors which fields each endpoint really returns.
+
+    Search results deliberately omit ``merged_at`` and ``head`` so a test fails if the
+    client infers merge state from a search hit instead of the pull request itself.
+    """
+
+    def __init__(
+        self,
+        *,
+        issues: Sequence[Mapping[str, Any]] = (),
+        pulls: Sequence[Mapping[str, Any]] = (),
+        files: Mapping[int, Sequence[str]] | None = None,
+    ) -> None:
+        self.issues = [dict(item) for item in issues]
+        self.pulls = [dict(item) for item in pulls]
+        self.files = {int(key): list(value) for key, value in (files or {}).items()}
+        self.requests: list[str] = []
+
+    def __call__(self, path: str) -> Any:
+        self.requests.append(path)
+        parsed = urllib.parse.urlparse(path)
+        params = urllib.parse.parse_qs(parsed.query)
+        page = int(params.get("page", ["1"])[0])
+        if parsed.path == "/search/issues":
+            items = self._search(params["q"][0])
+            window = items[(page - 1) * 100 : page * 100]
+            return {"total_count": len(items), "items": window}
+        files_match = re.fullmatch(r"/repos/[^/]+/[^/]+/pulls/(\d+)/files", parsed.path)
+        if files_match:
+            names = self.files.get(int(files_match.group(1)), [])
+            return [{"filename": name} for name in names[(page - 1) * 100 : page * 100]]
+        detail_match = re.fullmatch(r"/repos/[^/]+/[^/]+/pulls/(\d+)", parsed.path)
+        if detail_match:
+            return self._pull(int(detail_match.group(1)))
+        raise AssertionError(f"unexpected request path: {path}")
+
+    def _pull(self, number: int) -> dict[str, Any]:
+        for item in self.pulls:
+            if item["number"] == number:
+                return dict(item)
+        raise AssertionError(f"unknown pull request {number}")
+
+    @staticmethod
+    def _as_search_pull(pull: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "number": pull["number"],
+            "title": pull.get("title", ""),
+            "state": pull.get("state", ""),
+            "body": pull.get("body", ""),
+            "html_url": pull.get("html_url", ""),
+            "pull_request": {"url": f"https://api.github.com/pulls/{pull['number']}"},
+        }
+
+    def _search(self, query: str) -> list[dict[str, Any]]:
+        if "is:issue" in query:
+            return [dict(item) for item in self.issues]
+        if "is:pr" in query and "is:open" in query:
+            return [
+                self._as_search_pull(item)
+                for item in self.pulls
+                if item.get("state") == "open"
+            ]
+        digest = re.search(r'"([0-9a-f]{64})"', query)
+        if digest is None:
+            raise AssertionError(f"unexpected search query: {query}")
+        needle = digest.group(1)
+
+        def _hit(item: Mapping[str, Any]) -> bool:
+            return needle in str(item.get("body") or "") or needle in str(item.get("title") or "")
+
+        found = [dict(item) for item in self.issues if _hit(item)]
+        found.extend(self._as_search_pull(item) for item in self.pulls if _hit(item))
+        return found
+
+
+def _discover(api: _FakeGitHubApi, *, paths: Sequence[str] = ("src/viz/panel.py",)):
+    client = GitHubWorkDiscoveryClient(SOURCE_REPO, "fixture-token")
+    client._request = api  # type: ignore[method-assign]
+    return client.related_candidates(
+        objective_sha256=OBJECTIVE_SHA,
+        acceptance_contract_sha256=CONTRACT_SHA,
+        changed_paths=list(paths),
+    )
+
+
+def test_work_discovery_stays_bounded_on_a_long_lived_repository() -> None:
+    api = _FakeGitHubApi(
+        issues=[{"number": 1, "title": "real issue", "state": "open", "body": ""}],
+        pulls=[
+            {
+                "number": number,
+                "title": f"historical {number}",
+                "state": "closed",
+                "body": "",
+                "merged_at": "2026-01-01T00:00:00Z",
+                "head": {"ref": f"branch-{number}"},
+            }
+            for number in range(100, 5500)
+        ],
+    )
+
+    assert _discover(api) == ()
+
+    assert not any(re.match(r"/repos/[^/]+/[^/]+/(issues|pulls)\?", path) for path in api.requests)
+    assert not any("state=all" in path for path in api.requests)
+    assert len(api.requests) <= 10
+
+
+def test_work_discovery_matches_equivalent_merged_pull_request() -> None:
+    api = _FakeGitHubApi(
+        pulls=[
+            {
+                "number": 4242,
+                "title": "already delivered",
+                "state": "closed",
+                "body": f"objective {OBJECTIVE_SHA}",
+                "merged_at": "2026-02-02T00:00:00Z",
+                "html_url": "https://github.com/x/y/pull/4242",
+                "head": {"ref": "delivered-branch"},
+            }
+        ],
+        files={4242: ["src/viz/panel.py"]},
+    )
+
+    candidates = _discover(api)
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.number == 4242
+    assert candidate.objective_sha256 == OBJECTIVE_SHA
+    assert candidate.merged is True
+    assert candidate.canonical is True
+    assert candidate.branch == "delivered-branch"
+    assert candidate.changed_paths == ("src/viz/panel.py",)
+
+
+def test_work_discovery_reports_open_pull_request_path_overlap() -> None:
+    api = _FakeGitHubApi(
+        pulls=[
+            {
+                "number": 77,
+                "title": "unrelated but overlapping",
+                "state": "open",
+                "body": "no digest here",
+                "merged_at": None,
+                "head": {"ref": "live-branch"},
+            }
+        ],
+        files={77: ["src/viz/panel.py", "docs/notes.md"]},
+    )
+
+    candidates = _discover(api)
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.number == 77
+    assert candidate.objective_sha256 is None
+    assert candidate.merged is False
+    assert candidate.canonical is False
+    assert "src/viz/panel.py" in candidate.changed_paths
+
+
+def test_work_discovery_ignores_closed_pull_request_overlap_without_equivalence() -> None:
+    api = _FakeGitHubApi(
+        pulls=[
+            {
+                "number": 88,
+                "title": "historical overlap",
+                "state": "closed",
+                "body": "no digest here",
+                "merged_at": "2026-03-03T00:00:00Z",
+                "head": {"ref": "old-branch"},
+            }
+        ],
+        files={88: ["src/viz/panel.py"]},
+    )
+
+    assert _discover(api) == ()
+
+
+def test_work_discovery_search_page_limit_fails_closed() -> None:
+    api = _FakeGitHubApi(
+        issues=[
+            {"number": number, "title": f"issue {number}", "state": "open", "body": ""}
+            for number in range(1, 1102)
+        ]
+    )
+
+    with pytest.raises(BuildNextError, match="exceeded bounded page limit"):
+        _discover(api)
 
 
 def test_run_accepts_every_keyword_used_by_module_call_sites() -> None:

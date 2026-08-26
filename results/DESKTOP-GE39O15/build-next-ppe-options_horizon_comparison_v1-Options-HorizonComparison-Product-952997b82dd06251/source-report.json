@@ -1,0 +1,48 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "apps/msos-web/src/components/OptionsHorizonClient.tsx",
+          "apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx",
+          "apps/msos-web/src/lib/optionsHorizonComparison.ts",
+          "src/engine/options_horizon_comparison.py",
+          "src/viz/options_horizon_comparison_boundary.py",
+          "tests/test_msos_web_options_horizon_comparison.py",
+          "tests/test_options_horizon_comparison.py"
+        ],
+        "metadata": {
+          "output_tail": "n comparison engine in [options_horizon_comparison.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/Options-HorizonComparison-Product-Slice002/src/engine/options_horizon_comparison.py)\n- Added display boundary helper in [options_horizon_comparison_boundary.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/Options-HorizonComparison-Product-Slice002/src/viz/options_horizon_comparison_boundary.py)\n- Added MSOS comparison builder and read-only table panel in [optionsHorizonComparison.ts](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/Options-HorizonComparison-Product-Slice002/apps/msos-web/src/lib/optionsHorizonComparison.ts) and [OptionsHorizonComparisonPanel.tsx](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/Options-HorizonComparison-Product-Slice002/apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx)\n- Wired the panel into [OptionsHorizonClient.tsx](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/Options-HorizonComparison-Product-Slice002/apps/msos-web/src/components/OptionsHorizonClient.tsx)\n- Added focused tests for engine, boundary shape, and MSOS no-execution/no-advice surface.\n\nValidation:\n- `python -m pytest tests/test_options_horizon_comparison.py tests/test_msos_web_options_horizon_comparison.py` passed: 8 passed\n- `python -m ruff check ...` passed\n- `python scripts/check_repository_boundaries.py` passed\n- `git diff --check ...` passed\n\nGate notes:\n- Full explicit-path gate could not complete in this environment: layer audit does not currently map the new allowed bounded test filenames, and the scoped pytest set collects unrelated tests requiring missing `yfinance`.\n- Web lint could not run because `apps/msos-web/node_modules` is absent and `next` is unavailable locally.\n\nNo commit/push was performed because this packet forbids `.git/**` writes and direct publication.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\workspaces\\Options-HorizonComparison-Product-Slice002"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 7 changed path(s)",
+        "task_id": "Options-HorizonComparison-Product-Slice002"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+    "status": "completed"
+  },
+  "completed_at": "2026-08-26T15:57:17.980426+00:00",
+  "job_id": "build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251",
+  "job_sha256": "00a8aebae4c43e656a7bae3ec362933f46dc63ba0f2879b3294a506ccb5827d4",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "lane_id": "Options-HorizonComparison-Product-Slice002",
+      "patch_file": "patches/Options-HorizonComparison-Product-Slice002.patch",
+      "patch_sha256": "098a6d78e923c5461304559b0952bd58472ba3dac6ab09eb4c7af8c994220c8d",
+      "task_id": "Options-HorizonComparison-Product-Slice002"
+    }
+  ],
+  "publication_enabled": false,
+  "requested_by": "capacity-one refill controller",
+  "source": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\queue\\pending\\build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251.yaml",
+  "version": 1
+}

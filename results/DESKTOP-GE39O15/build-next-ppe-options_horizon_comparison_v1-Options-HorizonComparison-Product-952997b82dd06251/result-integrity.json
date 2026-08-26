@@ -1,0 +1,9 @@
+{
+  "canonical_patch_sha256_by_task": {
+    "Options-HorizonComparison-Product-Slice002": "ad5f3533c7d52a0db065e34e97553cc9ffd91b94f35ee4e574261d70b117a304"
+  },
+  "corrected_report_sha256": "1c10706448d67328251d80b86232026c9d1dbaef47b898ab44ea94ce293e2635",
+  "publication_enabled": false,
+  "source_report_sha256": "131efda64a0fe06e067d494995fd906ffe4f5d4770db579e86e772b5871920eb",
+  "version": 1
+}

@@ -8,6 +8,8 @@ evidence-relay contract for revision-loop and candidate-gate results checkouts.
 from __future__ import annotations
 
 import os
+import shutil
+import stat
 from pathlib import Path
 
 REVISION_RESULTS_SHORT = "rl-repo"
@@ -40,6 +42,27 @@ def revision_results_checkout(state_root: Path) -> Path:
 
 def candidate_results_checkout(state_root: Path) -> Path:
     return prefer_checkout(state_root, CANDIDATE_RESULTS_SHORT, CANDIDATE_RESULTS_LEGACY)
+
+
+def remove_git_tree(path: Path, *, ignore_errors: bool = False) -> None:
+    """Remove a directory tree that may hold read-only git objects.
+
+    Git marks pack files read-only, and on Windows ``shutil.rmtree`` cannot
+    unlink a read-only file. A leftover checkout is therefore undeletable by a
+    plain rmtree, so a disposable workspace survives its own cleanup and the
+    next run fails with ``PermissionError`` instead of recloning from scratch.
+    """
+
+    target = Path(path)
+    if not target.exists():
+        return
+    for child in target.rglob("*"):
+        try:
+            child.chmod(child.stat().st_mode | stat.S_IWRITE)
+        except OSError:
+            # Leave it to rmtree, which reports or ignores per ignore_errors.
+            continue
+    shutil.rmtree(target, ignore_errors=ignore_errors)
 
 
 def git_environment() -> dict[str, str]:

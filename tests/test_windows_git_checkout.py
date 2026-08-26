@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import stat
 import subprocess
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from msos_autobuilder.windows_git_checkout import (
     candidate_results_checkout,
     git_environment,
     prefer_checkout,
+    remove_git_tree,
     revision_results_checkout,
 )
 
@@ -86,6 +88,36 @@ def _nested_patch(checkout: Path) -> Path:
         / "patches"
         / "Issue55-GenericGate-WitnessV2.patch"
     )
+
+
+def test_remove_git_tree_deletes_read_only_git_objects(tmp_path: Path) -> None:
+    """A clone holds read-only pack files, which defeat a plain shutil.rmtree.
+
+    On Windows a disposable workspace then survives its own cleanup, and every
+    later run fails with PermissionError instead of recloning from scratch.
+    """
+    source = _init_bare_results_remote(tmp_path / "source")
+    _git(source, "gc", "-q")
+    workspace = tmp_path / "workspace"
+    _git(None, "clone", "-q", str(source), str(workspace))
+
+    assert list((workspace / ".git" / "objects" / "pack").glob("*.idx")), (
+        "expected a packed clone so the read-only pack case is exercised"
+    )
+    locked = workspace / "locked.txt"
+    locked.write_text("read only\n", encoding="utf-8")
+    locked.chmod(stat.S_IREAD)
+
+    remove_git_tree(workspace)
+
+    assert not workspace.exists()
+
+
+def test_remove_git_tree_tolerates_a_missing_path(tmp_path: Path) -> None:
+    absent = tmp_path / "absent"
+    remove_git_tree(absent)
+    remove_git_tree(absent, ignore_errors=True)
+    assert not absent.exists()
 
 
 def test_prefer_checkout_defaults_to_short_and_reuses_legacy(tmp_path: Path) -> None:

@@ -37,7 +37,11 @@ from .validation_contract import (
     canonical_dependency_source_sha256,
     load_validation_contract,
 )
-from .windows_git_checkout import candidate_results_checkout, git_environment
+from .windows_git_checkout import (
+    candidate_results_checkout,
+    git_environment,
+    remove_git_tree,
+)
 
 
 class CandidateGateError(RuntimeError):
@@ -582,8 +586,7 @@ class CandidateGate:
 
     def _clone_candidate(self, job_id: str, source_head: str) -> Path:
         candidate = self.workspace_root / _safe_segment(job_id, fallback="job")
-        if candidate.exists():
-            shutil.rmtree(candidate)
+        remove_git_tree(candidate)
         candidate.parent.mkdir(parents=True, exist_ok=True)
         if not (self.config.source_repo / ".git").exists():
             raise CandidateGateError(f"source_repo is not a Git checkout: {self.config.source_repo}")
@@ -970,7 +973,7 @@ class CandidateGate:
         finally:
             env_path = candidate_env.path if candidate_env is not None else None
             if candidate is not None and candidate.exists():
-                shutil.rmtree(candidate, ignore_errors=True)
+                remove_git_tree(candidate, ignore_errors=True)
             report["workspace_removed"] = candidate is None or not candidate.exists()
             if env_path is not None:
                 report["candidate_environment_removed"] = not env_path.exists()

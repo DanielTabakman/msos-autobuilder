@@ -401,6 +401,51 @@ def test_revision_loop_idle_cycle_writes_success_record(tmp_path: Path) -> None:
     assert success["associated_jobs"] == []
 
 
+def test_revision_loop_names_failed_gates_it_declines_for_lack_of_a_plan(
+    tmp_path: Path,
+) -> None:
+    """A failed gate with no plan must be named, not silently swallowed.
+
+    The loop cannot queue a revision without a plan, but the reducer still parks
+    the attempt at operator_required_revision_blocked. If the cycle says nothing,
+    the stall has no stated cause anywhere on the host.
+    """
+    remote = _create_remote(tmp_path)
+    config = RevisionLoopConfig(
+        host_root=tmp_path / "host",
+        repo_url=str(remote),
+        results_branch="results",
+        jobs_branch="jobs",
+        machine_id="test-host",
+        poll_seconds=1,
+        plans={},
+    )
+    loop = RevisionLoop(config)
+
+    assert loop.run_once() == ()
+
+    state = config.host_root / "state"
+    success = json.loads(
+        (state / "revision-service-success.json").read_text(encoding="utf-8")
+    )
+    declined = success["terminal_evidence"]["unplanned_failed_gates"]
+    assert [item["source_job_id"] for item in declined] == [ROOT_JOB_ID]
+    assert declined[0]["reason"] == "no_matching_revision_plan"
+
+    gate_path = (
+        loop.results.root / "results" / "test-host" / ROOT_JOB_ID / "gate-report.json"
+    )
+    assert declined[0]["gate_report_sha256"] == hashlib.sha256(
+        gate_path.read_bytes()
+    ).hexdigest()
+
+    # Declining is not a service error, and it must not invent a disposition the
+    # revision loop never reached.
+    assert success["result"] == "success"
+    assert not (state / "revision-loop-error.json").exists()
+    assert not (state / "revision-evidence").exists()
+
+
 def test_revision_loop_rejects_mutated_gate_evidence(tmp_path: Path) -> None:
     remote = _create_remote(tmp_path)
     config = RevisionLoopConfig(

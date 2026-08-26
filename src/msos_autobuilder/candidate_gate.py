@@ -39,7 +39,10 @@ from .validation_contract import (
 )
 from .windows_git_checkout import (
     candidate_results_checkout,
+    candidate_workspace,
+    candidate_workspace_root,
     git_environment,
+    legacy_candidate_workspace,
     remove_git_tree,
 )
 
@@ -559,7 +562,7 @@ class CandidateGate:
         self.config = config
         self.host_root = config.host_root.expanduser().resolve()
         self.state = self.host_root / "state"
-        self.workspace_root = self.state / "candidate-gate-workspaces"
+        self.workspace_root = candidate_workspace_root(self.state)
         self.ledger_path = self.state / "candidate-gate-seen.json"
         self.results = ResultsBranch(config)
         self._last_error_marker_written = False
@@ -585,8 +588,14 @@ class CandidateGate:
         _atomic_write_json(self.ledger_path, ledger)
 
     def _clone_candidate(self, job_id: str, source_head: str) -> Path:
-        candidate = self.workspace_root / _safe_segment(job_id, fallback="job")
+        candidate = candidate_workspace(self.state, job_id)
         remove_git_tree(candidate)
+        # A leftover under the old long layout is unreachable once the digest
+        # path is in use, so drop it here rather than orphaning it forever.
+        remove_git_tree(
+            legacy_candidate_workspace(self.state, _safe_segment(job_id, fallback="job")),
+            ignore_errors=True,
+        )
         candidate.parent.mkdir(parents=True, exist_ok=True)
         if not (self.config.source_repo / ".git").exists():
             raise CandidateGateError(f"source_repo is not a Git checkout: {self.config.source_repo}")

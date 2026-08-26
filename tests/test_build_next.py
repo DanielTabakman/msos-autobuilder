@@ -1,18 +1,24 @@
 from __future__ import annotations
 
+import ast
+import inspect
 import json
 import re
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
+import msos_autobuilder.build_next as build_next_module
 from msos_autobuilder.build_next import (
     BuildNextConfig,
+    BuildNextError,
+    GitHubWorkDiscoveryClient,
     RefillAttemptContext,
     _job_id,
     _normalize_github_repository,
@@ -1563,3 +1569,98 @@ def test_long_near_identical_refill_inputs_remain_distinct() -> None:
     assert len(first) <= 96
     assert len(second) <= 96
     assert first.rsplit("-", 1)[-1] != second.rsplit("-", 1)[-1]
+
+
+def _credential_stub(
+    stdout: str,
+    *,
+    returncode: int = 0,
+    stderr: str = "",
+    captured: dict[str, Any] | None = None,
+):
+    def fake_run(argv: Sequence[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if captured is not None:
+            captured["argv"] = list(argv)
+            captured["input"] = kwargs.get("input")
+        return subprocess.CompletedProcess(list(argv), returncode, stdout, stderr)
+
+    return fake_run
+
+
+def test_run_forwards_input_text_as_subprocess_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        _credential_stub("ok\n", captured=captured),
+    )
+
+    proc = build_next_module._run(["git", "credential", "fill"], input_text="protocol=https\n")
+
+    assert captured["input"] == "protocol=https\n"
+    assert proc.stdout == "ok\n"
+
+
+def test_work_discovery_client_extracts_token_from_credential_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        _credential_stub(
+            "protocol=https\nhost=github.com\nusername=fixture\npassword=fixture-token\n",
+            captured=captured,
+        ),
+    )
+
+    client = GitHubWorkDiscoveryClient.from_git_credential(SOURCE_REPO)
+
+    assert client.repo_full_name == SOURCE_REPO
+    assert client.token == "fixture-token"
+    assert captured["argv"] == ["git", "credential", "fill"]
+    assert captured["input"] == "protocol=https\nhost=github.com\n\n"
+
+
+def test_work_discovery_client_fails_closed_without_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        _credential_stub("protocol=https\nhost=github.com\nusername=fixture\n"),
+    )
+
+    with pytest.raises(BuildNextError, match="did not return a GitHub token"):
+        GitHubWorkDiscoveryClient.from_git_credential(SOURCE_REPO)
+
+
+def test_work_discovery_client_fails_closed_when_credential_helper_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        _credential_stub("", returncode=1, stderr="credential helper unavailable"),
+    )
+
+    with pytest.raises(BuildNextError, match="credential helper unavailable"):
+        GitHubWorkDiscoveryClient.from_git_credential(SOURCE_REPO)
+
+
+def test_run_accepts_every_keyword_used_by_module_call_sites() -> None:
+    """The production submit path is not covered by local-remote fixtures, so pin the
+    internal ``_run`` contract structurally instead."""
+    tree = ast.parse(Path(build_next_module.__file__).read_text(encoding="utf-8"))
+    used: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id != "_run":
+            continue
+        used.update(keyword.arg for keyword in node.keywords if keyword.arg is not None)
+
+    accepted = set(inspect.signature(build_next_module._run).parameters)
+
+    assert used
+    assert used <= accepted

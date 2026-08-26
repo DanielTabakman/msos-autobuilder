@@ -292,6 +292,7 @@ def _run(
     argv: Sequence[str],
     *,
     cwd: Path | None = None,
+    input_text: str | None = None,
     accepted: tuple[int, ...] = (0,),
 ) -> subprocess.CompletedProcess[str]:
     if any("founder_portfolio.py" in str(part) for part in argv):
@@ -299,6 +300,7 @@ def _run(
     proc = subprocess.run(
         list(argv),
         cwd=cwd,
+        input=input_text,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -449,7 +451,7 @@ class GitHubWorkDiscoveryClient:
         credential = _run(
             ["git", "credential", "fill"],
             input_text="protocol=https\nhost=github.com\n\n",
-        )
+        ).stdout
         values: dict[str, str] = {}
         for line in credential.splitlines():
             if "=" in line:

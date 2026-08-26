@@ -68,7 +68,7 @@ jobs:
         run: >-
           python -m msos_autobuilder.update_check_waiter
           --manifest /tmp/latest.yaml
-          --timeout-seconds 900
+          --timeout-seconds 3600
           --poll-seconds 10
 
       - name: Publish immutable archive and latest pointer

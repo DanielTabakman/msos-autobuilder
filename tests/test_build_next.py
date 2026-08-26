@@ -1836,14 +1836,65 @@ def test_work_discovery_ignores_closed_pull_request_overlap_without_equivalence(
 
 def test_work_discovery_search_page_limit_fails_closed() -> None:
     api = _FakeGitHubApi(
-        issues=[
-            {"number": number, "title": f"issue {number}", "state": "open", "body": ""}
+        pulls=[
+            {
+                "number": number,
+                "title": f"open {number}",
+                "state": "open",
+                "body": "",
+                "merged_at": None,
+                "head": {"ref": f"branch-{number}"},
+            }
             for number in range(1, 1102)
         ]
     )
 
     with pytest.raises(BuildNextError, match="exceeded bounded page limit"):
         _discover(api)
+
+
+def test_tracking_issue_naming_authorized_paths_is_not_an_ownership_conflict() -> None:
+    """A work item's own tracking issue must not block admitting that work item.
+
+    An issue has no branch and no diff. Deriving ``changed_paths`` from prose made every
+    documented work item collide with the issue describing it.
+    """
+    api = _FakeGitHubApi(
+        issues=[
+            {
+                "number": 5381,
+                "title": "Options Made Simple: option horizon comparison v1",
+                "state": "open",
+                "body": "Touches src/viz/panel.py and apps/web/client.tsx",
+            }
+        ]
+    )
+
+    assert _discover(api) == ()
+
+
+def test_work_discovery_reports_digest_matched_issue_without_paths() -> None:
+    api = _FakeGitHubApi(
+        issues=[
+            {
+                "number": 4100,
+                "title": "tracked objective",
+                "state": "open",
+                "body": f"objective {OBJECTIVE_SHA} touches src/viz/panel.py",
+                "html_url": "https://github.com/x/y/issues/4100",
+            }
+        ]
+    )
+
+    candidates = _discover(api)
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.kind == "issue"
+    assert candidate.number == 4100
+    assert candidate.objective_sha256 == OBJECTIVE_SHA
+    # Carries no paths, so classification cannot treat it as a competing writer.
+    assert candidate.changed_paths == ()
 
 
 def test_run_accepts_every_keyword_used_by_module_call_sites() -> None:

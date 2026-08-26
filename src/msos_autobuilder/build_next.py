@@ -551,16 +551,14 @@ class GitHubWorkDiscoveryClient:
                     kind = "pr" if "pull_request" in item else "issue"
                     equivalent[(kind, number)] = item
 
-        issues: dict[int, dict[str, Any]] = {
-            number: item for (kind, number), item in equivalent.items() if kind == "issue"
-        }
-        for item in self._search(f"{scope} is:issue", "issue"):
-            number = item.get("number")
-            if isinstance(number, int):
-                issues.setdefault(number, item)
-
+        # An issue has no branch and no diff, so it is never a competing writer. It is
+        # reported for evidence when it matches a digest, and carries no paths: a tracking
+        # issue names the files it covers, and treating prose as changed paths would make
+        # every well-documented work item conflict with its own tracking issue.
         candidates: list[WorkCandidate] = []
-        for number, issue in sorted(issues.items()):
+        for (kind, number), issue in sorted(equivalent.items()):
+            if kind != "issue":
+                continue
             body = str(issue.get("body") or "")
             title = str(issue.get("title") or "")
             same_objective = objective_sha256 in body or objective_sha256 in title
@@ -568,8 +566,7 @@ class GitHubWorkDiscoveryClient:
                 acceptance_contract_sha256 in body
                 or acceptance_contract_sha256 in title
             )
-            path_hits = tuple(sorted(path for path in requested_paths if path in body))
-            if not (same_objective or same_contract or path_hits):
+            if not (same_objective or same_contract):
                 continue
             candidates.append(
                 WorkCandidate(
@@ -583,7 +580,7 @@ class GitHubWorkDiscoveryClient:
                     acceptance_contract_sha256=(
                         acceptance_contract_sha256 if same_contract else None
                     ),
-                    changed_paths=path_hits,
+                    changed_paths=(),
                     canonical=False,
                     merged=False,
                     url=str(issue.get("html_url") or ""),

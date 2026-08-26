@@ -1,0 +1,553 @@
+version: 1
+job_id: build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-9a849418c85b1cfb
+approved: true
+publication_enabled: false
+requested_by: capacity-one refill controller
+expected_source_head: 367c37e7618183ac9f7640c7b1204aee66469fa7
+founder_build_next:
+  version: 1
+  pipeline_id: ppe
+  work_item_id: options_horizon_comparison_v1
+  repository: DanielTabakman/Probability-prediction-engine
+  registered_adapter: ppe_operator
+  source:
+    remote: origin
+    remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+    repository: DanielTabakman/Probability-prediction-engine
+    ref: HEAD
+    remote_ref: 367c37e7618183ac9f7640c7b1204aee66469fa7
+    commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+  work_item_source_sha256_v1: 04181b1110dca8f272b2652f866ee0ab6070c05aca33dbd7dfafe785c99893b4
+  phase_plan: docs/SOP/PHASE_PLANS/options_horizon_comparison_v1_relay.json
+  native_slice:
+    slice_id: Options-HorizonComparison-Product-Slice002
+    build_branch: build/auto/Options-HorizonComparison-Product-Slice002
+    layer_preset: PPE_UI
+    worker_mode: local-agent
+    declared_plane: PRODUCT-PLANE
+    touch_set:
+    - src/engine/options_horizon_comparison.py
+    - src/viz/options_horizon_comparison_boundary.py
+    - apps/msos-web/src/lib/optionsHorizonComparison.ts
+    - apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx
+    - apps/msos-web/src/components/OptionsHorizonClient.tsx
+    - tests/test_options_horizon_comparison.py
+    - tests/test_msos_web_options_horizon_comparison.py
+    sequence_index: 1
+    total_slices: 4
+    previous_slices:
+    - Options-HorizonComparison-Control-Slice001
+    following_slices:
+    - Options-HorizonComparison-Witness-Slice003
+    - Options-HorizonComparison-Closeout-Slice004
+  prerequisites:
+    source: ppe_native_read_only
+    evidence: &id001
+      frozen_target_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+      target_remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      phase_plan: docs/SOP/PHASE_PLANS/options_horizon_comparison_v1_relay.json
+      phase_plan_blob_sha: 2ce3efd9e0cee7a841463655428c6247ce70c112
+      control_slice:
+        slice_id: Options-HorizonComparison-Control-Slice001
+        implementationStatus: COMPLETE
+        nonBlocking: true
+      source_files:
+      - path: docs/SOP/PHASE_PLANS/options_horizon_comparison_v1_relay.json
+        exists: true
+        git_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+        blob_sha: 2ce3efd9e0cee7a841463655428c6247ce70c112
+        sha256: 49524c2be7b0ab19f9e32a18f897859c37158950af0942b4c495802531548e81
+      - path: docs/SOP/SPRINT_OPTIONS_HORIZON_COMPARISON_V1.md
+        exists: true
+        git_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+        blob_sha: ae5ad78b288478163f34b258a7f99c956ebc4e89
+        sha256: 91cd99b0b1a5fd52342d39e7b44839c2334348a0104e83caec2fc02c7497852a
+      - path: docs/SOP/POST_OPTIONS_HORIZON_COMPARISON_V1_SELECTION.md
+        exists: true
+        git_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+        blob_sha: 4f74d8334cc75edd67db4c1f342b3bc1f4b26c08
+        sha256: 41630eff8f00d42c359720b6b72573d772dbd3cdd28be2624eb799214c7e5768
+      - path: docs/SOP/OPTIONS_HORIZON_COMPARISON_V1_EVIDENCE_STATUS.md
+        exists: true
+        git_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+        blob_sha: 68f932fe3a036e6f502e66479595c893f1c4626b
+        sha256: fc2d58ab6bf8183fdd35b67bd6416619be4f66c8b7943e551024ac6351c62196
+      - path: docs/SOP/ACTIVE_PHASE_MANIFEST.json
+        exists: true
+        git_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+        blob_sha: bef16bafa160f5240b85c69b119b6ba627e041bb
+        sha256: c1425fc9fda014c0379113ff849a0466e3c31e5c4f489975becfbb913bf067dc
+    required_slices: &id002
+    - Options-HorizonComparison-Control-Slice001
+    satisfied_slices: &id003
+    - Options-HorizonComparison-Control-Slice001
+    non_blocking_slices: &id004 []
+  portfolio_selection_evidence:
+    version: 1
+    source:
+      remote: origin
+      remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      repository: DanielTabakman/Probability-prediction-engine
+      ref: HEAD
+      remote_ref: 367c37e7618183ac9f7640c7b1204aee66469fa7
+      commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+    selected:
+      pipeline_id: ppe
+      work_item_id: options_horizon_comparison_v1
+      trace: docs/SOP/PHASE_PLANS/options_horizon_comparison_v1_relay.json
+      packet_sha256: 3591bb7b7ceca62981409548517468c059aa952abd32fd976987a782fa05755e
+    native_slice:
+      slice_id: Options-HorizonComparison-Product-Slice002
+      build_branch: build/auto/Options-HorizonComparison-Product-Slice002
+      layer_preset: PPE_UI
+      worker_mode: local-agent
+      declared_plane: PRODUCT-PLANE
+      touch_set:
+      - src/engine/options_horizon_comparison.py
+      - src/viz/options_horizon_comparison_boundary.py
+      - apps/msos-web/src/lib/optionsHorizonComparison.ts
+      - apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx
+      - apps/msos-web/src/components/OptionsHorizonClient.tsx
+      - tests/test_options_horizon_comparison.py
+      - tests/test_msos_web_options_horizon_comparison.py
+      sequence_index: 1
+      total_slices: 4
+      previous_slices:
+      - Options-HorizonComparison-Control-Slice001
+      following_slices:
+      - Options-HorizonComparison-Witness-Slice003
+      - Options-HorizonComparison-Closeout-Slice004
+    prerequisites:
+      source: ppe_native_read_only
+      evidence: *id001
+      required_slices: *id002
+      satisfied_slices: *id003
+      non_blocking_slices: *id004
+    packet_sha256: 3591bb7b7ceca62981409548517468c059aa952abd32fd976987a782fa05755e
+    admitted_target:
+      target_repository: DanielTabakman/Probability-prediction-engine
+      target_source_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+      target_remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      work_item_id: options_horizon_comparison_v1
+      pipeline_id: ppe
+      allowed_paths:
+      - src/engine/options_horizon_comparison.py
+      - src/viz/options_horizon_comparison_boundary.py
+      - apps/msos-web/src/lib/optionsHorizonComparison.ts
+      - apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx
+      - apps/msos-web/src/components/OptionsHorizonClient.tsx
+      - tests/test_options_horizon_comparison.py
+      - tests/test_msos_web_options_horizon_comparison.py
+      adapter: ppe_operator
+      dependency_source_sha256: 47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394
+      validation_identity: ae2527d2ac7fa64889b018a499ae944c40cd0a61bf64b67967d855027b9bbe8a
+      packet_sha256: 3591bb7b7ceca62981409548517468c059aa952abd32fd976987a782fa05755e
+    requested_exclusions: []
+    refill_attempt:
+      version: 1
+      generation_id: refill-567ff012818d0a9255dd9c3e
+      attempt_ordinal: 1
+      retry_ordinal: 0
+      reason: initial
+      selected_work_item_id: options_horizon_comparison_v1
+    identity_sha256: 52d1848fdd0afdd5a102bc9cd6b35262142b06aeda05fefd7640c13e3b9a37f2
+  refill_attempt:
+    version: 1
+    generation_id: refill-567ff012818d0a9255dd9c3e
+    attempt_ordinal: 1
+    retry_ordinal: 0
+    reason: initial
+    selected_work_item_id: options_horizon_comparison_v1
+  authority:
+    publication_enabled: false
+    merge_enabled: false
+    product_main_write_enabled: false
+  work_admission:
+    status: NEW_WORK_ADMITTED
+    objective_sha256: 22c420a38318a12b5bb307fbc3aa5b063cbc06813d69f95d85aab31455cab2dc
+    claim_generation: 1
+    claim_writer_id: build-next:build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-9a849418c85b1cfb
+    authorized_paths:
+    - src/engine/options_horizon_comparison.py
+    - src/viz/options_horizon_comparison_boundary.py
+    - apps/msos-web/src/lib/optionsHorizonComparison.ts
+    - apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx
+    - apps/msos-web/src/components/OptionsHorizonClient.tsx
+    - tests/test_options_horizon_comparison.py
+    - tests/test_msos_web_options_horizon_comparison.py
+    objective_identity:
+      repository: DanielTabakman/Probability-prediction-engine
+      linked_issue: null
+      work_item_id: options_horizon_comparison_v1
+      stable_key: 69cf3480ed419192983c94f34f20a457bb42644428ba8d1afb9b2e038047e2fe
+      acceptance_contract_sha256: 53f633dbc065359553b6833e3846659fb838c8964e50f8533e2491341ee611fe
+      error_signature: null
+      release_identity: null
+    acceptance_contract:
+      version: 1
+      pipeline_id: ppe
+      work_item_id: options_horizon_comparison_v1
+      adapter: ppe_operator
+      target_repository: DanielTabakman/Probability-prediction-engine
+      native_slice_id: Options-HorizonComparison-Product-Slice002
+      authorized_paths:
+      - src/engine/options_horizon_comparison.py
+      - src/viz/options_horizon_comparison_boundary.py
+      - apps/msos-web/src/lib/optionsHorizonComparison.ts
+      - apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx
+      - apps/msos-web/src/components/OptionsHorizonClient.tsx
+      - tests/test_options_horizon_comparison.py
+      - tests/test_msos_web_options_horizon_comparison.py
+      forbidden_paths:
+      - .git/**
+      - .github/workflows/**
+      - artifacts/**
+      - runtime/**
+      - state/**
+      - queue/**
+      - config/founder_pipeline_registry.json
+      - docs/SOP/PHASE_QUEUE.json
+      - docs/SOP/ACTIVE_PHASE_MANIFEST.json
+      - docs/SOP/FOUNDER_PIPELINE_COMMANDS_V1.md
+      - docs/SOP/PIPELINE_CREATION_SOP_V1.md
+      - docs/SOP/SCHEDULED_AUTOBUILDER_LANE_POLICY_V1.md
+      - docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md
+      - docs/SOP/SPRINT_*.md
+      - docs/SOP/*SELECTION*.md
+      - docs/SOP/POST_*_SELECTION*.md
+      - docs/SOP/*PRIORITY*.md
+      - docs/SOP/*FRONTIER*.md
+      - docs/SOP/*MANIFEST*.json
+      - artifacts/orchestrator/**
+      - artifacts/control_plane/**
+      - artifacts/relay/**
+      - artifacts/leases/**
+      publication_enabled: false
+      merge_enabled: false
+      product_main_write_enabled: false
+      target_source_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+      packet_sha256: 3591bb7b7ceca62981409548517468c059aa952abd32fd976987a782fa05755e
+      validation_identity: ae2527d2ac7fa64889b018a499ae944c40cd0a61bf64b67967d855027b9bbe8a
+    execution_validation_contract_sha256: fdf5c33596838ac6291d0a21afceb6d244678fee919b1463da795fd7f997bb5a
+    admitted_target:
+      target_repository: DanielTabakman/Probability-prediction-engine
+      target_source_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+      target_remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      work_item_id: options_horizon_comparison_v1
+      pipeline_id: ppe
+      allowed_paths:
+      - src/engine/options_horizon_comparison.py
+      - src/viz/options_horizon_comparison_boundary.py
+      - apps/msos-web/src/lib/optionsHorizonComparison.ts
+      - apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx
+      - apps/msos-web/src/components/OptionsHorizonClient.tsx
+      - tests/test_options_horizon_comparison.py
+      - tests/test_msos_web_options_horizon_comparison.py
+      adapter: ppe_operator
+      dependency_source_sha256: 47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394
+      validation_identity: ae2527d2ac7fa64889b018a499ae944c40cd0a61bf64b67967d855027b9bbe8a
+      packet_sha256: 3591bb7b7ceca62981409548517468c059aa952abd32fd976987a782fa05755e
+candidate_validation:
+  version: 1
+  pipeline_id: ppe
+  adapter: ppe_operator
+  target_repository: DanielTabakman/Probability-prediction-engine
+  source_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+  job_id: build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-9a849418c85b1cfb
+  work_item_id: options_horizon_comparison_v1
+  native_slice_id: Options-HorizonComparison-Product-Slice002
+  allowed_changed_paths:
+  - apps/msos-web/src/components/OptionsHorizonClient.tsx
+  - apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx
+  - apps/msos-web/src/lib/optionsHorizonComparison.ts
+  - src/engine/options_horizon_comparison.py
+  - src/viz/options_horizon_comparison_boundary.py
+  - tests/test_msos_web_options_horizon_comparison.py
+  - tests/test_options_horizon_comparison.py
+  dependency_policy:
+    version: 1
+    adapter: ppe_operator
+    profile_id: ppe-ci-pytest-v1
+    source: accepted_ppe_ci_bootstrap
+    source_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+    dependency_source_path: requirements.txt
+    dependency_source_sha256: 47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394
+    network_allowed: true
+    candidate_environment_required: true
+    strategy: candidate_local_venv_requirements_test_tooling_editable_install
+    test_tooling:
+    - pytest
+    - pytest-xdist
+    - ruff
+  bootstrap:
+  - name: upgrade-pip
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - --upgrade
+    - pip
+    cwd: .
+    timeout_seconds: 600
+    required: true
+  - name: install-requirements
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - -r
+    - requirements.txt
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  - name: install-test-tooling
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - pytest
+    - pytest-xdist
+    - ruff
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  - name: install-candidate-package
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - -e
+    - .
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  checks:
+  - name: repository-pytest
+    argv:
+    - python
+    - -m
+    - pytest
+    - -q
+    cwd: .
+    timeout_seconds: 1800
+    required: true
+  publication_enabled: false
+  merge_enabled: false
+  product_main_write_enabled: false
+  contract_sha256: fdf5c33596838ac6291d0a21afceb6d244678fee919b1463da795fd7f997bb5a
+manifest:
+  version: 1
+  publication_enabled: false
+  lanes:
+  - task_id: Options-HorizonComparison-Product-Slice002
+    lane_id: Options-HorizonComparison-Product-Slice002
+    chapter_id: OPTIONS_HORIZON_COMPARISON_V1
+    branch: build/auto/Options-HorizonComparison-Product-Slice002
+    layer: PPE_UI
+    worker_mode: local-agent
+    preferred_cost_class: standard
+    allowed_paths:
+    - src/engine/options_horizon_comparison.py
+    - src/viz/options_horizon_comparison_boundary.py
+    - apps/msos-web/src/lib/optionsHorizonComparison.ts
+    - apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx
+    - apps/msos-web/src/components/OptionsHorizonClient.tsx
+    - tests/test_options_horizon_comparison.py
+    - tests/test_msos_web_options_horizon_comparison.py
+    forbidden_paths:
+    - .git/**
+    - .github/workflows/**
+    - artifacts/**
+    - runtime/**
+    - state/**
+    - queue/**
+    - config/founder_pipeline_registry.json
+    - docs/SOP/PHASE_QUEUE.json
+    - docs/SOP/ACTIVE_PHASE_MANIFEST.json
+    - docs/SOP/FOUNDER_PIPELINE_COMMANDS_V1.md
+    - docs/SOP/PIPELINE_CREATION_SOP_V1.md
+    - docs/SOP/SCHEDULED_AUTOBUILDER_LANE_POLICY_V1.md
+    - docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md
+    - docs/SOP/SPRINT_*.md
+    - docs/SOP/*SELECTION*.md
+    - docs/SOP/POST_*_SELECTION*.md
+    - docs/SOP/*PRIORITY*.md
+    - docs/SOP/*FRONTIER*.md
+    - docs/SOP/*MANIFEST*.json
+    - artifacts/orchestrator/**
+    - artifacts/control_plane/**
+    - artifacts/relay/**
+    - artifacts/leases/**
+    allow_changes: true
+    instruction: "Implementation thread. THREAD_ROLE: codex_build.\n\nImplement only\
+      \ the bounded work item selected from Autobuilder-owned approved job packets.\n\
+      Pipeline ID: ppe\nWork-item ID: options_horizon_comparison_v1\nSource repository:\
+      \ DanielTabakman/Probability-prediction-engine\nExact source commit: 367c37e7618183ac9f7640c7b1204aee66469fa7\n\
+      Canonical source ref: 367c37e7618183ac9f7640c7b1204aee66469fa7\nCanonical source\
+      \ remote: https://github.com/DanielTabakman/Probability-prediction-engine.git\n\
+      Registered phase plan: docs/SOP/PHASE_PLANS/options_horizon_comparison_v1_relay.json\n\
+      Native sliceId: Options-HorizonComparison-Product-Slice002\nNative buildBranch:\
+      \ build/auto/Options-HorizonComparison-Product-Slice002\nNative layerPreset:\
+      \ PPE_UI\nNative workerMode: local-agent\nNative sequence: 2 of 4\n\nAuthority\
+      \ and publication boundary:\n- Do not write product main or merge.\n- Do not\
+      \ force-push, enable automerge, mark a PR ready, or publish directly.\n- Produce\
+      \ only workspace changes for the Autobuilder relay/gate/publisher path.\n- Preserve\
+      \ the controlled draft publisher as the only product publisher.\n- Treat sprint\
+      \ specs, selection records, queues, manifests, registries, leases, and operator\
+      \ state as read-only canon/evidence.\n- Do not perform smoke, closeout, selection,\
+      \ queue, or control-plane updates.\n\nAllowed paths:\n- src/engine/options_horizon_comparison.py\n\
+      - src/viz/options_horizon_comparison_boundary.py\n- apps/msos-web/src/lib/optionsHorizonComparison.ts\n\
+      - apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx\n- apps/msos-web/src/components/OptionsHorizonClient.tsx\n\
+      - tests/test_options_horizon_comparison.py\n- tests/test_msos_web_options_horizon_comparison.py\n\
+      \nForbidden paths:\n- .git/**\n- .github/workflows/**\n- artifacts/**\n- runtime/**\n\
+      - state/**\n- queue/**\n- config/founder_pipeline_registry.json\n- docs/SOP/PHASE_QUEUE.json\n\
+      - docs/SOP/ACTIVE_PHASE_MANIFEST.json\n- docs/SOP/FOUNDER_PIPELINE_COMMANDS_V1.md\n\
+      - docs/SOP/PIPELINE_CREATION_SOP_V1.md\n- docs/SOP/SCHEDULED_AUTOBUILDER_LANE_POLICY_V1.md\n\
+      - docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md\n- docs/SOP/SPRINT_*.md\n\
+      - docs/SOP/*SELECTION*.md\n- docs/SOP/POST_*_SELECTION*.md\n- docs/SOP/*PRIORITY*.md\n\
+      - docs/SOP/*FRONTIER*.md\n- docs/SOP/*MANIFEST*.json\n- artifacts/orchestrator/**\n\
+      - artifacts/control_plane/**\n- artifacts/relay/**\n- artifacts/leases/**\n\n\
+      Acceptance criteria and validation requirements:\n- Implement only the selected\
+      \ native PPE implementation slice.\n- Preserve native PPE sequencing; do not\
+      \ execute later smoke or closeout slices.\n- Read sprint spec as canon: docs/SOP/SPRINT_OPTIONS_HORIZON_COMPARISON_V1.md\n\
+      - Read selection record as canon: docs/SOP/POST_OPTIONS_HORIZON_COMPARISON_V1_SELECTION.md\n\
+      - Add or update focused tests for changed behavior.\n- Run the focused tests\
+      \ and relevant repository gates before closeout.\n- Return evidence suitable\
+      \ for the existing relay, candidate gate, revision loop, and controlled publisher.\n\
+      \nPortfolio-selection evidence identity:\n{\n  \"admitted_target\": {\n    \"\
+      adapter\": \"ppe_operator\",\n    \"allowed_paths\": [\n      \"src/engine/options_horizon_comparison.py\"\
+      ,\n      \"src/viz/options_horizon_comparison_boundary.py\",\n      \"apps/msos-web/src/lib/optionsHorizonComparison.ts\"\
+      ,\n      \"apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx\"\
+      ,\n      \"apps/msos-web/src/components/OptionsHorizonClient.tsx\",\n      \"\
+      tests/test_options_horizon_comparison.py\",\n      \"tests/test_msos_web_options_horizon_comparison.py\"\
+      \n    ],\n    \"dependency_source_sha256\": \"47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394\"\
+      ,\n    \"packet_sha256\": \"3591bb7b7ceca62981409548517468c059aa952abd32fd976987a782fa05755e\"\
+      ,\n    \"pipeline_id\": \"ppe\",\n    \"target_remote_url\": \"https://github.com/DanielTabakman/Probability-prediction-engine.git\"\
+      ,\n    \"target_repository\": \"DanielTabakman/Probability-prediction-engine\"\
+      ,\n    \"target_source_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n    \"validation_identity\": \"ae2527d2ac7fa64889b018a499ae944c40cd0a61bf64b67967d855027b9bbe8a\"\
+      ,\n    \"work_item_id\": \"options_horizon_comparison_v1\"\n  },\n  \"identity_sha256\"\
+      : \"52d1848fdd0afdd5a102bc9cd6b35262142b06aeda05fefd7640c13e3b9a37f2\",\n  \"\
+      native_slice\": {\n    \"build_branch\": \"build/auto/Options-HorizonComparison-Product-Slice002\"\
+      ,\n    \"declared_plane\": \"PRODUCT-PLANE\",\n    \"following_slices\": [\n\
+      \      \"Options-HorizonComparison-Witness-Slice003\",\n      \"Options-HorizonComparison-Closeout-Slice004\"\
+      \n    ],\n    \"layer_preset\": \"PPE_UI\",\n    \"previous_slices\": [\n  \
+      \    \"Options-HorizonComparison-Control-Slice001\"\n    ],\n    \"sequence_index\"\
+      : 1,\n    \"slice_id\": \"Options-HorizonComparison-Product-Slice002\",\n  \
+      \  \"total_slices\": 4,\n    \"touch_set\": [\n      \"src/engine/options_horizon_comparison.py\"\
+      ,\n      \"src/viz/options_horizon_comparison_boundary.py\",\n      \"apps/msos-web/src/lib/optionsHorizonComparison.ts\"\
+      ,\n      \"apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx\"\
+      ,\n      \"apps/msos-web/src/components/OptionsHorizonClient.tsx\",\n      \"\
+      tests/test_options_horizon_comparison.py\",\n      \"tests/test_msos_web_options_horizon_comparison.py\"\
+      \n    ],\n    \"worker_mode\": \"local-agent\"\n  },\n  \"packet_sha256\": \"\
+      3591bb7b7ceca62981409548517468c059aa952abd32fd976987a782fa05755e\",\n  \"prerequisites\"\
+      : {\n    \"evidence\": {\n      \"control_slice\": {\n        \"implementationStatus\"\
+      : \"COMPLETE\",\n        \"nonBlocking\": true,\n        \"slice_id\": \"Options-HorizonComparison-Control-Slice001\"\
+      \n      },\n      \"frozen_target_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n      \"phase_plan\": \"docs/SOP/PHASE_PLANS/options_horizon_comparison_v1_relay.json\"\
+      ,\n      \"phase_plan_blob_sha\": \"2ce3efd9e0cee7a841463655428c6247ce70c112\"\
+      ,\n      \"source_files\": [\n        {\n          \"blob_sha\": \"2ce3efd9e0cee7a841463655428c6247ce70c112\"\
+      ,\n          \"exists\": true,\n          \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n          \"path\": \"docs/SOP/PHASE_PLANS/options_horizon_comparison_v1_relay.json\"\
+      ,\n          \"sha256\": \"49524c2be7b0ab19f9e32a18f897859c37158950af0942b4c495802531548e81\"\
+      \n        },\n        {\n          \"blob_sha\": \"ae5ad78b288478163f34b258a7f99c956ebc4e89\"\
+      ,\n          \"exists\": true,\n          \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n          \"path\": \"docs/SOP/SPRINT_OPTIONS_HORIZON_COMPARISON_V1.md\"\
+      ,\n          \"sha256\": \"91cd99b0b1a5fd52342d39e7b44839c2334348a0104e83caec2fc02c7497852a\"\
+      \n        },\n        {\n          \"blob_sha\": \"4f74d8334cc75edd67db4c1f342b3bc1f4b26c08\"\
+      ,\n          \"exists\": true,\n          \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n          \"path\": \"docs/SOP/POST_OPTIONS_HORIZON_COMPARISON_V1_SELECTION.md\"\
+      ,\n          \"sha256\": \"41630eff8f00d42c359720b6b72573d772dbd3cdd28be2624eb799214c7e5768\"\
+      \n        },\n        {\n          \"blob_sha\": \"68f932fe3a036e6f502e66479595c893f1c4626b\"\
+      ,\n          \"exists\": true,\n          \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n          \"path\": \"docs/SOP/OPTIONS_HORIZON_COMPARISON_V1_EVIDENCE_STATUS.md\"\
+      ,\n          \"sha256\": \"fc2d58ab6bf8183fdd35b67bd6416619be4f66c8b7943e551024ac6351c62196\"\
+      \n        },\n        {\n          \"blob_sha\": \"bef16bafa160f5240b85c69b119b6ba627e041bb\"\
+      ,\n          \"exists\": true,\n          \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n          \"path\": \"docs/SOP/ACTIVE_PHASE_MANIFEST.json\",\n          \"\
+      sha256\": \"c1425fc9fda014c0379113ff849a0466e3c31e5c4f489975becfbb913bf067dc\"\
+      \n        }\n      ],\n      \"target_remote_url\": \"https://github.com/DanielTabakman/Probability-prediction-engine.git\"\
+      \n    },\n    \"non_blocking_slices\": [],\n    \"required_slices\": [\n   \
+      \   \"Options-HorizonComparison-Control-Slice001\"\n    ],\n    \"satisfied_slices\"\
+      : [\n      \"Options-HorizonComparison-Control-Slice001\"\n    ],\n    \"source\"\
+      : \"ppe_native_read_only\"\n  },\n  \"refill_attempt\": {\n    \"attempt_ordinal\"\
+      : 1,\n    \"generation_id\": \"refill-567ff012818d0a9255dd9c3e\",\n    \"reason\"\
+      : \"initial\",\n    \"retry_ordinal\": 0,\n    \"selected_work_item_id\": \"\
+      options_horizon_comparison_v1\",\n    \"version\": 1\n  },\n  \"requested_exclusions\"\
+      : [],\n  \"selected\": {\n    \"packet_sha256\": \"3591bb7b7ceca62981409548517468c059aa952abd32fd976987a782fa05755e\"\
+      ,\n    \"pipeline_id\": \"ppe\",\n    \"trace\": \"docs/SOP/PHASE_PLANS/options_horizon_comparison_v1_relay.json\"\
+      ,\n    \"work_item_id\": \"options_horizon_comparison_v1\"\n  },\n  \"source\"\
+      : {\n    \"commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\",\n    \"ref\"\
+      : \"HEAD\",\n    \"remote\": \"origin\",\n    \"remote_ref\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n    \"remote_url\": \"https://github.com/DanielTabakman/Probability-prediction-engine.git\"\
+      ,\n    \"repository\": \"DanielTabakman/Probability-prediction-engine\"\n  },\n\
+      \  \"version\": 1\n}\n\nRefill attempt context:\n{\n  \"attempt_ordinal\": 1,\n\
+      \  \"generation_id\": \"refill-567ff012818d0a9255dd9c3e\",\n  \"reason\": \"\
+      initial\",\n  \"retry_ordinal\": 0,\n  \"selected_work_item_id\": \"options_horizon_comparison_v1\"\
+      ,\n  \"version\": 1\n}\n\nPipeline-native prerequisite evidence:\n{\n  \"evidence\"\
+      : {\n    \"control_slice\": {\n      \"implementationStatus\": \"COMPLETE\"\
+      ,\n      \"nonBlocking\": true,\n      \"slice_id\": \"Options-HorizonComparison-Control-Slice001\"\
+      \n    },\n    \"frozen_target_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n    \"phase_plan\": \"docs/SOP/PHASE_PLANS/options_horizon_comparison_v1_relay.json\"\
+      ,\n    \"phase_plan_blob_sha\": \"2ce3efd9e0cee7a841463655428c6247ce70c112\"\
+      ,\n    \"source_files\": [\n      {\n        \"blob_sha\": \"2ce3efd9e0cee7a841463655428c6247ce70c112\"\
+      ,\n        \"exists\": true,\n        \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n        \"path\": \"docs/SOP/PHASE_PLANS/options_horizon_comparison_v1_relay.json\"\
+      ,\n        \"sha256\": \"49524c2be7b0ab19f9e32a18f897859c37158950af0942b4c495802531548e81\"\
+      \n      },\n      {\n        \"blob_sha\": \"ae5ad78b288478163f34b258a7f99c956ebc4e89\"\
+      ,\n        \"exists\": true,\n        \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n        \"path\": \"docs/SOP/SPRINT_OPTIONS_HORIZON_COMPARISON_V1.md\",\n\
+      \        \"sha256\": \"91cd99b0b1a5fd52342d39e7b44839c2334348a0104e83caec2fc02c7497852a\"\
+      \n      },\n      {\n        \"blob_sha\": \"4f74d8334cc75edd67db4c1f342b3bc1f4b26c08\"\
+      ,\n        \"exists\": true,\n        \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n        \"path\": \"docs/SOP/POST_OPTIONS_HORIZON_COMPARISON_V1_SELECTION.md\"\
+      ,\n        \"sha256\": \"41630eff8f00d42c359720b6b72573d772dbd3cdd28be2624eb799214c7e5768\"\
+      \n      },\n      {\n        \"blob_sha\": \"68f932fe3a036e6f502e66479595c893f1c4626b\"\
+      ,\n        \"exists\": true,\n        \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n        \"path\": \"docs/SOP/OPTIONS_HORIZON_COMPARISON_V1_EVIDENCE_STATUS.md\"\
+      ,\n        \"sha256\": \"fc2d58ab6bf8183fdd35b67bd6416619be4f66c8b7943e551024ac6351c62196\"\
+      \n      },\n      {\n        \"blob_sha\": \"bef16bafa160f5240b85c69b119b6ba627e041bb\"\
+      ,\n        \"exists\": true,\n        \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n        \"path\": \"docs/SOP/ACTIVE_PHASE_MANIFEST.json\",\n        \"sha256\"\
+      : \"c1425fc9fda014c0379113ff849a0466e3c31e5c4f489975becfbb913bf067dc\"\n   \
+      \   }\n    ],\n    \"target_remote_url\": \"https://github.com/DanielTabakman/Probability-prediction-engine.git\"\
+      \n  },\n  \"non_blocking_slices\": [],\n  \"required_slices\": [\n    \"Options-HorizonComparison-Control-Slice001\"\
+      \n  ],\n  \"satisfied_slices\": [\n    \"Options-HorizonComparison-Control-Slice001\"\
+      \n  ],\n  \"source\": \"ppe_native_read_only\"\n}\n\nRelevant canon/task packet:\n\
+      {\n  \"following_slices\": [\n    \"Options-HorizonComparison-Witness-Slice003\"\
+      ,\n    \"Options-HorizonComparison-Closeout-Slice004\"\n  ],\n  \"phase_plan\"\
+      : \"docs/SOP/PHASE_PLANS/options_horizon_comparison_v1_relay.json\",\n  \"previous_slices\"\
+      : [\n    \"Options-HorizonComparison-Control-Slice001\"\n  ],\n  \"selected_slice\"\
+      : {\n    \"build_branch\": \"build/auto/Options-HorizonComparison-Product-Slice002\"\
+      ,\n    \"declared_plane\": \"PRODUCT-PLANE\",\n    \"following_slices\": [\n\
+      \      \"Options-HorizonComparison-Witness-Slice003\",\n      \"Options-HorizonComparison-Closeout-Slice004\"\
+      \n    ],\n    \"layer_preset\": \"PPE_UI\",\n    \"previous_slices\": [\n  \
+      \    \"Options-HorizonComparison-Control-Slice001\"\n    ],\n    \"raw_slice\"\
+      : {\n      \"buildBranch\": \"build/auto/Options-HorizonComparison-Product-Slice002\"\
+      ,\n      \"declaredPlane\": \"PRODUCT-PLANE\",\n      \"hardMinutes\": 240,\n\
+      \      \"implementationStatus\": \"PENDING\",\n      \"layerPreset\": \"PPE_UI\"\
+      ,\n      \"maxAttempts\": 2,\n      \"sliceId\": \"Options-HorizonComparison-Product-Slice002\"\
+      ,\n      \"sprintSpecPath\": \"docs/SOP/SPRINT_OPTIONS_HORIZON_COMPARISON_V1.md\"\
+      ,\n      \"susMinutes\": 90,\n      \"touchSet\": [\n        \"src/engine/options_horizon_comparison.py\"\
+      ,\n        \"src/viz/options_horizon_comparison_boundary.py\",\n        \"apps/msos-web/src/lib/optionsHorizonComparison.ts\"\
+      ,\n        \"apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx\"\
+      ,\n        \"apps/msos-web/src/components/OptionsHorizonClient.tsx\",\n    \
+      \    \"tests/test_options_horizon_comparison.py\",\n        \"tests/test_msos_web_options_horizon_comparison.py\"\
+      \n      ],\n      \"workerMode\": \"local-agent\"\n    },\n    \"selection_record\"\
+      : \"docs/SOP/POST_OPTIONS_HORIZON_COMPARISON_V1_SELECTION.md\",\n    \"sequence_index\"\
+      : 1,\n    \"slice_id\": \"Options-HorizonComparison-Product-Slice002\",\n  \
+      \  \"sprint_spec_path\": \"docs/SOP/SPRINT_OPTIONS_HORIZON_COMPARISON_V1.md\"\
+      ,\n    \"total_slices\": 4,\n    \"touch_set\": [\n      \"src/engine/options_horizon_comparison.py\"\
+      ,\n      \"src/viz/options_horizon_comparison_boundary.py\",\n      \"apps/msos-web/src/lib/optionsHorizonComparison.ts\"\
+      ,\n      \"apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx\"\
+      ,\n      \"apps/msos-web/src/components/OptionsHorizonClient.tsx\",\n      \"\
+      tests/test_options_horizon_comparison.py\",\n      \"tests/test_msos_web_options_horizon_comparison.py\"\
+      \n    ],\n    \"worker_mode\": \"local-agent\"\n  },\n  \"selection_record\"\
+      : \"docs/SOP/POST_OPTIONS_HORIZON_COMPARISON_V1_SELECTION.md\",\n  \"sprint_spec_path\"\
+      : \"docs/SOP/SPRINT_OPTIONS_HORIZON_COMPARISON_V1.md\"\n}\n\nNon-goals:\n- Do\
+      \ not charter new product scope.\n- Do not alter PPE registry or priority policy.\n\
+      - Do not run continuous refill or dispatch additional work."

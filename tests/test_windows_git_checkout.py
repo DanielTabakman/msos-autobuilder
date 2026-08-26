@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import stat
 import subprocess
 from pathlib import Path
 
@@ -10,11 +11,16 @@ from msos_autobuilder.revision_loop import BranchCheckout, RevisionLoop, Revisio
 from msos_autobuilder.windows_git_checkout import (
     CANDIDATE_RESULTS_LEGACY,
     CANDIDATE_RESULTS_SHORT,
+    CANDIDATE_WORKSPACES_LEGACY,
+    CANDIDATE_WORKSPACES_SHORT,
     REVISION_RESULTS_LEGACY,
     REVISION_RESULTS_SHORT,
     candidate_results_checkout,
+    candidate_workspace,
+    candidate_workspace_root,
     git_environment,
     prefer_checkout,
+    remove_git_tree,
     revision_results_checkout,
 )
 
@@ -86,6 +92,87 @@ def _nested_patch(checkout: Path) -> Path:
         / "patches"
         / "Issue55-GenericGate-WitnessV2.patch"
     )
+
+
+PILOT_STATE = (
+    r"C:\Users\USER\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\state"
+)
+PILOT_JOB_ID = (
+    "build-next-ppe-options_horizon_comparison_v1"
+    "-Options-HorizonComparison-Product-952997b82dd06251"
+)
+# The extension whose load actually failed, relative to the workspace root.
+NATIVE_EXTENSION = (
+    r"\.msos-candidate-env\Lib\site-packages\cryptography\hazmat\bindings\_rust.pyd"
+)
+
+
+def test_candidate_workspace_keeps_native_extensions_under_max_path() -> None:
+    """A 95-character job id pushed loaded DLLs past the 260-character MAX_PATH.
+
+    The gate died with "ImportError: DLL load failed while importing
+    _cffi_backend: The filename or extension is too long". LongPathsEnabled was
+    already 1 on the host and did not help, because the Windows DLL loader
+    ignores it, so the path itself has to be short.
+
+    Lengths are computed as strings so the arithmetic is identical off Windows.
+    """
+    legacy_len = (
+        len(PILOT_STATE)
+        + len("\\" + CANDIDATE_WORKSPACES_LEGACY + "\\")
+        + len(PILOT_JOB_ID)
+        + len(NATIVE_EXTENSION)
+    )
+    short_len = (
+        len(PILOT_STATE)
+        + len("\\" + CANDIDATE_WORKSPACES_SHORT + "\\")
+        + len(candidate_workspace(Path(PILOT_STATE), PILOT_JOB_ID).name)
+        + len(NATIVE_EXTENSION)
+    )
+
+    assert legacy_len > 260, "fixture no longer reproduces the original overflow"
+    assert short_len < 260
+    assert legacy_len - short_len > 90
+
+
+def test_candidate_workspace_is_deterministic_and_job_scoped() -> None:
+    state = Path("state")
+    first = candidate_workspace(state, PILOT_JOB_ID)
+    assert first == candidate_workspace(state, PILOT_JOB_ID)
+    assert first.parent == candidate_workspace_root(state)
+    assert first != candidate_workspace(state, PILOT_JOB_ID + "-revision-1")
+    assert len(first.name) == 12
+    assert first.name.isalnum()
+
+
+def test_remove_git_tree_deletes_read_only_git_objects(tmp_path: Path) -> None:
+    """A clone holds read-only pack files, which defeat a plain shutil.rmtree.
+
+    On Windows a disposable workspace then survives its own cleanup, and every
+    later run fails with PermissionError instead of recloning from scratch.
+    """
+    source = _init_bare_results_remote(tmp_path / "source")
+    _git(source, "gc", "-q")
+    workspace = tmp_path / "workspace"
+    _git(None, "clone", "-q", str(source), str(workspace))
+
+    assert list((workspace / ".git" / "objects" / "pack").glob("*.idx")), (
+        "expected a packed clone so the read-only pack case is exercised"
+    )
+    locked = workspace / "locked.txt"
+    locked.write_text("read only\n", encoding="utf-8")
+    locked.chmod(stat.S_IREAD)
+
+    remove_git_tree(workspace)
+
+    assert not workspace.exists()
+
+
+def test_remove_git_tree_tolerates_a_missing_path(tmp_path: Path) -> None:
+    absent = tmp_path / "absent"
+    remove_git_tree(absent)
+    remove_git_tree(absent, ignore_errors=True)
+    assert not absent.exists()
 
 
 def test_prefer_checkout_defaults_to_short_and_reuses_legacy(tmp_path: Path) -> None:

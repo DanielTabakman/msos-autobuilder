@@ -7,13 +7,18 @@ evidence-relay contract for revision-loop and candidate-gate results checkouts.
 
 from __future__ import annotations
 
+import hashlib
 import os
+import shutil
+import stat
 from pathlib import Path
 
 REVISION_RESULTS_SHORT = "rl-repo"
 REVISION_RESULTS_LEGACY = "revision-loop-results-repo"
 CANDIDATE_RESULTS_SHORT = "cg-repo"
 CANDIDATE_RESULTS_LEGACY = "candidate-gate-results-repo"
+CANDIDATE_WORKSPACES_SHORT = "cg-ws"
+CANDIDATE_WORKSPACES_LEGACY = "candidate-gate-workspaces"
 
 
 def prefer_checkout(state_root: Path, short_name: str, legacy_name: str) -> Path:
@@ -40,6 +45,54 @@ def revision_results_checkout(state_root: Path) -> Path:
 
 def candidate_results_checkout(state_root: Path) -> Path:
     return prefer_checkout(state_root, CANDIDATE_RESULTS_SHORT, CANDIDATE_RESULTS_LEGACY)
+
+
+def candidate_workspace_root(state_root: Path) -> Path:
+    """Short root for disposable candidate-gate workspaces."""
+
+    return Path(state_root) / CANDIDATE_WORKSPACES_SHORT
+
+
+def legacy_candidate_workspace(state_root: Path, safe_job_id: str) -> Path:
+    """Pre-digest workspace location, kept only so leftovers can be removed."""
+
+    return Path(state_root) / CANDIDATE_WORKSPACES_LEGACY / safe_job_id
+
+
+def candidate_workspace(state_root: Path, job_id: str) -> Path:
+    """Short per-job workspace directory for a candidate checkout and venv.
+
+    Job ids reach roughly 95 characters, which put the workspace root at 199 and
+    pushed the candidate venv's native extensions past the 260-character Windows
+    MAX_PATH. Loading ``_cffi_backend`` then failed with "The filename or
+    extension is too long" even though ``LongPathsEnabled`` is set on the host,
+    because the DLL loader does not honour that opt-in. A digest keeps the path
+    short; the job id stays recoverable from the gate report.
+    """
+
+    digest = hashlib.sha256(job_id.encode("utf-8")).hexdigest()[:12]
+    return candidate_workspace_root(state_root) / digest
+
+
+def remove_git_tree(path: Path, *, ignore_errors: bool = False) -> None:
+    """Remove a directory tree that may hold read-only git objects.
+
+    Git marks pack files read-only, and on Windows ``shutil.rmtree`` cannot
+    unlink a read-only file. A leftover checkout is therefore undeletable by a
+    plain rmtree, so a disposable workspace survives its own cleanup and the
+    next run fails with ``PermissionError`` instead of recloning from scratch.
+    """
+
+    target = Path(path)
+    if not target.exists():
+        return
+    for child in target.rglob("*"):
+        try:
+            child.chmod(child.stat().st_mode | stat.S_IWRITE)
+        except OSError:
+            # Leave it to rmtree, which reports or ignores per ignore_errors.
+            continue
+    shutil.rmtree(target, ignore_errors=ignore_errors)
 
 
 def git_environment() -> dict[str, str]:

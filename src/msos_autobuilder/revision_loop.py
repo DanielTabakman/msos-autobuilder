@@ -517,6 +517,7 @@ class RevisionLoop:
         self.jobs.prepare()
         ledger = self._load_ledger()
         processed: list[str] = []
+        unplanned_failures: list[dict[str, str]] = []
         root = self.results.root / "results" / self.config.machine_id
         plans = self.config.plans or {}
         job_dirs = sorted(path for path in root.iterdir() if path.is_dir()) if root.exists() else []
@@ -588,6 +589,18 @@ class RevisionLoop:
                 continue
             matched = _find_plan(job_id, plans)
             if matched is None:
+                # Declining is legitimate, but staying silent is not: a failed gate
+                # with no plan emits no revision.disposition, and the reducer parks
+                # the attempt at operator_required_revision_blocked with no stated
+                # reason. Raising is worse, since it would stop every other job, so
+                # name the declined job in this cycle's evidence instead.
+                unplanned_failures.append(
+                    {
+                        "source_job_id": job_id,
+                        "gate_report_sha256": _sha256_file(gate_path),
+                        "reason": "no_matching_revision_plan",
+                    }
+                )
                 continue
             _, plan = matched
             gate_sha = _sha256_file(gate_path)
@@ -670,7 +683,10 @@ class RevisionLoop:
             service="revision",
             cycle_started_at=cycle_started_at,
             associated_jobs=processed,
-            terminal_evidence={"revision_jobs": processed},
+            terminal_evidence={
+                "revision_jobs": processed,
+                "unplanned_failed_gates": unplanned_failures,
+            },
         )
         return tuple(processed)
 

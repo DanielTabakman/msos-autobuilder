@@ -1,0 +1,21 @@
+{
+  "attempt_id": "20260812T152719.233400Z-07a0e88fd827",
+  "attempted_at": "2026-08-12T15:27:19.238402+00:00",
+  "checks": [],
+  "cutover": {
+    "performed": false
+  },
+  "errors": [
+    "<built-in function kill> returned a result with an exception set"
+  ],
+  "health": {},
+  "manifest_sha256": "3b61a1830a370169c4cdb290ca56c8f746106b8d1ce3f68fdf5e4a084169cf56",
+  "outcome": "failed_before_cutover",
+  "previous_commit": null,
+  "previous_release_path": null,
+  "release_id": "issue119-pr142-b8fb23f03c4745a0111126f3aea0ec4b66947f69",
+  "requested_commit": "b8fb23f03c4745a0111126f3aea0ec4b66947f69",
+  "rollback": {},
+  "staged_release_path": null,
+  "version": 1
+}

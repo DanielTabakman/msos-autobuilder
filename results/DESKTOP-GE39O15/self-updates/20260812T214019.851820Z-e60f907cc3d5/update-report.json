@@ -1,0 +1,249 @@
+{
+  "attempt_id": "20260812T214019.851820Z-e60f907cc3d5",
+  "attempted_at": "2026-08-12T21:40:19.853804+00:00",
+  "checks": [
+    {
+      "argv": [
+        "git",
+        "init",
+        "--quiet"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\118b9c1af16c6407a701292a5c8c08b7e6b14bc8",
+      "duration_seconds": 0.09299999987706542,
+      "environment": {},
+      "name": "git-init",
+      "passed": true,
+      "process_tree": {},
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "",
+      "termination": {},
+      "timed_out": false,
+      "timeout_seconds": 180.0
+    },
+    {
+      "argv": [
+        "git",
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/DanielTabakman/msos-autobuilder.git"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\118b9c1af16c6407a701292a5c8c08b7e6b14bc8",
+      "duration_seconds": 0.07800000021234155,
+      "environment": {},
+      "name": "git-add-origin",
+      "passed": true,
+      "process_tree": {},
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "",
+      "termination": {},
+      "timed_out": false,
+      "timeout_seconds": 180.0
+    },
+    {
+      "argv": [
+        "git",
+        "-c",
+        "core.autocrlf=false",
+        "fetch",
+        "--depth",
+        "1",
+        "origin",
+        "118b9c1af16c6407a701292a5c8c08b7e6b14bc8"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\118b9c1af16c6407a701292a5c8c08b7e6b14bc8",
+      "duration_seconds": 0.9849999998696148,
+      "environment": {},
+      "name": "git-fetch-exact-commit",
+      "passed": true,
+      "process_tree": {},
+      "returncode": 0,
+      "stderr": "From https://github.com/DanielTabakman/msos-autobuilder\n * branch            118b9c1af16c6407a701292a5c8c08b7e6b14bc8 -> FETCH_HEAD\n",
+      "stdout": "",
+      "termination": {},
+      "timed_out": false,
+      "timeout_seconds": 300.0
+    },
+    {
+      "argv": [
+        "git",
+        "-c",
+        "core.autocrlf=false",
+        "checkout",
+        "--detach",
+        "FETCH_HEAD"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\118b9c1af16c6407a701292a5c8c08b7e6b14bc8",
+      "duration_seconds": 0.23400000017136335,
+      "environment": {},
+      "name": "git-checkout-exact-commit",
+      "passed": true,
+      "process_tree": {},
+      "returncode": 0,
+      "stderr": "HEAD is now at 118b9c1 Merge pull request #146 from DanielTabakman/cursor/issue-145-windows-safe-workspace-reset\n",
+      "stdout": "",
+      "termination": {},
+      "timed_out": false,
+      "timeout_seconds": 180.0
+    },
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\118b9c1af16c6407a701292a5c8c08b7e6b14bc8",
+      "duration_seconds": 0.06300000008195639,
+      "environment": {},
+      "name": "git-rev-parse-head",
+      "passed": true,
+      "process_tree": {},
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "118b9c1af16c6407a701292a5c8c08b7e6b14bc8\n",
+      "termination": {},
+      "timed_out": false,
+      "timeout_seconds": 30.0
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\bootstrap-venv\\Scripts\\python.exe",
+        "-m",
+        "venv",
+        "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\118b9c1af16c6407a701292a5c8c08b7e6b14bc8\\.venv"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\118b9c1af16c6407a701292a5c8c08b7e6b14bc8",
+      "duration_seconds": 8.936999999918044,
+      "environment": {},
+      "name": "create-version-venv",
+      "passed": true,
+      "process_tree": {},
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "",
+      "termination": {},
+      "timed_out": false,
+      "timeout_seconds": 300.0
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\118b9c1af16c6407a701292a5c8c08b7e6b14bc8\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+        "-e",
+        "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\118b9c1af16c6407a701292a5c8c08b7e6b14bc8[dev]"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\118b9c1af16c6407a701292a5c8c08b7e6b14bc8",
+      "duration_seconds": 18.125,
+      "environment": {},
+      "name": "install-release",
+      "passed": true,
+      "process_tree": {},
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "Obtaining file:///C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor/versions/118b9c1af16c6407a701292a5c8c08b7e6b14bc8\n  Installing build dependencies: started\n  Installing build dependencies: finished with status 'done'\n  Checking if build backend supports build_editable: started\n  Checking if build backend supports build_editable: finished with status 'done'\n  Getting requirements to build editable: started\n  Getting requirements to build editable: finished with status 'done'\n  Preparing editable metadata (pyproject.toml): started\n  Preparing editable metadata (pyproject.toml): finished with status 'done'\nCollecting PyYAML>=6.0 (from msos-autobuilder==0.1.0)\n  Using cached pyyaml-6.0.3-cp312-cp312-win_amd64.whl.metadata (2.4 kB)\nCollecting pytest>=8.0 (from msos-autobuilder==0.1.0)\n  Using cached pytest-9.1.1-py3-none-any.whl.metadata (7.6 kB)\nCollecting ruff>=0.9 (from msos-autobuilder==0.1.0)\n  Using cached ruff-0.16.2-py3-none-win_amd64.whl.metadata (26 kB)\nCollecting colorama>=0.4 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached colorama-0.4.6-py2.py3-none-any.whl.metadata (17 kB)\nCollecting iniconfig>=1.0.1 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached iniconfig-2.3.0-py3-none-any.whl.metadata (2.5 kB)\nCollecting packaging>=22 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached packaging-26.3-py3-none-any.whl.metadata (3.5 kB)\nCollecting pluggy<2,>=1.5 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached pluggy-1.6.0-py3-none-any.whl.metadata (4.8 kB)\nCollecting pygments>=2.7.2 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached pygments-2.20.0-py3-none-any.whl.metadata (2.5 kB)\nUsing cached pytest-9.1.1-py3-none-any.whl (386 kB)\nUsing cached pyyaml-6.0.3-cp312-cp312-win_amd64.whl (154 kB)\nUsing cached ruff-0.16.2-py3-none-win_amd64.whl (12.0 MB)\nUsing cached colorama-0.4.6-py2.py3-none-any.whl (25 kB)\nUsing cached iniconfig-2.3.0-py3-none-any.whl (7.5 kB)\nUsing cached packaging-26.3-py3-none-any.whl (129 kB)\nUsing cached pluggy-1.6.0-py3-none-any.whl (20 kB)\nUsing cached pygments-2.20.0-py3-none-any.whl (1.2 MB)\nBuilding wheels for collected packages: msos-autobuilder\n  Building editable for msos-autobuilder (pyproject.toml): started\n  Building editable for msos-autobuilder (pyproject.toml): finished with status 'done'\n  Created wheel for msos-autobuilder: filename=msos_autobuilder-0.1.0-0.editable-py3-none-any.whl size=5150 sha256=4a302bd4ae073318bf120061ebf1c7549b02cc2b774fb918774d4d68179512bb\n  Stored in directory: C:\\Users\\USER\\AppData\\Local\\Temp\\pip-ephem-wheel-cache-h8zhctlt\\wheels\\2b\\f5\\b9\\01f9aa236c17c76db54b9452f5229d345e2a7be5553d70a32b\nSuccessfully built msos-autobuilder\nInstalling collected packages: ruff, PyYAML, pygments, pluggy, packaging, iniconfig, colorama, pytest, msos-autobuilder\nSuccessfully installed PyYAML-6.0.3 colorama-0.4.6 iniconfig-2.3.0 msos-autobuilder-0.1.0 packaging-26.3 pluggy-1.6.0 pygments-2.20.0 pytest-9.1.1 ruff-0.16.2\n",
+      "termination": {},
+      "timed_out": false,
+      "timeout_seconds": 900.0
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\118b9c1af16c6407a701292a5c8c08b7e6b14bc8\\.venv\\Scripts\\python.exe",
+        "-m",
+        "ruff",
+        "check",
+        "."
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\118b9c1af16c6407a701292a5c8c08b7e6b14bc8",
+      "duration_seconds": 0.39099999982863665,
+      "environment": {},
+      "name": "ruff",
+      "passed": true,
+      "process_tree": {},
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "\u001b[1;32mAll checks passed!\u001b[0m\n",
+      "termination": {},
+      "timed_out": false,
+      "timeout_seconds": 300.0
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\118b9c1af16c6407a701292a5c8c08b7e6b14bc8\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\118b9c1af16c6407a701292a5c8c08b7e6b14bc8",
+      "duration_seconds": 2401.063000000082,
+      "environment": {
+        "TEMP": "C:\\Users\\USER\\AppData\\Local\\Temp\\msos\\8507f6b3\\78488d3b",
+        "TMP": "C:\\Users\\USER\\AppData\\Local\\Temp\\msos\\8507f6b3\\78488d3b"
+      },
+      "name": "pytest",
+      "passed": false,
+      "process_tree": {
+        "captured": true,
+        "returncode": 0,
+        "root_pid": 12644,
+        "stderr": "",
+        "stdout": "[{\"ProcessId\":12644,\"ParentProcessId\":125200,\"Name\":\"python.exe\",\"CommandLine\":\"C:\\\\Users\\\\USER\\\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\\\versions\\\\118b9c1af16c6407a701292a5c8c08b7e6b14bc8\\\\.venv\\\\Scripts\\\\python.exe -m pytest -q\"},{\"ProcessId\":131792,\"ParentProcessId\":12644,\"Name\":\"python.exe\",\"CommandLine\":\"\\\"C:\\\\Users\\\\USER\\\\anaconda3\\\\python.exe\\\" -m pytest -q\"},{\"ProcessId\":124772,\"ParentProcessId\":131792,\"Name\":\"powershell.exe\",\"CommandLine\":\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.EXE -NoProfile -ExecutionPolicy Bypass -Command \\\"\\n$CallsPath = \\u0027C:/Users/USER/AppData/Local/Temp/msos/8507f6b3/78488d3b/pytest-of-USER/pytest-0/test_stable_bootstrap_handoff_2/scheduled-task-calls.jsonl\\u0027\\nfunction Add-Call([string]$Action, [string]$Name) {\\n    [pscustomobject]@{ action = $Action; name = $Name } |\\n        ConvertTo-Json -Compress |\\n        Add-Content -Path $CallsPath -Encoding UTF8\\n}\\nfunction Get-ServiceName([string]$TaskName) {\\n    if ($TaskName -eq \\u0027MSOS Autobuilder Host\\u0027) { return \\u0027host\\u0027 }\\n    if ($TaskName -eq \\u0027MSOS Autobuilder Result Relay\\u0027) { return \\u0027relay\\u0027 }\\n    if ($TaskName -eq \\u0027MSOS Autobuilder Candidate Gate\\u0027) { return \\u0027gate\\u0027 }\\n    if ($TaskName -eq \\u0027MSOS Autobuilder Revision Loop\\u0027) { return \\u0027revision\\u0027 }\\n    if ($TaskName -eq \\u0027MSOS Autobuilder Controlled Publisher\\u0027) { return \\u0027publisher\\u0027 }\\n    if ($TaskName -eq \\u0027MSOS Autobuilder Capacity-One Refill\\u0027) { return \\u0027refill\\u0027 }\\n    return $null\\n}\\nfunction Write-OuterStubbedWitness([string]$TaskName) {\\n    $Service = Get-ServiceName $TaskName\\n    if (-not $Service) { return }\\n    $ActivePath = Join-Path (Join-Path \\u0027C:/Users/USER/AppData/Local/Temp/msos/8507f6b3/78488d3b/pytest-of-USER/pytest-0/test_stable_bootstrap_handoff_2/supervisor\\u0027 \\u0027state\\u0027) \\u0027active-release.json\\u0027\\n    if (-not (Test-Path $ActivePath -PathType Leaf)) { return }\\n    $Active = Get-Content -Raw $ActivePath | ConvertFrom-Json\\n    $WitnessRoot = Join-Path (Join-Path \\u0027C:/Users/USER/AppData/Local/Temp/msos/8507f6b3/78488d3b/pytest-of-USER/pytest-0/test_stable_bootstrap_handoff_2/supervisor\\u0027 \\u0027state\\u0027) \\u0027service-witnesses\\u0027\\n    New-Item -ItemType Directory -Force -Path $WitnessRoot | Out-Null\\n    $Json = (@{\\n        version = 1\\n        service = $Service\\n        state = \\u0027running\\u0027\\n        release_commit = [string]$Active.commit\\n        child_pid = 1\\n        started_at = [DateTimeOffset]::UtcNow.ToString(\\u0027o\\u0027)\\n    } | ConvertTo-Json -Depth 10) + [Environment]::NewLine\\n    $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)\\n    $WitnessPath = Join-Path $WitnessRoot ($Service + \\u0027.json\\u0027)\\n    [System.IO.File]::WriteAllText($WitnessPath, $Json, $Utf8NoBom)\\n}\\nfunction Get-ScheduledTask {\\n    param([string]$TaskName, [object]$ErrorAction)\\n    Add-Call -Action \\u0027get\\u0027 -Name $TaskName\\n    if ($TaskName -eq \\u0027MSOS Autobuilder Capacity-One Refill\\u0027 -and -not $global:RefillRegistered) {\\n        return $null\\n    }\\n    if ($TaskName -eq \\u0027MSOS Autobuilder Capacity-One Refill\\u0027) {\\n        $State = $global:RefillState\\n        if (\\n            -not $global:RefillActionChanged -and\\n            $env:MSOS_STUBBED_ACTION_CHANGE_MARKER -and\\n            (Test-Path $env:MSOS_STUBBED_ACTION_CHANGE_MARKER -PathType Leaf)\\n        ) {\\n            $global:RefillAction.Arguments += \\u0027 -HostRoot C:/conflict\\u0027\\n            $global:RefillActionChanged = $true\\n        }\\n        if ($null -ne $global:RefillAction) {\\n            $Execute = $global:RefillAction.Execute\\n            $Arguments = $global:RefillAction.Arguments\\n        } else {\\n            $Execute = \\u0027powershell.exe\\u0027\\n            $Arguments = \\u0027-stub\\u0027\\n        }\\n    } elseif ($TaskName -eq \\u0027MSOS Autobuilder Update Supervisor\\u0027) {\\n        $State = $global:UpdateTaskState\\n        $Execute = \\u0027pwsh\\u0027\\n        $Arguments = \\u0027-NoProfile -File invoke_windows_self_update.ps1\\u0027\\n    } else {\\n        if (-not $global:ManagedTaskStates.ContainsKey($TaskName)) {\\n            $global:ManagedTaskStates[$TaskName] = \\u0027Ready\\u0027\\n        }\\n        $State = $global:ManagedTaskStates[$TaskName]\\n        $Execute = \\u0027pwsh\\u0027\\n        if ($global:TaskExecutables.ContainsKey($TaskName)) {\\n            $Execute = $global:TaskExecutables[$TaskName]\\n        }\\n        $Arguments = \\u0027-NoProfile -File run_windows_managed_service.ps1 -ServiceName host\\u0027\\n    }\\n    [pscustomobject]@{\\n        TaskName = $TaskName\\n        State = $State\\n        TaskPath = \\u0027\\\\\\u0027\\n        Actions = @([pscustomobject]@{\\n            Execute = $Execute\\n            Arguments = $Arguments\\n            WorkingDirectory = $null\\n        })\\n        Triggers = @([pscustomobject]@{ Enabled = $true })\\n        Principal = [pscustomobject]@{\\n            UserId = \\u0027USER\\u0027\\n            LogonType = \\u0027Interactive\\u0027\\n            RunLevel = \\u0027Limited\\u0027\\n        }\\n        Settings = [pscustomobject]@{\\n            MultipleInstances = \\u0027IgnoreNew\\u0027\\n            RestartCount = 3\\n            RestartInterval = \\u0027PT1M\\u0027\\n        }\\n        Description = \\\\\\\"stub task\\\\\\\"\\n    }\\n}\\nfunction Stop-ScheduledTask {\\n    param([string]$TaskName, [object]$ErrorAction)\\n    Add-Call -Action \\u0027stop\\u0027 -Name $TaskName\\n    if ($TaskName -eq \\u0027MSOS Autobuilder Update Supervisor\\u0027) { $global:UpdateTaskState = \\u0027Ready\\u0027 }\\n    if (Get-ServiceName $TaskName) {\\n        $global:ManagedTaskStates[$TaskName] = \\u0027Ready\\u0027\\n    }\\n}\\nfunction Disable-ScheduledTask {\\n    param([string]$TaskName, [object]$ErrorAction)\\n    Add-Call -Action \\u0027disable\\u0027 -Name $TaskName\\n    if ($TaskName -eq \\u0027MSOS Autobuilder Capacity-One Refill\\u0027) {\\n        $global:RefillState = \\u0027Disabled\\u0027\\n        $Marker = Join-Path (Join-Path \\u0027C:/Users/USER/AppData/Local/Temp/msos/8507f6b3/78488d3b/pytest-of-USER/pytest-0/test_stable_bootstrap_handoff_2/supervisor\\u0027 \\u0027state\\u0027) \\u0027refill-disabled.marker\\u0027\\n        $MarkerParent = Split-Path -Parent $Marker\\n        New-Item -ItemType Directory -Force -Path $MarkerParent | Out-Null\\n        Set-Content -Path $Marker -Value \\u0027disabled\\u0027 -Encoding UTF8\\n    }\\n    if ($TaskName -eq \\u0027MSOS Autobuilder Update Supervisor\\u0027) {\\n        $global:UpdateTaskState = \\u0027Disabled\\u0027\\n    }\\n    [pscustomobject]@{ TaskName = $TaskName; State = \\u0027Disabled\\u0027 }\\n}\\nfunction Enable-ScheduledTask {\\n    param([string]$TaskName, [object]$ErrorAction)\\n    Add-Call -Action \\u0027enable\\u0027 -Name $TaskName\\n    if ($TaskName -eq \\u0027MSOS Autobuilder Update Supervisor\\u0027) { $global:UpdateTaskState = \\u0027Ready\\u0027 }\\n    if (Get-ServiceName $TaskName) {\\n        $global:ManagedTaskStates[$TaskName] = \\u0027Ready\\u0027\\n    }\\n    [pscustomobject]@{ TaskName = $TaskName; State = \\u0027Ready\\u0027 }\\n}\\nfunction Start-ScheduledTask {\\n    param([string]$TaskName, [object]$ErrorAction)\\n    Add-Call -Action \\u0027start\\u0027 -Name $TaskName\\n    if (Get-ServiceName $TaskName) {\\n        $global:ManagedTaskStates[$TaskName] = \\u0027Running\\u0027\\n    }\\n    Write-OuterStubbedWitness $TaskName\\n}\\n$global:RefillRegistered = $false\\n$global:RefillState = \\u0027Ready\\u0027\\n$global:RefillAction = $null\\n$global:RefillActionChanged = $false\\n$global:UpdateTaskState = \\u0027Ready\\u0027\\n$global:ManagedTaskStates = @{}\\n$global:TaskExecutables = @{  }\\n$global:UpdateTaskXml = @\\\\\\\"\\n\\u003cTask\\u003e\\u003cRegistrationInfo\\u003e\\u003cURI\\u003e\\\\MSOS Autobuilder Update Supervisor\\u003c/URI\\u003e\\u003c/RegistrationInfo\\u003e\\u003c/Task\\u003e\\n\\\\\\\"@\\nfunction Export-ScheduledTask {\\n    param([string]$TaskName)\\n    Add-Call -Action \\u0027export\\u0027 -Name $TaskName\\n    if ($TaskName -eq \\u0027MSOS Autobuilder Update Supervisor\\u0027) { return $global:UpdateTaskXml }\\n    \\u0027\\u003cTask\\u003e\\u003c/Task\\u003e\\u0027\\n}\\nfunction Unregister-ScheduledTask {\\n    param([string]$TaskName, [switch]$Confirm)\\n    Add-Call -Action \\u0027unregister\\u0027 -Name $TaskName\\n    if ($TaskName -eq \\u0027MSOS Autobuilder Capacity-One Refill\\u0027) {\\n        $global:RefillRegistered = $false\\n    }\\n}\\nfunction New-ScheduledTaskAction {\\n    param([string]$Execute, [string]$Argument)\\n    [pscustomobject]@{ Execute = $Execute; Arguments = $Argument }\\n}\\nfunction New-ScheduledTaskTrigger {\\n    param([string]$User, [switch]$AtLogOn)\\n    [pscustomobject]@{ UserId = $User; AtLogOn = [bool]$AtLogOn }\\n}\\nfunction New-ScheduledTaskPrincipal {\\n    param([string]$UserId, [string]$LogonType, [string]$RunLevel)\\n    [pscustomobject]@{ UserId = $UserId; LogonType = $LogonType; RunLevel = $RunLevel }\\n}\\nfunction New-ScheduledTaskSettingsSet {\\n    param(\\n        [switch]$AllowStartIfOnBatteries,\\n        [switch]$DontStopIfGoingOnBatteries,\\n        [string]$MultipleInstances,\\n        [int]$RestartCount,\\n        [timespan]$RestartInterval\\n    )\\n    [pscustomobject]@{\\n        MultipleInstances = $MultipleInstances\\n        RestartCount = $RestartCount\\n        RestartInterval = $RestartInterval\\n    }\\n}\\nfunction Register-ScheduledTask {\\n    param(\\n        [string]$TaskName,\\n        [object]$Action,\\n        [object]$Trigger,\\n        [object]$Principal,\\n        [object]$Settings,\\n        [string]$Description,\\n        [string]$Xml,\\n        [switch]$Force\\n    )\\n    $RegisteredExecute = \\u0027\\u0027\\n    if ($null -ne $Action) { $RegisteredExecute = [string]$Action.Execute }\\n    [pscustomobject]@{ action = \\u0027register\\u0027; name = $TaskName; execute = $RegisteredExecute } |\\n        ConvertTo-Json -Compress |\\n        Add-Content -Path $CallsPath -Encoding UTF8\\n    if ($TaskName -eq \\u0027MSOS Autobuilder Capacity-One Refill\\u0027) {\\n        $global:RefillRegistered = $true\\n        $global:RefillAction = $Action\\n    }\\n    if ($TaskName -eq \\u0027MSOS Autobuilder Update Supervisor\\u0027) {\\n        $global:UpdateTaskXml = $Xml\\n        $global:UpdateTaskState = \\u0027Ready\\u0027\\n    }\\n}\\n$env:MSOS_STUBBED_TASK_CALLS_PATH = \\u0027C:/Users/USER/AppData/Local/Temp/msos/8507f6b3/78488d3b/pytest-of-USER/pytest-0/test_stable_bootstrap_handoff_2/nested-scheduled-task-calls.jsonl\\u0027\\n$env:MSOS_STUBBED_SUPERVISOR_ROOT = \\u0027C:/Users/USER/AppData/Local/Temp/msos/8507f6b3/78488d3b/pytest-of-USER/pytest-0/test_stable_bootstrap_handoff_2/supervisor\\u0027\\n\\n$global:RefillRegistered = $true\\n$global:RefillState = \\u0027Disabled\\u0027\\n$global:RefillAction = [pscustomobject]@{\\n    Execute = \\u0027pwsh\\u0027\\n    Arguments = (\\n        \\u0027-NoProfile -File run_windows_managed_service.ps1 \\u0027 +\\n        \\u0027-ServiceName refill -HostRoot \\\\\\\"C:/Users/USER/AppData/Local/Temp/msos/8507f6b3/78488d3b/pytest-of-USER/pytest-0/test_stable_bootstrap_handoff_2/host\\\\\\\"\\u0027\\n    )\\n}\\n\\n\\u0026 \\u0027C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor/versions/118b9c1af16c6407a701292a5c8c08b7e6b14bc8/scripts/update_windows_stable_supervisor_bootstrap.ps1\\u0027 `\\n    -Commit \\u0027ecc9867a23c13296c787f4baff88f2a7a3b85b62\\u0027 `\\n    -ExpectedOldBootstrapCommit \\u00279e9a9f5794c5ded7d2db2dfa283920b77c629cb3\\u0027 `\\n    -RepoRoot \\u0027C:/Users/USER/AppData/Local/Temp/msos/8507f6b3/78488d3b/pytest-of-USER/pytest-0/test_stable_bootstrap_handoff_2/repo\\u0027 `\\n    -HostRoot \\u0027C:/Users/USER/AppData/Local/Temp/msos/8507f6b3/78488d3b/pytest-of-USER/pytest-0/test_stable_bootstrap_handoff_2/host\\u0027 `\\n    -SupervisorRoot \\u0027C:/Users/USER/AppData/Local/Temp/msos/8507f6b3/78488d3b/pytest-of-USER/pytest-0/test_stable_bootstrap_handoff_2/supervisor\\u0027 `\\n    -BootstrapPython \\u0027C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor/versions/118b9c1af16c6407a701292a5c8c08b7e6b14bc8/.venv/Scripts/python.exe\\u0027\\n\\\"\"}]\n"
+      },
+      "returncode": 1,
+      "stderr": "",
+      "stdout": "........................................................................ [ 10%]\n........................s.s............................................. [ 21%]\n........................................................................ [ 32%]\n........................................................................ [ 42%]\n........................................................................ [ 53%]\n........................................................................ [ 64%]\n.................................................sss......s............. [ 74%]\n........................................................................ [ 85%]\n",
+      "termination": {
+        "attempted": true,
+        "final_returncode": 1,
+        "method": "taskkill-tree",
+        "returncode": 0,
+        "root_pid": 12644,
+        "stderr": "",
+        "stdout": "SUCCESS: The process with PID 124772 (child process of PID 131792) has been terminated.\nSUCCESS: The process with PID 131792 (child process of PID 12644) has been terminated.\nSUCCESS: The process with PID 12644 (child process of PID 125200) has been terminated.\n"
+      },
+      "timed_out": true,
+      "timeout_seconds": 2400.0
+    },
+    {
+      "argv": [
+        "remove-tree-no-symlinks",
+        "C:\\Users\\USER\\AppData\\Local\\Temp\\msos\\8507f6b3\\78488d3b"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\118b9c1af16c6407a701292a5c8c08b7e6b14bc8",
+      "duration_seconds": 228.56199999991804,
+      "environment": {
+        "TEMP": "C:\\Users\\USER\\AppData\\Local\\Temp\\msos\\8507f6b3\\78488d3b",
+        "TMP": "C:\\Users\\USER\\AppData\\Local\\Temp\\msos\\8507f6b3\\78488d3b"
+      },
+      "name": "pytest-temp-cleanup",
+      "passed": true,
+      "process_tree": {},
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "removed",
+      "termination": {},
+      "timed_out": false,
+      "timeout_seconds": null
+    }
+  ],
+  "cutover": {
+    "performed": false
+  },
+  "errors": [
+    "staging check pytest timed out: ........................................................................ [ 10%]\n........................s.s............................................. [ 21%]\n........................................................................ [ 32%]\n........................................................................ [ 42%]\n........................................................................ [ 53%]\n........................................................................ [ 64%]\n.................................................sss......s............. [ 74%]\n........................................................................ [ 85%]\n"
+  ],
+  "health": {},
+  "manifest_sha256": "0eaa44be5a0cc7087a962a601196d0524d82265056958fc08286589674ca68e0",
+  "outcome": "failed_before_cutover",
+  "previous_commit": "b8fb23f03c4745a0111126f3aea0ec4b66947f69",
+  "previous_release_path": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\b8fb23f03c4745a0111126f3aea0ec4b66947f69",
+  "release_id": "issue119-pr146-118b9c1af16c6407a701292a5c8c08b7e6b14bc8",
+  "requested_commit": "118b9c1af16c6407a701292a5c8c08b7e6b14bc8",
+  "rollback": {},
+  "staged_release_path": null,
+  "version": 1
+}

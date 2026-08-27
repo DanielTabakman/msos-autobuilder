@@ -1,0 +1,235 @@
+{
+  "attempt_id": "20260808T154311.053656Z-0c26c8a8c9f1",
+  "attempted_at": "2026-08-08T15:43:11.056657+00:00",
+  "checks": [
+    {
+      "argv": [
+        "git",
+        "init",
+        "--quiet"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\8928ebdec1896c5a299187699b8cf2b6bfc59880",
+      "duration_seconds": 0.1559999999590218,
+      "environment": {},
+      "name": "git-init",
+      "passed": true,
+      "process_tree": {},
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "",
+      "termination": {},
+      "timed_out": false,
+      "timeout_seconds": 180.0
+    },
+    {
+      "argv": [
+        "git",
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/DanielTabakman/msos-autobuilder.git"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\8928ebdec1896c5a299187699b8cf2b6bfc59880",
+      "duration_seconds": 0.04700000025331974,
+      "environment": {},
+      "name": "git-add-origin",
+      "passed": true,
+      "process_tree": {},
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "",
+      "termination": {},
+      "timed_out": false,
+      "timeout_seconds": 180.0
+    },
+    {
+      "argv": [
+        "git",
+        "-c",
+        "core.autocrlf=false",
+        "fetch",
+        "--depth",
+        "1",
+        "origin",
+        "8928ebdec1896c5a299187699b8cf2b6bfc59880"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\8928ebdec1896c5a299187699b8cf2b6bfc59880",
+      "duration_seconds": 1.233999999705702,
+      "environment": {},
+      "name": "git-fetch-exact-commit",
+      "passed": true,
+      "process_tree": {},
+      "returncode": 0,
+      "stderr": "From https://github.com/DanielTabakman/msos-autobuilder\n * branch            8928ebdec1896c5a299187699b8cf2b6bfc59880 -> FETCH_HEAD\n",
+      "stdout": "",
+      "termination": {},
+      "timed_out": false,
+      "timeout_seconds": 300.0
+    },
+    {
+      "argv": [
+        "git",
+        "-c",
+        "core.autocrlf=false",
+        "checkout",
+        "--detach",
+        "FETCH_HEAD"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\8928ebdec1896c5a299187699b8cf2b6bfc59880",
+      "duration_seconds": 0.3130000000819564,
+      "environment": {},
+      "name": "git-checkout-exact-commit",
+      "passed": true,
+      "process_tree": {},
+      "returncode": 0,
+      "stderr": "HEAD is now at 8928ebd Merge pull request #130 from DanielTabakman/cursor/issue-119-gate-contract-dispatch\n",
+      "stdout": "",
+      "termination": {},
+      "timed_out": false,
+      "timeout_seconds": 180.0
+    },
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\8928ebdec1896c5a299187699b8cf2b6bfc59880",
+      "duration_seconds": 0.06199999991804361,
+      "environment": {},
+      "name": "git-rev-parse-head",
+      "passed": true,
+      "process_tree": {},
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "8928ebdec1896c5a299187699b8cf2b6bfc59880\n",
+      "termination": {},
+      "timed_out": false,
+      "timeout_seconds": 30.0
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\bootstrap-venv\\Scripts\\python.exe",
+        "-m",
+        "venv",
+        "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\8928ebdec1896c5a299187699b8cf2b6bfc59880\\.venv"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\8928ebdec1896c5a299187699b8cf2b6bfc59880",
+      "duration_seconds": 7.70299999974668,
+      "environment": {},
+      "name": "create-version-venv",
+      "passed": true,
+      "process_tree": {},
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "",
+      "termination": {},
+      "timed_out": false,
+      "timeout_seconds": 300.0
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\8928ebdec1896c5a299187699b8cf2b6bfc59880\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+        "-e",
+        "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\8928ebdec1896c5a299187699b8cf2b6bfc59880[dev]"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\8928ebdec1896c5a299187699b8cf2b6bfc59880",
+      "duration_seconds": 17.094000000040978,
+      "environment": {},
+      "name": "install-release",
+      "passed": true,
+      "process_tree": {},
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "Obtaining file:///C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor/versions/8928ebdec1896c5a299187699b8cf2b6bfc59880\n  Installing build dependencies: started\n  Installing build dependencies: finished with status 'done'\n  Checking if build backend supports build_editable: started\n  Checking if build backend supports build_editable: finished with status 'done'\n  Getting requirements to build editable: started\n  Getting requirements to build editable: finished with status 'done'\n  Preparing editable metadata (pyproject.toml): started\n  Preparing editable metadata (pyproject.toml): finished with status 'done'\nCollecting PyYAML>=6.0 (from msos-autobuilder==0.1.0)\n  Using cached pyyaml-6.0.3-cp312-cp312-win_amd64.whl.metadata (2.4 kB)\nCollecting pytest>=8.0 (from msos-autobuilder==0.1.0)\n  Using cached pytest-9.1.1-py3-none-any.whl.metadata (7.6 kB)\nCollecting ruff>=0.9 (from msos-autobuilder==0.1.0)\n  Downloading ruff-0.16.2-py3-none-win_amd64.whl.metadata (26 kB)\nCollecting colorama>=0.4 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached colorama-0.4.6-py2.py3-none-any.whl.metadata (17 kB)\nCollecting iniconfig>=1.0.1 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached iniconfig-2.3.0-py3-none-any.whl.metadata (2.5 kB)\nCollecting packaging>=22 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached packaging-26.3-py3-none-any.whl.metadata (3.5 kB)\nCollecting pluggy<2,>=1.5 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached pluggy-1.6.0-py3-none-any.whl.metadata (4.8 kB)\nCollecting pygments>=2.7.2 (from pytest>=8.0->msos-autobuilder==0.1.0)\n  Using cached pygments-2.20.0-py3-none-any.whl.metadata (2.5 kB)\nUsing cached pytest-9.1.1-py3-none-any.whl (386 kB)\nUsing cached pyyaml-6.0.3-cp312-cp312-win_amd64.whl (154 kB)\nDownloading ruff-0.16.2-py3-none-win_amd64.whl (12.0 MB)\n   ---------------------------------------- 12.0/12.0 MB 6.4 MB/s eta 0:00:00\n\nUsing cached colorama-0.4.6-py2.py3-none-any.whl (25 kB)\nUsing cached iniconfig-2.3.0-py3-none-any.whl (7.5 kB)\nUsing cached packaging-26.3-py3-none-any.whl (129 kB)\nUsing cached pluggy-1.6.0-py3-none-any.whl (20 kB)\nUsing cached pygments-2.20.0-py3-none-any.whl (1.2 MB)\nBuilding wheels for collected packages: msos-autobuilder\n  Building editable for msos-autobuilder (pyproject.toml): started\n  Building editable for msos-autobuilder (pyproject.toml): finished with status 'done'\n  Created wheel for msos-autobuilder: filename=msos_autobuilder-0.1.0-0.editable-py3-none-any.whl size=5148 sha256=b68f74a63d747df85ca30320154e449fcfcfa976f9a9355ba32cafebe9361946\n  Stored in directory: C:\\Users\\USER\\AppData\\Local\\Temp\\pip-ephem-wheel-cache-f7_7e4mm\\wheels\\30\\49\\1d\\a486010faf8dc40a760469b569469e587b9eade65d4a9ab488\nSuccessfully built msos-autobuilder\nInstalling collected packages: ruff, PyYAML, pygments, pluggy, packaging, iniconfig, colorama, pytest, msos-autobuilder\n  Attempting uninstall: msos-autobuilder\n    Found existing installation: msos-autobuilder 0.1.0\n    Not uninstalling msos-autobuilder at c:\\users\\user\\.msos-autobuilder-pilot-issue119-6e9434c-20260807t0226z-c-supervisor\\versions\\6e9434ca5161f47af3a525c5f1ac83583fc65f87\\src, outside environment C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\8928ebdec1896c5a299187699b8cf2b6bfc59880\\.venv\n    Can't uninstall 'msos-autobuilder'. No files were found to uninstall.\nSuccessfully installed PyYAML-6.0.3 colorama-0.4.6 iniconfig-2.3.0 msos-autobuilder-0.1.0 packaging-26.3 pluggy-1.6.0 pygments-2.20.0 pytest-9.1.1 ruff-0.16.2\n",
+      "termination": {},
+      "timed_out": false,
+      "timeout_seconds": 900.0
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\8928ebdec1896c5a299187699b8cf2b6bfc59880\\.venv\\Scripts\\python.exe",
+        "-m",
+        "ruff",
+        "check",
+        "."
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\8928ebdec1896c5a299187699b8cf2b6bfc59880",
+      "duration_seconds": 0.32800000021234155,
+      "environment": {},
+      "name": "ruff",
+      "passed": true,
+      "process_tree": {},
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "\u001b[1;32mAll checks passed!\u001b[0m\n",
+      "termination": {},
+      "timed_out": false,
+      "timeout_seconds": 300.0
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\8928ebdec1896c5a299187699b8cf2b6bfc59880\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\8928ebdec1896c5a299187699b8cf2b6bfc59880",
+      "duration_seconds": 1547.875,
+      "environment": {
+        "TEMP": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\tmp\\staging-pytest\\8928ebdec189-c0f318a2",
+        "TMP": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\tmp\\staging-pytest\\8928ebdec189-c0f318a2"
+      },
+      "name": "pytest",
+      "passed": false,
+      "process_tree": {},
+      "returncode": 1,
+      "stderr": "",
+      "stdout": "FFF.FF.F.F..F...FF...FFFFF..FFFF..FFFFF...FFFFFF.FFF.FFFFFFFFFFFFFFFFFFF [ 11%]\nFF................FF....FFFFFFFFFFF.FFFFFFFFFF...FFFFFFFFFFFF....F...... [ 23%]\n....................................FF...F..............FFFFFF.....F..F. [ 35%]\n.........F.FFFF.F..FFFF..FFFFFFFF.FF..FFF........FFFF.F.F...........FFFF [ 46%]\nFFFFFF...FFFF.FFFF.FFFFF.....FFFFFFFFFFFFFFFF.FFFFFFFFFFFFFFFFFFFFFFFFFF [ 58%]\nFFFFFFFFFFFFFFFFFFFF....FFFFFFFFFFFFFFFFFF..FFFFFF.......FFFF.F......... [ 70%]\nFFFFF...................FF....ss....FF.................................. [ 82%]\n............FFFF..........................................F............. [ 93%]\n.....................................                                    [100%]\n================================== FAILURES ===================================\n______________ test_build_next_submits_exactly_one_selected_item ______________\n\ntmp_path = WindowsPath('C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor/tmp/staging-pytest/8928ebdec189-c0f318a2/pytest-of-USER/pytest-0/test_build_next_submits_exactl0')\n\n    def test_build_next_submits_exactly_one_selected_item(tmp_path: Path) -> None:\n        ppe = _write_ppe(tmp_path / \"ppe\")\n        (ppe / \"requirements.txt\").write_bytes(b\"# PPE fixture requirements\\r\\n\")\n        _commit_all(ppe, \"crlf requirements\")\n>       _git(ppe, \"push\", \"-q\", \"origin\", \"main\")\n\ntests\\test_build_next.py:376: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\ntests\\test_build_next.py:40: in _git\n    proc = subprocess.run(\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\n\ninput = None, capture_output = True, timeout = None, check = True\npopenargs = (['git', '-C', 'C:\\\\Users\\\\USER\\\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\\\tmp\\\\staging-py...\\8928ebdec189-c0f318a2\\\\pytest-of-USER\\\\pytest-0\\\\test_build_next_submits_exactl0\\\\ppe', 'push', '-q', 'origin', ...],)\nkwargs = {'text': True, 'encoding': 'utf-8', 'errors': 'replace', 'stdout': -1, ...}\n\n    def run(*popenargs,\n            input=None, capture_output=False, timeout=None, check=False, **kwargs):\n        \"\"\"Run command with arguments and return a CompletedProcess instance.\n    \n        The returned instance will have attributes args, returncode, stdout and\n        stderr. By default, stdout and stderr are not captured, and those attributes\n        will be None. Pass stdout=PIPE and/or stderr=PIPE in order to capture them,\n        or pass capture_output=True to capture both.\n    \n        If check is True and the exit code was non-zero, it raises a\n        CalledProcessError. The CalledProcessError object will have the return code\n        in the returncode attribute, and output & stderr attributes if those streams\n        were captured.\n    \n        If timeout is given, and the process takes too long, a TimeoutExpired\n        exception will be raised.\n    \n        There is an optional argument \"input\", allowing you to\n        pass bytes or a string to the subprocess's stdin.  If you use this argument\n        you may not also use the Popen constructor's \"stdin\" argument, as\n        it will be used internally.\n    \n        By default, all communication is in bytes, and therefore any \"input\" should\n        be bytes, and the stdout and stderr will be bytes. If in text mode, any\n        \"input\" should be a string, and stdout and stderr will be strings decoded\n        according to locale encoding, or by \"encoding\" if set. Text mode is\n        triggered by setting any of text, encoding, errors or universal_newlines.\n    \n        The other arguments are the same as for the Popen constructor.\n        \"\"\"\n        if input is not None:\n            if kwargs.get('stdin') is not None:\n                raise ValueError('stdin and input arguments may not both be used.')\n            kwargs['stdin'] = PIPE\n    \n        if capture_output:\n            if kwargs.get('stdout') is not None or kwargs.get('stderr') is not None:\n                raise ValueError('stdout and stderr arguments may not be used '\n                                 'with capture_output.')\n            kwargs['stdout'] = PIPE\n            kwargs['stderr'] = PIPE\n    \n        with Popen(*popenargs, **kwargs) as process:\n            try:\n                stdout, stderr = process.communicate(input, timeout=timeout)\n            except TimeoutExpired as exc:\n                process.kill()\n                if _mswindows:\n                    # Windows accumulates the output in a single blocking\n                    # read() call run on child threads, with the timeout\n                    # being done in a join() on those threads.  communicate()\n                    # _after_ kill() is required to collect that and add it\n                    # to the exception.\n                    exc.stdout, exc.stderr = process.communicate()\n                else:\n                    # POSIX _communicate already populated the output so\n                    # far into the TimeoutExpired exception.\n                    process.wait()\n                raise\n            except:  # Including KeyboardInterrupt, communicate handled that.\n                process.kill()\n                # We don't call process.wait() as .__exit__ does that for us.\n                raise\n            retcode = process.poll()\n            if check and retcode:\n>               raise CalledProcessError(retcode, process.args,\n                                         output=stdout, stderr=stderr)\nE               subprocess.CalledProcessError: Command '['git', '-C', 'C:\\\\Users\\\\USER\\\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\\\tmp\\\\staging-pytest\\\\8928ebdec189-c0f318a2\\\\pytest-of-USER\\\\pytest-0\\\\test_build_next_submits_exactl0\\\\ppe', 'push', '-q', 'origin', 'main']' returned non-zero exit status 1.\n\n..\\..\\..\\anaconda3\\Lib\\subprocess.py:571: CalledProcessError\n___ test_control_smoke_and_closeout_slices_are_not_folded_into_product_lane ___\n\ntmp_path = WindowsPath('C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor/tmp/staging-pytest/8928ebdec189-c0f318a2/pytest-of-USER/pytest-0/test_control_smoke_and_closeou0')\n\n    def test_control_smoke_and_closeout_slices_are_not_folded_into_product_lane(\n        tmp_path: Path,\n    ) -> None:\n        ppe = _write_ppe(tmp_path / \"ppe\")\n        feed = _feed_repo(tmp_path / \"feed-work\")\n    \n        receipt = build_next(_config(tmp_path, ppe, feed))\n    \n        review = tmp_path / \"review\"\n        _git(None, \"clone\", \"-q\", \"--branch\", \"jobs\", str(feed), str(review))\n>       job_path = next((review / \"jobs\" / \"approved\").glob(f\"{receipt.job_id}.yaml\"))\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE       StopIteration\n\ntests\\test_build_next.py:446: StopIteration\n___________________ test_duplicate_invocation_is_idempotent ___________________\n\ntmp_path = WindowsPath('C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor/tmp/staging-pytest/8928ebdec189-c0f318a2/pytest-of-USER/pytest-0/test_duplicate_invocation_is_i0')\n\n    def test_duplicate_invocation_is_idempotent(tmp_path: Path) -> None:\n        ppe = _write_ppe(tmp_path / \"ppe\")\n        feed = _feed_repo(tmp_path / \"feed-work\")\n        config = _config(tmp_path, ppe, feed)\n    \n        first = build_next(config)\n        second = build_next(config)\n    \n>       assert first.status == \"QUEUED\"\nE       AssertionError: assert 'BLOCKED' == 'QUEUED'\nE         \nE         - QUEUED\nE         + BLOCKED\n\ntests\\test_build_next.py:467: AssertionError\n___________ test_refill_dispatch_submitted_replay_is_deterministic ____________\n\ntmp_path = WindowsPath('C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor/tmp/staging-pytest/8928ebdec189-c0f318a2/pytest-of-USER/pytest-0/test_refill_dispatch_submitted0')\n\n    def test_refill_dispatch_submitted_replay_is_deterministic(tmp_path: Path) -> None:\n        ppe = _write_ppe(tmp_\n...[truncated]...\ns]\nFAILED tests/test_refill_controller.py::test_supersession_partial_retry_feed_awaiting_import_fails_closed\nFAILED tests/test_refill_controller.py::test_supersession_partial_retry_unpaused_policy_fails_closed\nFAILED tests/test_refill_controller.py::test_supersession_completed_retry_modified_receipt_fails_closed[new_generation_id-wrong-generation-receipt conflicts]\nFAILED tests/test_refill_controller.py::test_supersession_completed_retry_modified_receipt_fails_closed[ambiguity_evidence-value1-receipt conflicts]\nFAILED tests/test_refill_controller.py::test_supersession_completed_retry_missing_archive_fails_closed\nFAILED tests/test_refill_controller.py::test_supersession_completed_retry_modified_archive_fails_closed\nFAILED tests/test_refill_controller.py::test_supersession_valid_partial_retry_completes_exactly_once\nFAILED tests/test_refill_controller.py::test_supersession_valid_completed_retry_remains_idempotent\nFAILED tests/test_refill_controller.py::test_supersession_cli_feed_awaiting_import_blocks_without_mutation\nFAILED tests/test_refill_controller.py::test_supersession_completed_retry_preserves_later_founder_pause\nFAILED tests/test_refill_controller.py::test_supersession_completed_retry_preserves_legitimate_policy_change\nFAILED tests/test_refill_controller.py::test_supersession_retry_after_active_replace_finishes_policy_once\nFAILED tests/test_refill_controller.py::test_supersession_active_replaced_retry_item_terminal_fails_closed\nFAILED tests/test_refill_controller.py::test_supersession_active_replaced_retry_provider_retry_fails_closed\nFAILED tests/test_refill_controller.py::test_supersession_active_replaced_retry_receipt_archive_mismatch_fails_closed[old_job_id-different-job]\nFAILED tests/test_refill_controller.py::test_supersession_active_replaced_retry_receipt_archive_mismatch_fails_closed[old_work_item_id-different-work-item]\nFAILED tests/test_refill_controller.py::test_supersession_active_replaced_retry_receipt_archive_mismatch_fails_closed[classification-value2]\nFAILED tests/test_refill_controller.py::test_supersession_active_replaced_retry_receipt_archive_mismatch_fails_closed[ambiguity_evidence-value3]\nFAILED tests/test_refill_controller.py::test_supersession_active_replaced_retry_mismatched_completion_binding_fails_closed\nFAILED tests/test_refill_controller.py::test_supersession_completed_retry_active_release_mismatch_fails_closed\nFAILED tests/test_refill_controller.py::test_supersession_partial_retry_active_release_mismatch_fails_closed\nFAILED tests/test_refill_controller.py::test_pause_resume_preserve_completed_supersession_binding\nFAILED tests/test_refill_controller.py::test_reconcile_report_preserves_completed_supersession_binding\nFAILED tests/test_refill_controller.py::test_crash_during_retry_dry_prepare_leaves_retry_unconsumed\nFAILED tests/test_refill_controller.py::test_crash_after_prepared_retry_before_feed_recovers_same_retry_once\nFAILED tests/test_refill_controller.py::test_prepared_replay_waits_for_unrelated_capacity_then_submits_same_job[pending]\nFAILED tests/test_refill_controller.py::test_prepared_replay_waits_for_unrelated_capacity_then_submits_same_job[running]\nFAILED tests/test_refill_controller.py::test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b[missing_revision_job_id-<lambda>]\nFAILED tests/test_refill_controller.py::test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b[missing_gate_hash-<lambda>]\nFAILED tests/test_refill_controller.py::test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b[invalid_jobs_commit-<lambda>]\nFAILED tests/test_refill_controller.py::test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b[timezone_free_queued_at-<lambda>]\nFAILED tests/test_refill_controller.py::test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b[key_source_disagreement-<lambda>]\nFAILED tests/test_refill_controller.py::test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b[source_points_to_self-<lambda>]\nFAILED tests/test_refill_controller.py::test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b[cycle_a_r_a-<lambda>]\nFAILED tests/test_refill_controller.py::test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b[descendant_revision-<lambda>]\nFAILED tests/test_refill_controller.py::test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b[multiple_direct_descendants-<lambda>]\nFAILED tests/test_refill_controller.py::test_corrupt_revision_ledger_blocks_without_falling_through_to_failed_gate[{not-json]\nFAILED tests/test_refill_controller.py::test_corrupt_revision_ledger_blocks_without_falling_through_to_failed_gate[[]]\nFAILED tests/test_refill_controller.py::test_malformed_targeted_revision_descendant_blocks_without_dispatching_b[descendant_non_object-<lambda>]\nFAILED tests/test_refill_controller.py::test_malformed_targeted_revision_descendant_blocks_without_dispatching_b[descendant_incomplete-<lambda>]\nFAILED tests/test_refill_controller.py::test_malformed_targeted_revision_descendant_blocks_without_dispatching_b[descendant_key_source_conflict-<lambda>]\nFAILED tests/test_results_relay.py::test_results_relay_reconstructs_and_pushes_complete_patch\nFAILED tests/test_results_relay.py::test_results_relay_malformed_job_yaml_preserves_primary_and_records_diagnostic[invalid-yaml-[-job YAML is invalid]\nFAILED tests/test_results_relay.py::test_results_relay_malformed_job_yaml_preserves_primary_and_records_diagnostic[non-mapping-yaml-- item\\n-job YAML must be a mapping]\nFAILED tests/test_results_relay.py::test_results_relay_unreadable_job_yaml_preserves_primary_and_records_diagnostic\nFAILED tests/test_results_relay.py::test_results_relay_valid_non_refill_job_yaml_preserves_primary_without_evidence\nFAILED tests/test_results_relay.py::test_results_relay_two_job_malformed_identity_diagnostic_does_not_leak_first_identity\nFAILED tests/test_revision_loop.py::test_revision_loop_writes_only_jobs_branch_and_is_repeat_safe\nFAILED tests/test_revision_loop.py::test_passed_gate_revision_not_applicable_uses_source_receipt_not_legacy_ledger\nFAILED tests/test_revision_loop.py::test_revision_loop_job_yaml_parse_failure_records_source_identity\nFAILED tests/test_revision_loop.py::test_revision_loop_ledger_save_failure_records_source_and_revision_identity\nFAILED tests/test_revision_loop.py::test_revision_loop_rejects_mutated_gate_evidence\nFAILED tests/test_self_update_evidence_relay.py::test_relay_publishes_immutable_report_and_notification_once\nFAILED tests/test_self_update_evidence_relay.py::test_relay_rejects_source_mutation_after_ledger_binding\nFAILED tests/test_self_update_evidence_relay.py::test_relay_rejects_default_branch_and_escaping_report_path\nFAILED tests/test_self_update_evidence_relay.py::test_relay_prefers_short_checkout_and_enables_longpaths\nFAILED tests/test_self_update_evidence_relay.py::test_relay_reuses_legacy_checkout_path_when_present\nFAILED tests/test_self_update_supervisor.py::test_release_builder_fetches_and_verifies_only_exact_commit\nFAILED tests/test_self_update_supervisor.py::test_release_builder_stages_legacy_release_without_refill_controller\nFAILED tests/test_update_manifest_publisher.py::test_build_manifest_hashes_exact_commit_and_self_validates\nFAILED tests/test_update_manifest_publisher.py::test_explicit_reviewed_commit_may_differ_from_request_merge_commit\nFAILED tests/test_windows_git_checkout.py::test_revision_loop_prefers_short_results_checkout_on_long_host_root\nFAILED tests/test_windows_git_checkout.py::test_revision_loop_reuses_legacy_results_checkout\nFAILED tests/test_windows_git_checkout.py::test_candidate_gate_prefers_short_results_checkout_on_long_host_root\nFAILED tests/test_windows_git_checkout.py::test_candidate_gate_reuses_legacy_results_checkout\nFAILED tests/test_windows_self_update_supervisor.py::test_stable_bootstrap_handoff_runs_with_spaced_fixture_and_probe_paths\n258 failed, 353 passed, 2 skipped in 1547.17s (0:25:47)\n",
+      "termination": {},
+      "timed_out": false,
+      "timeout_seconds": 2400.0
+    },
+    {
+      "argv": [
+        "remove-tree-no-symlinks",
+        "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\tmp\\staging-pytest\\8928ebdec189-c0f318a2"
+      ],
+      "cwd": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\8928ebdec1896c5a299187699b8cf2b6bfc59880",
+      "duration_seconds": 0.04700000025331974,
+      "environment": {
+        "TEMP": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\tmp\\staging-pytest\\8928ebdec189-c0f318a2",
+        "TMP": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\tmp\\staging-pytest\\8928ebdec189-c0f318a2"
+      },
+      "name": "pytest-temp-cleanup",
+      "passed": false,
+      "process_tree": {},
+      "returncode": 1,
+      "stderr": "[WinError 5] Access is denied: 'C:\\\\Users\\\\USER\\\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\\\tmp\\\\staging-pytest\\\\8928ebdec189-c0f318a2\\\\pytest-of-USER\\\\pytest-0\\\\test_absent_review_decision_fa0\\\\evidence-work\\\\.git\\\\objects\\\\22\\\\bf84a505abe2201515303f44f220603035f0b9'",
+      "stdout": "",
+      "termination": {},
+      "timed_out": false,
+      "timeout_seconds": null
+    }
+  ],
+  "cutover": {
+    "performed": false
+  },
+  "errors": [
+    "staging check pytest failed with exit 1: FFF.FF.F.F..F...FF...FFFFF..FFFF..FFFFF...FFFFFF.FFF.FFFFFFFFFFFFFFFFFFF [ 11%]\nFF................FF....FFFFFFFFFFF.FFFFFFFFFF...FFFFFFFFFFFF....F...... [ 23%]\n....................................FF...F..............FFFFFF.....F..F. [ 35%]\n.........F.FFFF.F..FFFF..FFFFFFFF.FF..FFF........FFFF.F.F...........FFFF [ 46%]\nFFFFFF...FFFF.FFFF.FFFFF.....FFFFFFFFFFFFFFFF.FFFFFFFFFFFFFFFFFFFFFFFFFF [ 58%]\nFFFFFFFFFFFFFFFFFFFF....FFFFFFFFFFFFFFFFFF..FFFFFF.......FFFF.F......... [ 70%]\nFFFFF...................FF....ss....FF.................................. [ 82%]\n............FFFF..........................................F............. [ 93%]\n.....................................                                    [100%]\n================================== FAILURES ===================================\n______________ test_build_next_submits_exactly_one_selected_item ______________\n\ntmp_path = WindowsPath('C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor/tmp/staging-pytest/8928ebdec189-c0f318a2/pytest-of-USER/pytest-0/test_build_next_submits_exactl0')\n\n    def test_build_next_submits_exactly_one_selected_item(tmp_path: Path) -> None:\n        ppe = _write_ppe(tmp_path / \"ppe\")\n        (ppe / \"requirements.txt\").write_bytes(b\"# PPE fixture requirements\\r\\n\")\n        _commit_all(ppe, \"crlf requirements\")\n>       _git(ppe, \"push\", \"-q\", \"origin\", \"main\")\n\ntests\\test_build_next.py:376: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\ntests\\test_build_next.py:40: in _git\n    proc = subprocess.run(\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\n\ninput = None, capture_output = True, timeout = None, check = True\npopenargs = (['git', '-C', 'C:\\\\Users\\\\USER\\\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\\\tmp\\\\staging-py...\\8928ebdec189-c0f318a2\\\\pytest-of-USER\\\\pytest-0\\\\test_build_next_submits_exactl0\\\\ppe', 'push', '-q', 'origin', ...],)\nkwargs = {'text': True, 'encoding': 'utf-8', 'errors': 'replace', 'stdout': -1, ...}\n\n    def run(*popenargs,\n            input=None, capture_output=False, timeout=None, check=False, **kwargs):\n        \"\"\"Run command with arguments and return a CompletedProcess instance.\n    \n        The returned instance will have attributes args, returncode, stdout and\n        stderr. By default, stdout and stderr are not captured, and those attributes\n        will be None. Pass stdout=PIPE and/or stderr=PIPE in order to capture them,\n        or pass capture_output=True to capture both.\n    \n        If check is True and the exit code was non-zero, it raises a\n        CalledProcessError. The CalledProcessError object will have the return code\n        in the returncode attribute, and output & stderr attributes if those streams\n        were captured.\n    \n        If timeout is given, and the process takes too long, a TimeoutExpired\n        exception will be raised.\n    \n        There is an optional argument \"input\", allowing you to\n        pass bytes or a string to the subprocess's stdin.  If you use this argument\n        you may not also use the Popen constructor's \"stdin\" argument, as\n        it will be used internally.\n    \n        By default, all communication is in bytes, and therefore any \"input\" should\n        be bytes, and the stdout and stderr will be bytes. If in text mode, any\n        \"input\" should be a string, and stdout and stderr will be strings decoded\n        according to locale encoding, or by \"encoding\" if set. Text mode is\n        triggered by setting any of text, encoding, errors or universal_newlines.\n    \n        The other arguments are the same as for the Popen constructor.\n        \"\"\"\n        if input is not None:\n            if kwargs.get('stdin') is not None:\n                raise ValueError('stdin and input arguments may not both be used.')\n            kwargs['stdin'] = PIPE\n    \n        if capture_output:\n            if kwargs.get('stdout') is not None or kwargs.get('stderr') is not None:\n                raise ValueError('stdout and stderr arguments may not be used '\n                                 'with capture_output.')\n            kwargs['stdout'] = PIPE\n            kwargs['stderr'] = PIPE\n    \n        with Popen(*popenargs, **kwargs) as process:\n            try:\n                stdout, stderr = process.communicate(input, timeout=timeout)\n            except TimeoutExpired as exc:\n                process.kill()\n                if _mswindows:\n                    # Windows accumulates the output in a single blocking\n                    # read() call run on child threads, with the timeout\n                    # being done in a join() on those threads.  communicate()\n                    # _after_ kill() is required to collect that and add it\n                    # to the exception.\n                    exc.stdout, exc.stderr = process.communicate()\n                else:\n                    # POSIX _communicate already populated the output so\n                    # far into the TimeoutExpired exception.\n                    process.wait()\n                raise\n            except:  # Including KeyboardInterrupt, communicate handled that.\n                process.kill()\n                # We don't call process.wait() as .__exit__ does that for us.\n                raise\n            retcode = process.poll()\n            if check and retcode:\n>               raise CalledProcessError(retcode, process.args,\n                                         output=stdout, stderr=stderr)\nE               subprocess.CalledProcessError: Command '['git', '-C', 'C:\\\\Users\\\\USER\\\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\\\tmp\\\\staging-pytest\\\\8928ebdec189-c0f318a2\\\\pytest-of-USER\\\\pytest-0\\\\test_build_next_submits_exactl0\\\\ppe', 'push', '-q', 'origin', 'main']' returned non-zero exit status 1.\n\n..\\..\\..\\anaconda3\\Lib\\subprocess.py:571: CalledProcessError\n___ test_control_smoke_and_closeout_slices_are_not_folded_into_product_lane ___\n\ntmp_path = WindowsPath('C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor/tmp/staging-pytest/8928ebdec189-c0f318a2/pytest-of-USER/pytest-0/test_control_smoke_and_closeou0')\n\n    def test_control_smoke_and_closeout_slices_are_not_folded_into_product_lane(\n        tmp_path: Path,\n    ) -> None:\n        ppe = _write_ppe(tmp_path / \"ppe\")\n        feed = _feed_repo(tmp_path / \"feed-work\")\n    \n        receipt = build_next(_config(tmp_path, ppe, feed))\n    \n        review = tmp_path / \"review\"\n        _git(None, \"clone\", \"-q\", \"--branch\", \"jobs\", str(feed), str(review))\n>       job_path = next((review / \"jobs\" / \"approved\").glob(f\"{receipt.job_id}.yaml\"))\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE       StopIteration\n\ntests\\test_build_next.py:446: StopIteration\n___________________ test_duplicate_invocation_is_idempotent ___________________\n\ntmp_path = WindowsPath('C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor/tmp/staging-pytest/8928ebdec189-c0f318a2/pytest-of-USER/pytest-0/test_duplicate_invocation_is_i0')\n\n    def test_duplicate_invocation_is_idempotent(tmp_path: Path) -> None:\n        ppe = _write_ppe(tmp_path / \"ppe\")\n        feed = _feed_repo(tmp_path / \"feed-work\")\n        config = _config(tmp_path, ppe, feed)\n    \n        first = build_next(config)\n        second = build_next(config)\n    \n>       assert first.status == \"QUEUED\"\nE       AssertionError: assert 'BLOCKED' == 'QUEUED'\nE         \nE         - QUEUED\nE         + BLOCKED\n\ntests\\test_build_next.py:467: AssertionError\n___________ test_refill_dispatch_submitted_replay_is_deterministic ____________\n\ntmp_path = WindowsPath('C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor/tmp/staging-pytest/8928ebdec189-c0f318a2/pytest-of-USER/pytest-0/test_refill_dispatch_submitted0')\n\n    def test_refill_dispatch_submitted_replay_is_deterministic(tmp_path: Path) -> None:\n        ppe = _write_ppe(tmp_\n...[truncated]...\ns]\nFAILED tests/test_refill_controller.py::test_supersession_partial_retry_feed_awaiting_import_fails_closed\nFAILED tests/test_refill_controller.py::test_supersession_partial_retry_unpaused_policy_fails_closed\nFAILED tests/test_refill_controller.py::test_supersession_completed_retry_modified_receipt_fails_closed[new_generation_id-wrong-generation-receipt conflicts]\nFAILED tests/test_refill_controller.py::test_supersession_completed_retry_modified_receipt_fails_closed[ambiguity_evidence-value1-receipt conflicts]\nFAILED tests/test_refill_controller.py::test_supersession_completed_retry_missing_archive_fails_closed\nFAILED tests/test_refill_controller.py::test_supersession_completed_retry_modified_archive_fails_closed\nFAILED tests/test_refill_controller.py::test_supersession_valid_partial_retry_completes_exactly_once\nFAILED tests/test_refill_controller.py::test_supersession_valid_completed_retry_remains_idempotent\nFAILED tests/test_refill_controller.py::test_supersession_cli_feed_awaiting_import_blocks_without_mutation\nFAILED tests/test_refill_controller.py::test_supersession_completed_retry_preserves_later_founder_pause\nFAILED tests/test_refill_controller.py::test_supersession_completed_retry_preserves_legitimate_policy_change\nFAILED tests/test_refill_controller.py::test_supersession_retry_after_active_replace_finishes_policy_once\nFAILED tests/test_refill_controller.py::test_supersession_active_replaced_retry_item_terminal_fails_closed\nFAILED tests/test_refill_controller.py::test_supersession_active_replaced_retry_provider_retry_fails_closed\nFAILED tests/test_refill_controller.py::test_supersession_active_replaced_retry_receipt_archive_mismatch_fails_closed[old_job_id-different-job]\nFAILED tests/test_refill_controller.py::test_supersession_active_replaced_retry_receipt_archive_mismatch_fails_closed[old_work_item_id-different-work-item]\nFAILED tests/test_refill_controller.py::test_supersession_active_replaced_retry_receipt_archive_mismatch_fails_closed[classification-value2]\nFAILED tests/test_refill_controller.py::test_supersession_active_replaced_retry_receipt_archive_mismatch_fails_closed[ambiguity_evidence-value3]\nFAILED tests/test_refill_controller.py::test_supersession_active_replaced_retry_mismatched_completion_binding_fails_closed\nFAILED tests/test_refill_controller.py::test_supersession_completed_retry_active_release_mismatch_fails_closed\nFAILED tests/test_refill_controller.py::test_supersession_partial_retry_active_release_mismatch_fails_closed\nFAILED tests/test_refill_controller.py::test_pause_resume_preserve_completed_supersession_binding\nFAILED tests/test_refill_controller.py::test_reconcile_report_preserves_completed_supersession_binding\nFAILED tests/test_refill_controller.py::test_crash_during_retry_dry_prepare_leaves_retry_unconsumed\nFAILED tests/test_refill_controller.py::test_crash_after_prepared_retry_before_feed_recovers_same_retry_once\nFAILED tests/test_refill_controller.py::test_prepared_replay_waits_for_unrelated_capacity_then_submits_same_job[pending]\nFAILED tests/test_refill_controller.py::test_prepared_replay_waits_for_unrelated_capacity_then_submits_same_job[running]\nFAILED tests/test_refill_controller.py::test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b[missing_revision_job_id-<lambda>]\nFAILED tests/test_refill_controller.py::test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b[missing_gate_hash-<lambda>]\nFAILED tests/test_refill_controller.py::test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b[invalid_jobs_commit-<lambda>]\nFAILED tests/test_refill_controller.py::test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b[timezone_free_queued_at-<lambda>]\nFAILED tests/test_refill_controller.py::test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b[key_source_disagreement-<lambda>]\nFAILED tests/test_refill_controller.py::test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b[source_points_to_self-<lambda>]\nFAILED tests/test_refill_controller.py::test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b[cycle_a_r_a-<lambda>]\nFAILED tests/test_refill_controller.py::test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b[descendant_revision-<lambda>]\nFAILED tests/test_refill_controller.py::test_malformed_revision_lineage_blocks_without_excluding_a_or_dispatching_b[multiple_direct_descendants-<lambda>]\nFAILED tests/test_refill_controller.py::test_corrupt_revision_ledger_blocks_without_falling_through_to_failed_gate[{not-json]\nFAILED tests/test_refill_controller.py::test_corrupt_revision_ledger_blocks_without_falling_through_to_failed_gate[[]]\nFAILED tests/test_refill_controller.py::test_malformed_targeted_revision_descendant_blocks_without_dispatching_b[descendant_non_object-<lambda>]\nFAILED tests/test_refill_controller.py::test_malformed_targeted_revision_descendant_blocks_without_dispatching_b[descendant_incomplete-<lambda>]\nFAILED tests/test_refill_controller.py::test_malformed_targeted_revision_descendant_blocks_without_dispatching_b[descendant_key_source_conflict-<lambda>]\nFAILED tests/test_results_relay.py::test_results_relay_reconstructs_and_pushes_complete_patch\nFAILED tests/test_results_relay.py::test_results_relay_malformed_job_yaml_preserves_primary_and_records_diagnostic[invalid-yaml-[-job YAML is invalid]\nFAILED tests/test_results_relay.py::test_results_relay_malformed_job_yaml_preserves_primary_and_records_diagnostic[non-mapping-yaml-- item\\n-job YAML must be a mapping]\nFAILED tests/test_results_relay.py::test_results_relay_unreadable_job_yaml_preserves_primary_and_records_diagnostic\nFAILED tests/test_results_relay.py::test_results_relay_valid_non_refill_job_yaml_preserves_primary_without_evidence\nFAILED tests/test_results_relay.py::test_results_relay_two_job_malformed_identity_diagnostic_does_not_leak_first_identity\nFAILED tests/test_revision_loop.py::test_revision_loop_writes_only_jobs_branch_and_is_repeat_safe\nFAILED tests/test_revision_loop.py::test_passed_gate_revision_not_applicable_uses_source_receipt_not_legacy_ledger\nFAILED tests/test_revision_loop.py::test_revision_loop_job_yaml_parse_failure_records_source_identity\nFAILED tests/test_revision_loop.py::test_revision_loop_ledger_save_failure_records_source_and_revision_identity\nFAILED tests/test_revision_loop.py::test_revision_loop_rejects_mutated_gate_evidence\nFAILED tests/test_self_update_evidence_relay.py::test_relay_publishes_immutable_report_and_notification_once\nFAILED tests/test_self_update_evidence_relay.py::test_relay_rejects_source_mutation_after_ledger_binding\nFAILED tests/test_self_update_evidence_relay.py::test_relay_rejects_default_branch_and_escaping_report_path\nFAILED tests/test_self_update_evidence_relay.py::test_relay_prefers_short_checkout_and_enables_longpaths\nFAILED tests/test_self_update_evidence_relay.py::test_relay_reuses_legacy_checkout_path_when_present\nFAILED tests/test_self_update_supervisor.py::test_release_builder_fetches_and_verifies_only_exact_commit\nFAILED tests/test_self_update_supervisor.py::test_release_builder_stages_legacy_release_without_refill_controller\nFAILED tests/test_update_manifest_publisher.py::test_build_manifest_hashes_exact_commit_and_self_validates\nFAILED tests/test_update_manifest_publisher.py::test_explicit_reviewed_commit_may_differ_from_request_merge_commit\nFAILED tests/test_windows_git_checkout.py::test_revision_loop_prefers_short_results_checkout_on_long_host_root\nFAILED tests/test_windows_git_checkout.py::test_revision_loop_reuses_legacy_results_checkout\nFAILED tests/test_windows_git_checkout.py::test_candidate_gate_prefers_short_results_checkout_on_long_host_root\nFAILED tests/test_windows_git_checkout.py::test_candidate_gate_reuses_legacy_results_checkout\nFAILED tests/test_windows_self_update_supervisor.py::test_stable_bootstrap_handoff_runs_with_spaced_fixture_and_probe_paths\n258 failed, 353 passed, 2 skipped in 1547.17s (0:25:47)\n"
+  ],
+  "health": {},
+  "manifest_sha256": "45e6c34483946049a87663eb4da6b6540f6fe280f84efdd12b6e868bee6f5e8d",
+  "outcome": "failed_before_cutover",
+  "previous_commit": "6e9434ca5161f47af3a525c5f1ac83583fc65f87",
+  "previous_release_path": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\versions\\6e9434ca5161f47af3a525c5f1ac83583fc65f87",
+  "release_id": "issue119-pr130-8928ebdec1896c5a299187699b8cf2b6bfc59880",
+  "requested_commit": "8928ebdec1896c5a299187699b8cf2b6bfc59880",
+  "rollback": {},
+  "staged_release_path": null,
+  "version": 1
+}

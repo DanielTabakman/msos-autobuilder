@@ -1,0 +1,21 @@
+{
+  "attempt_id": "20260812T205141.153283Z-479b0b3172c6",
+  "attempted_at": "2026-08-12T20:51:41.156282+00:00",
+  "checks": [],
+  "cutover": {
+    "performed": false
+  },
+  "errors": [
+    "[WinError 87] The parameter is incorrect"
+  ],
+  "health": {},
+  "manifest_sha256": "0eaa44be5a0cc7087a962a601196d0524d82265056958fc08286589674ca68e0",
+  "outcome": "failed_before_cutover",
+  "previous_commit": null,
+  "previous_release_path": null,
+  "release_id": "issue119-pr146-118b9c1af16c6407a701292a5c8c08b7e6b14bc8",
+  "requested_commit": "118b9c1af16c6407a701292a5c8c08b7e6b14bc8",
+  "rollback": {},
+  "staged_release_path": null,
+  "version": 1
+}

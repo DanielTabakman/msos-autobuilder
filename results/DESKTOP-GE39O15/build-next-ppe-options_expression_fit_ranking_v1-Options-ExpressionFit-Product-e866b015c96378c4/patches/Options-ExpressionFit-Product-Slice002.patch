@@ -1,0 +1,1093 @@
+diff --git a/apps/msos-web/src/components/ExpressionPlanningPanel.tsx b/apps/msos-web/src/components/ExpressionPlanningPanel.tsx
+index 0900d3d..fdc5b9c 100644
+--- a/apps/msos-web/src/components/ExpressionPlanningPanel.tsx
++++ b/apps/msos-web/src/components/ExpressionPlanningPanel.tsx
+@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
+ import { resolveCurveLabels } from "@/lib/chartCurveLabels";
+ import { ContextRail } from "@/components/ContextRail";
+ import { ExpressionPayoffChartFrame } from "@/components/ExpressionPayoffChartFrame";
++import { OptionsExpressionFitRankingPanel } from "@/components/OptionsExpressionFitRankingPanel";
+ import { TradeProsConsCard } from "@/components/TradeProsConsCard";
+ import { PendingPaperTradeBanner } from "@/components/PendingPaperTradeBanner";
+ import { PlanLegRow } from "@/components/PlanLegRow";
+@@ -55,6 +56,10 @@ import { displayCurrencyDisclaimer } from "@/lib/displayCurrency";
+ import { useDisplayCurrency } from "@/lib/useDisplayCurrency";
+ import { loadStoredStrategyLabExpiry } from "@/lib/strategyLabExpiry";
+ import { relabelPlanLegsForAsset } from "@/lib/planLegDisplay";
++import {
++  buildCandidateFromStrategySuggestion,
++  rankOptionsExpressionFit,
++} from "@/lib/optionsExpressionFitRanking";
+ import { DEMO_FOOTER } from "@/lib/publicCopy";
+ 
+ function familyIdForPreset(presetId?: string): string {
+@@ -320,6 +325,19 @@ export function ExpressionPlanningPanel() {
+     suggestion?.suggested?.review?.payoff_line ?? null,
+     suggestion?.suggested?.review?.structure_line ?? null,
+   );
++  const expressionFitRanking = useMemo(() => {
++    const candidate = buildCandidateFromStrategySuggestion(suggestion, thesis.horizonDays);
++    if (!candidate) {
++      return null;
++    }
++    return rankOptionsExpressionFit([candidate], {
++      direction: suggestion?.suggested?.expression_family === "range" ? "neutral" : "long",
++      belief: thesis.disagreementLine ?? thesis.referenceLabel,
++      target_horizon_days: thesis.horizonDays,
++      max_loss_usd: suggestion?.suggested?.summary?.max_loss_usd ?? null,
++      payoff_preference: "defined_risk",
++    });
++  }, [suggestion, thesis]);
+ 
+   return (
+     <>
+@@ -439,6 +457,7 @@ export function ExpressionPlanningPanel() {
+               {suggestion?.suggested?.review?.linkage_line ? (
+                 <p className="micro">{suggestion.suggested.review.linkage_line}</p>
+               ) : null}
++              <OptionsExpressionFitRankingPanel ranking={expressionFitRanking} />
+               <div className="risk-note">{expressionRiskNote}</div>
+ 
+               <details className="planner-advanced">
+diff --git a/apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx b/apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx
+new file mode 100644
+index 0000000..4420941
+--- /dev/null
++++ b/apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx
+@@ -0,0 +1,34 @@
++import type { ExpressionFitRankingPayload } from "@/lib/optionsExpressionFitRanking";
++
++type Props = {
++  ranking: ExpressionFitRankingPayload | null;
++};
++
++export function OptionsExpressionFitRankingPanel({ ranking }: Props) {
++  if (!ranking?.top_fit) {
++    return null;
++  }
++
++  return (
++    <div className="planner-advanced" aria-label="Educational expression fit ranking">
++      <div className="panel-head">
++        <div>
++          <h2>Educational fit ranking</h2>
++          <div className="panel-sub">Deterministic score from your view, horizon, max loss, and payoff preference.</div>
++        </div>
++      </div>
++      {ranking.ranked.slice(0, 3).map((row) => (
++        <div key={row.candidate_id} className={`option-row${row.rank === 1 ? "" : " dimmed"}`}>
++          <div>
++            <h3>
++              {row.rank}. {row.label}
++            </h3>
++            <p>{row.rank === 1 ? row.why : row.why_lower[0] ?? row.why}</p>
++          </div>
++          <span className={`tag${row.rank === 1 ? " amber" : ""}`}>{row.score.toFixed(0)}</span>
++        </div>
++      ))}
++      <p className="micro">{ranking.limitation}</p>
++    </div>
++  );
++}
+diff --git a/apps/msos-web/src/lib/optionsExpressionFitRanking.ts b/apps/msos-web/src/lib/optionsExpressionFitRanking.ts
+new file mode 100644
+index 0000000..a74519b
+--- /dev/null
++++ b/apps/msos-web/src/lib/optionsExpressionFitRanking.ts
+@@ -0,0 +1,256 @@
++import type { ExposurePathRecord } from "@/lib/ppeExposureMenu";
++import type { StrategySuggestionPayload, StrategySuggestionSummary } from "@/lib/ppeStrategySuggestion";
++
++export const EXPRESSION_FIT_RECOMMENDATION_STATUS = "educational_fit_not_recommendation";
++
++export const EXPRESSION_FIT_WEIGHTS = {
++  direction_fit: 30,
++  horizon_fit: 20,
++  max_loss_fit: 20,
++  payoff_fit: 15,
++  trust_fit: 15,
++} as const;
++
++export type ExpressionFitDirection = "long" | "short" | "neutral";
++export type PayoffPreference =
++  | "defined_risk"
++  | "capital_light"
++  | "upside_leverage"
++  | "income_style"
++  | "watch_only";
++
++export type ExpressionFitCandidate = Omit<Partial<ExposurePathRecord>, "legs"> & {
++  candidate_id: string;
++  source: "exposure_menu" | "strategy_suggestion" | "fallback";
++  source_order?: number;
++  name?: string;
++  horizon_days?: number;
++  max_loss_usd?: number | null;
++  summary?: StrategySuggestionSummary | null;
++  legs?: Array<{ side: string; instrument: string; strike: string; tenor: string }>;
++  expression_family?: string | null;
++};
++
++export type ExpressionFitPreferences = {
++  direction: ExpressionFitDirection;
++  belief?: string;
++  target_horizon_days?: number | null;
++  max_loss_usd?: number | null;
++  payoff_preference: PayoffPreference;
++};
++
++export type ExpressionFitComponent = {
++  score: number;
++  weight: number;
++  reason: string;
++};
++
++export type ExpressionFitRankedCandidate = {
++  candidate_id: string;
++  label: string;
++  rank: number;
++  score: number;
++  components: Record<keyof typeof EXPRESSION_FIT_WEIGHTS, ExpressionFitComponent>;
++  why: string;
++  why_lower: string[];
++  candidate: ExpressionFitCandidate;
++};
++
++export type ExpressionFitRankingPayload = {
++  kind: "options_expression_fit_ranking";
++  recommendation_status: typeof EXPRESSION_FIT_RECOMMENDATION_STATUS;
++  weights: typeof EXPRESSION_FIT_WEIGHTS;
++  preferences: ExpressionFitPreferences;
++  ranked: ExpressionFitRankedCandidate[];
++  top_fit: ExpressionFitRankedCandidate | null;
++  limitation: string;
++};
++
++export const EXPRESSION_FIT_LIMITATION =
++  "Educational fit ranking only. It compares paper candidates against stated constraints; it is not financial advice, a recommendation, expected-profit optimization, or an order ticket.";
++
++const payoffLens: Record<PayoffPreference, string[]> = {
++  defined_risk: ["defined_risk"],
++  capital_light: ["capital_light"],
++  upside_leverage: ["upside_leverage"],
++  income_style: ["income_style"],
++  watch_only: ["simplest", "liquid"],
++};
++
++function bounded(value: number): number {
++  return Math.max(0, Math.min(1, value));
++}
++
++function labelFor(candidate: ExpressionFitCandidate): string {
++  return candidate.label ?? candidate.name ?? candidate.path_id ?? candidate.candidate_id;
++}
++
++function inferDirection(candidate: ExpressionFitCandidate): ExpressionFitDirection {
++  if (
++    candidate.direction === "long" ||
++    candidate.direction === "short" ||
++    candidate.direction === "neutral"
++  ) {
++    return candidate.direction;
++  }
++  const text = [
++    candidate.label,
++    candidate.headline,
++    candidate.capital_shape,
++    candidate.sort_group,
++    candidate.expression_family,
++    ...(candidate.pros ?? []),
++    ...(candidate.cons ?? []),
++  ]
++    .join(" ")
++    .toLowerCase();
++  if (text.includes("range") || text.includes("iron fly") || text.includes("neutral")) return "neutral";
++  if (text.includes("put") || text.includes("bear") || text.includes("downside")) return "short";
++  return "long";
++}
++
++function component(score: number, key: keyof typeof EXPRESSION_FIT_WEIGHTS, reason: string): ExpressionFitComponent {
++  return {
++    score: Number((bounded(score) * EXPRESSION_FIT_WEIGHTS[key]).toFixed(4)),
++    weight: EXPRESSION_FIT_WEIGHTS[key],
++    reason,
++  };
++}
++
++function lossValue(candidate: ExpressionFitCandidate): number | null {
++  const summaryLoss = candidate.summary?.max_loss_usd;
++  const value = summaryLoss ?? candidate.max_loss_usd ?? candidate.cost_hint_usd;
++  return typeof value === "number" && Number.isFinite(value) ? Math.abs(value) : null;
++}
++
++function horizonScore(candidate: ExpressionFitCandidate, prefs: ExpressionFitPreferences): [number, string] {
++  const target = prefs.target_horizon_days;
++  if (!target) return [1, "no target horizon constraint supplied"];
++  if (candidate.time_bound === "none") return [0.85, "no-expiry exposure can be held across the target horizon"];
++  const days = candidate.horizon_days;
++  if (typeof days !== "number") return [0.5, "dated candidate has no precise horizon metadata"];
++  const diff = Math.abs(days - target);
++  if (diff <= 14) return [1, `horizon is within 14 days of ${target}d`];
++  if (diff <= 45) return [0.75, `horizon is close to ${target}d`];
++  if (diff <= 120) return [0.45, `horizon is meaningfully away from ${target}d`];
++  return [0.15, `horizon is far from ${target}d`];
++}
++
++export function buildCandidateFromStrategySuggestion(
++  payload: StrategySuggestionPayload | null,
++  targetHorizonDays?: number | null,
++): ExpressionFitCandidate | null {
++  const suggested = payload?.suggested;
++  if (!suggested) return null;
++  const presetId = suggested.preset_id ?? "strategy_suggestion";
++  const expressionFamily = suggested.expression_family ?? null;
++  return {
++    candidate_id: `strategy:${presetId}`,
++    source: "strategy_suggestion",
++    source_order: 0,
++    label: suggested.name ?? suggested.preset_label ?? "Strategy Lab structure",
++    direction: expressionFamily === "range" || presetId === "short_iron_fly" ? "neutral" : undefined,
++    leverage: "defined",
++    time_bound: "dated",
++    liquidity: "medium",
++    trust_badge: "Live",
++    sort_group: "strategy_suggestion",
++    fit_lenses: ["defined_risk", "capital_light"],
++    horizon_days: targetHorizonDays ?? undefined,
++    max_loss_usd: suggested.summary?.max_loss_usd ?? null,
++    summary: suggested.summary ?? null,
++    legs: suggested.legs,
++    expression_family: expressionFamily,
++  };
++}
++
++export function scoreExpressionCandidate(
++  candidate: ExpressionFitCandidate,
++  prefs: ExpressionFitPreferences,
++): ExpressionFitRankedCandidate {
++  const label = labelFor(candidate);
++  const candidateDirection = inferDirection(candidate);
++  const direction =
++    candidateDirection === prefs.direction
++      ? component(1, "direction_fit", `direction matches ${prefs.direction}`)
++      : prefs.direction === "neutral" && candidate.leverage === "defined"
++        ? component(0.65, "direction_fit", "defined-risk structure can express a range view, but direction is imperfect")
++        : candidateDirection === "neutral"
++          ? component(0.45, "direction_fit", `neutral payoff only partly matches a ${prefs.direction} view`)
++          : component(0, "direction_fit", `direction is ${candidateDirection}, not ${prefs.direction}`);
++  const [horizonRaw, horizonReason] = horizonScore(candidate, prefs);
++  const loss = lossValue(candidate);
++  const cap = prefs.max_loss_usd;
++  const maxLoss =
++    candidate.trust_badge === "Planned"
++      ? component(0.2, "max_loss_fit", "planned rail lacks live max-loss evidence")
++      : cap == null
++        ? component(candidate.leverage === "defined" ? 1 : 0.65, "max_loss_fit", "no max-loss cap supplied")
++        : loss == null
++          ? component(candidate.leverage === "none" ? 0.55 : 0.25, "max_loss_fit", "candidate lacks a comparable max-loss estimate")
++          : loss <= cap
++            ? component(1, "max_loss_fit", `max loss $${loss.toFixed(0)} is inside the $${cap.toFixed(0)} cap`)
++            : loss <= cap * 1.25
++              ? component(0.55, "max_loss_fit", `max loss $${loss.toFixed(0)} is slightly above the $${cap.toFixed(0)} cap`)
++              : component(0, "max_loss_fit", `max loss $${loss.toFixed(0)} exceeds the $${cap.toFixed(0)} cap`);
++  const lenses = new Set(candidate.fit_lenses ?? []);
++  const payoffMatch = payoffLens[prefs.payoff_preference].some((lens) => lenses.has(lens));
++  const payoff = component(
++    payoffMatch ? 1 : 0.25,
++    "payoff_fit",
++    payoffMatch
++      ? `payoff preference matches ${prefs.payoff_preference}`
++      : `payoff preference is a weak match for ${prefs.payoff_preference}`,
++  );
++  const trust =
++    candidate.trust_badge === "Live"
++      ? component(1, "trust_fit", "live data available")
++      : candidate.trust_badge === "Thin chain"
++        ? component(0.55, "trust_fit", "thin-chain data lowers confidence")
++        : component(0.15, "trust_fit", "planned rail is context only");
++  const components = {
++    direction_fit: direction,
++    horizon_fit: component(horizonRaw, "horizon_fit", horizonReason),
++    max_loss_fit: maxLoss,
++    payoff_fit: payoff,
++    trust_fit: trust,
++  };
++  const score = Number(Object.values(components).reduce((sum, row) => sum + row.score, 0).toFixed(4));
++  const strong = Object.values(components).filter((row) => row.score >= row.weight * 0.8);
++  const weak = Object.values(components).filter((row) => row.score < row.weight * 0.8);
++  return {
++    candidate_id: candidate.candidate_id,
++    label,
++    rank: 0,
++    score,
++    components,
++    why: `${label} scores ${score.toFixed(1)}/100 because ${strong.map((row) => row.reason).join("; ")}`,
++    why_lower: weak.slice(0, 3).map((row) => row.reason),
++    candidate,
++  };
++}
++
++export function rankOptionsExpressionFit(
++  candidates: ExpressionFitCandidate[],
++  preferences: ExpressionFitPreferences,
++): ExpressionFitRankingPayload {
++  const ranked = candidates
++    .map((candidate) => scoreExpressionCandidate(candidate, preferences))
++    .sort((a, b) => {
++      if (b.score !== a.score) return b.score - a.score;
++      const trustRank = (value?: string) => (value === "Live" ? 0 : value === "Thin chain" ? 1 : value === "Planned" ? 2 : 3);
++      const trust = trustRank(a.candidate.trust_badge) - trustRank(b.candidate.trust_badge);
++      if (trust !== 0) return trust;
++      return (a.candidate.source_order ?? 0) - (b.candidate.source_order ?? 0) || a.candidate_id.localeCompare(b.candidate_id);
++    })
++    .map((row, index) => ({ ...row, rank: index + 1 }));
++  return {
++    kind: "options_expression_fit_ranking",
++    recommendation_status: EXPRESSION_FIT_RECOMMENDATION_STATUS,
++    weights: EXPRESSION_FIT_WEIGHTS,
++    preferences,
++    ranked,
++    top_fit: ranked[0] ?? null,
++    limitation: EXPRESSION_FIT_LIMITATION,
++  };
++}
+diff --git a/scripts/rank_options_expression_fit.py b/scripts/rank_options_expression_fit.py
+new file mode 100644
+index 0000000..4455ea3
+--- /dev/null
++++ b/scripts/rank_options_expression_fit.py
+@@ -0,0 +1,63 @@
++"""CLI helper for deterministic options expression fit ranking."""
++
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++from typing import Any
++
++REPO_ROOT = Path(__file__).resolve().parents[1]
++if str(REPO_ROOT) not in sys.path:
++    sys.path.insert(0, str(REPO_ROOT))
++
++from src.viz.options_expression_fit_ranking_boundary import build_options_expression_fit_ranking_response
++
++
++def build_query(args: argparse.Namespace) -> str:
++    pairs: list[tuple[str, Any]] = [
++        ("asset", args.asset),
++        ("direction", args.direction),
++        ("horizon", args.horizon),
++        ("payoff_preference", args.payoff_preference),
++    ]
++    if args.expiry:
++        pairs.append(("expiry", args.expiry))
++    if args.target_horizon_days is not None:
++        pairs.append(("target_horizon_days", args.target_horizon_days))
++    if args.max_loss_usd is not None:
++        pairs.append(("max_loss_usd", args.max_loss_usd))
++    if args.forward_mult is not None:
++        pairs.append(("forward_mult", args.forward_mult))
++    if args.vol_mult is not None:
++        pairs.append(("vol_mult", args.vol_mult))
++    if args.offline:
++        pairs.append(("offline", "1"))
++    return "&".join(f"{key}={value}" for key, value in pairs)
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--asset", default="NVDA")
++    parser.add_argument("--direction", choices=["long", "short", "neutral"], default="long")
++    parser.add_argument("--horizon", choices=["any", "3m", "12m"], default="any")
++    parser.add_argument("--target-horizon-days", type=int)
++    parser.add_argument("--max-loss-usd", type=float)
++    parser.add_argument(
++        "--payoff-preference",
++        choices=["defined_risk", "capital_light", "upside_leverage", "income_style", "watch_only"],
++        default="defined_risk",
++    )
++    parser.add_argument("--expiry")
++    parser.add_argument("--forward-mult", type=float)
++    parser.add_argument("--vol-mult", type=float)
++    parser.add_argument("--offline", action="store_true")
++    args = parser.parse_args(argv)
++    payload = build_options_expression_fit_ranking_response({"QUERY_STRING": build_query(args)})
++    print(json.dumps(payload, indent=2, sort_keys=True))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/src/engine/options_expression_fit_ranking.py b/src/engine/options_expression_fit_ranking.py
+new file mode 100644
+index 0000000..03ea6ea
+--- /dev/null
++++ b/src/engine/options_expression_fit_ranking.py
+@@ -0,0 +1,289 @@
++"""Deterministic educational fit ranking for options expression candidates."""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from typing import Any, Literal
++
++ExpressionDirection = Literal["long", "short", "neutral"]
++PayoffPreference = Literal["defined_risk", "capital_light", "upside_leverage", "income_style", "watch_only"]
++TrustBadge = Literal["Live", "Thin chain", "Planned"]
++
++EXPRESSION_FIT_RANKING_KIND = "options_expression_fit_ranking"
++RECOMMENDATION_STATUS = "educational_fit_not_recommendation"
++LIMITATION_TEXT = (
++    "Educational fit ranking only. It compares paper candidates against stated constraints; "
++    "it is not financial advice, a recommendation, expected-profit optimization, or an order ticket."
++)
++
++SCORE_WEIGHTS: dict[str, int] = {
++    "direction_fit": 30,
++    "horizon_fit": 20,
++    "max_loss_fit": 20,
++    "payoff_fit": 15,
++    "trust_fit": 15,
++}
++
++_DIRECTION_ALIASES = {
++    "bullish": "long",
++    "up": "long",
++    "bearish": "short",
++    "down": "short",
++    "range": "neutral",
++    "calm": "neutral",
++    "neutral": "neutral",
++    "long": "long",
++    "short": "short",
++}
++
++_PAYOFF_LENSES: dict[PayoffPreference, tuple[str, ...]] = {
++    "defined_risk": ("defined_risk",),
++    "capital_light": ("capital_light",),
++    "upside_leverage": ("upside_leverage",),
++    "income_style": ("income_style",),
++    "watch_only": ("simplest", "liquid"),
++}
++
++
++@dataclass(frozen=True)
++class ExpressionFitPreferences:
++    direction: ExpressionDirection = "long"
++    belief: str = ""
++    target_horizon_days: int | None = None
++    max_loss_usd: float | None = None
++    payoff_preference: PayoffPreference = "defined_risk"
++
++
++def _normalize_direction(value: Any) -> ExpressionDirection:
++    key = str(value or "long").strip().lower()
++    return _DIRECTION_ALIASES.get(key, "long")  # type: ignore[return-value]
++
++
++def _bounded(value: float) -> float:
++    return max(0.0, min(1.0, float(value)))
++
++
++def _candidate_text(candidate: dict[str, Any]) -> str:
++    parts: list[str] = []
++    for key in ("label", "headline", "capital_shape", "structure", "sort_group", "expression_family"):
++        value = candidate.get(key)
++        if value:
++            parts.append(str(value))
++    for key in ("pros", "cons", "fit_lenses"):
++        values = candidate.get(key)
++        if isinstance(values, list):
++            parts.extend(str(v) for v in values)
++    return " ".join(parts).lower()
++
++
++def infer_candidate_direction(candidate: dict[str, Any]) -> ExpressionDirection:
++    raw = candidate.get("direction")
++    if raw:
++        return _normalize_direction(raw)
++    text = _candidate_text(candidate)
++    if any(token in text for token in ("range", "iron fly", "short vol", "calmer", "neutral")):
++        return "neutral"
++    if any(token in text for token in ("put", "bear", "downside")):
++        return "short"
++    return "long"
++
++
++def _direction_component(candidate: dict[str, Any], prefs: ExpressionFitPreferences) -> tuple[float, str]:
++    candidate_direction = infer_candidate_direction(candidate)
++    if candidate_direction == prefs.direction:
++        return 1.0, f"direction matches {prefs.direction}"
++    if prefs.direction == "neutral" and candidate.get("leverage") == "defined":
++        return 0.65, "defined-risk structure can express a range view, but direction is imperfect"
++    if candidate_direction == "neutral":
++        return 0.45, f"neutral payoff only partly matches a {prefs.direction} view"
++    return 0.0, f"direction is {candidate_direction}, not {prefs.direction}"
++
++
++def _horizon_days(candidate: dict[str, Any]) -> int | None:
++    for key in ("horizon_days", "target_horizon_days"):
++        value = candidate.get(key)
++        if value is not None:
++            try:
++                return max(0, int(value))
++            except (TypeError, ValueError):
++                return None
++    min_h = candidate.get("min_horizon_days")
++    max_h = candidate.get("max_horizon_days")
++    try:
++        if min_h is not None and max_h is not None:
++            return int((float(min_h) + float(max_h)) / 2)
++        if min_h is not None:
++            return int(float(min_h))
++        if max_h is not None:
++            return int(float(max_h))
++    except (TypeError, ValueError):
++        return None
++    return None
++
++
++def _horizon_component(candidate: dict[str, Any], prefs: ExpressionFitPreferences) -> tuple[float, str]:
++    target = prefs.target_horizon_days
++    if target is None:
++        return 1.0, "no target horizon constraint supplied"
++    if candidate.get("time_bound") == "none":
++        return (0.85, "no-expiry exposure can be held across the target horizon")
++    days = _horizon_days(candidate)
++    if days is None:
++        return (0.5, "dated candidate has no precise horizon metadata")
++    diff = abs(days - target)
++    if diff <= 14:
++        return (1.0, f"horizon is within 14 days of {target}d")
++    if diff <= 45:
++        return (0.75, f"horizon is close to {target}d")
++    if diff <= 120:
++        return (0.45, f"horizon is meaningfully away from {target}d")
++    return (0.15, f"horizon is far from {target}d")
++
++
++def _loss_value(candidate: dict[str, Any]) -> float | None:
++    summary = candidate.get("summary")
++    if isinstance(summary, dict) and summary.get("max_loss_usd") is not None:
++        try:
++            return abs(float(summary["max_loss_usd"]))
++        except (TypeError, ValueError):
++            return None
++    for key in ("max_loss_usd", "cost_hint_usd"):
++        value = candidate.get(key)
++        if value is not None:
++            try:
++                return abs(float(value))
++            except (TypeError, ValueError):
++                return None
++    return None
++
++
++def _max_loss_component(candidate: dict[str, Any], prefs: ExpressionFitPreferences) -> tuple[float, str]:
++    if candidate.get("trust_badge") == "Planned":
++        return (0.2, "planned rail lacks live max-loss evidence")
++    if candidate.get("leverage") == "high" and _loss_value(candidate) is None:
++        return (0.1, "high-leverage candidate lacks a defined max-loss value")
++    if prefs.max_loss_usd is None:
++        return (1.0 if candidate.get("leverage") == "defined" else 0.65, "no max-loss cap supplied")
++    loss = _loss_value(candidate)
++    if loss is None:
++        if candidate.get("leverage") == "none":
++            return (0.55, "uncapped spot-style exposure has no premium max-loss estimate")
++        return (0.25, "candidate lacks a comparable max-loss estimate")
++    cap = max(0.0, float(prefs.max_loss_usd))
++    if loss <= cap:
++        return (1.0, f"max loss ${loss:,.0f} is inside the ${cap:,.0f} cap")
++    if cap > 0 and loss <= cap * 1.25:
++        return (0.55, f"max loss ${loss:,.0f} is slightly above the ${cap:,.0f} cap")
++    return (0.0, f"max loss ${loss:,.0f} exceeds the ${cap:,.0f} cap")
++
++
++def _payoff_component(candidate: dict[str, Any], prefs: ExpressionFitPreferences) -> tuple[float, str]:
++    lenses = {str(x) for x in candidate.get("fit_lenses") or []}
++    desired = set(_PAYOFF_LENSES[prefs.payoff_preference])
++    if lenses & desired:
++        return (1.0, f"payoff preference matches {prefs.payoff_preference}")
++    text = _candidate_text(candidate)
++    if prefs.payoff_preference == "defined_risk" and ("defined" in text or "capped" in text):
++        return (0.8, "copy indicates defined or capped risk")
++    if prefs.payoff_preference == "capital_light" and candidate.get("cost_hint_usd") is not None:
++        return (0.65, "has an illustrative capital estimate")
++    return (0.25, f"payoff preference is a weak match for {prefs.payoff_preference}")
++
++
++def _trust_component(candidate: dict[str, Any]) -> tuple[float, str]:
++    badge = str(candidate.get("trust_badge") or "Live")
++    if badge == "Live":
++        return (1.0, "live data available")
++    if badge == "Thin chain":
++        return (0.55, "thin-chain data lowers confidence")
++    return (0.15, "planned rail is context only")
++
++
++def _stable_tiebreak(candidate: dict[str, Any]) -> tuple[int, str]:
++    badge_rank = {"Live": 0, "Thin chain": 1, "Planned": 2}.get(str(candidate.get("trust_badge") or ""), 3)
++    order = int(candidate.get("catalog_order") or candidate.get("source_order") or 0)
++    return (badge_rank * 10_000 + order, str(candidate.get("candidate_id") or candidate.get("path_id") or ""))
++
++
++def score_expression_candidate(
++    candidate: dict[str, Any],
++    prefs: ExpressionFitPreferences,
++) -> dict[str, Any]:
++    components = {
++        "direction_fit": _direction_component(candidate, prefs),
++        "horizon_fit": _horizon_component(candidate, prefs),
++        "max_loss_fit": _max_loss_component(candidate, prefs),
++        "payoff_fit": _payoff_component(candidate, prefs),
++        "trust_fit": _trust_component(candidate),
++    }
++    scored_components = {
++        key: {
++            "score": round(_bounded(raw) * SCORE_WEIGHTS[key], 4),
++            "weight": SCORE_WEIGHTS[key],
++            "reason": reason,
++        }
++        for key, (raw, reason) in components.items()
++    }
++    total = round(sum(row["score"] for row in scored_components.values()), 4)
++    candidate_id = str(candidate.get("candidate_id") or candidate.get("path_id") or candidate.get("preset_id") or "")
++    label = str(candidate.get("label") or candidate.get("name") or candidate_id)
++    misses = [
++        row["reason"]
++        for row in scored_components.values()
++        if float(row["score"]) < float(row["weight"]) * 0.8
++    ]
++    return {
++        "candidate_id": candidate_id,
++        "label": label,
++        "score": total,
++        "components": scored_components,
++        "why": f"{label} scores {total:.1f}/100 because " + "; ".join(
++            row["reason"] for row in scored_components.values() if float(row["score"]) >= float(row["weight"]) * 0.8
++        ),
++        "why_lower": misses[:3],
++        "candidate": candidate,
++    }
++
++
++def rank_expression_candidates(
++    candidates: list[dict[str, Any]],
++    prefs: ExpressionFitPreferences,
++) -> dict[str, Any]:
++    scored = [score_expression_candidate(candidate, prefs) for candidate in candidates]
++    scored.sort(
++        key=lambda row: (
++            -float(row["score"]),
++            _stable_tiebreak(row["candidate"])[0],
++            _stable_tiebreak(row["candidate"])[1],
++        )
++    )
++    for rank, row in enumerate(scored, start=1):
++        row["rank"] = rank
++    top = scored[0] if scored else None
++    return {
++        "kind": EXPRESSION_FIT_RANKING_KIND,
++        "recommendation_status": RECOMMENDATION_STATUS,
++        "weights": dict(SCORE_WEIGHTS),
++        "preferences": {
++            "direction": prefs.direction,
++            "belief": prefs.belief,
++            "target_horizon_days": prefs.target_horizon_days,
++            "max_loss_usd": prefs.max_loss_usd,
++            "payoff_preference": prefs.payoff_preference,
++        },
++        "ranked": scored,
++        "top_fit": top,
++        "limitation": LIMITATION_TEXT,
++    }
++
++
++__all__ = [
++    "EXPRESSION_FIT_RANKING_KIND",
++    "LIMITATION_TEXT",
++    "RECOMMENDATION_STATUS",
++    "SCORE_WEIGHTS",
++    "ExpressionFitPreferences",
++    "infer_candidate_direction",
++    "rank_expression_candidates",
++    "score_expression_candidate",
++]
+diff --git a/src/viz/options_expression_fit_ranking_boundary.py b/src/viz/options_expression_fit_ranking_boundary.py
+new file mode 100644
+index 0000000..90b2af6
+--- /dev/null
++++ b/src/viz/options_expression_fit_ranking_boundary.py
+@@ -0,0 +1,169 @@
++"""Read-only options expression fit ranking boundary for MSOS."""
++
++from __future__ import annotations
++
++import json
++from pathlib import Path
++from typing import Any
++from urllib.parse import parse_qs
++
++from src.engine.options_expression_fit_ranking import (
++    EXPRESSION_FIT_RANKING_KIND,
++    ExpressionFitPreferences,
++    PayoffPreference,
++    rank_expression_candidates,
++)
++
++OPTIONS_EXPRESSION_FIT_RANKING_HTTP_PATH = "/ppe-display-api/options-expression-fit-ranking.json"
++_VALID_PAYOFFS: frozenset[PayoffPreference] = frozenset(
++    {"defined_risk", "capital_light", "upside_leverage", "income_style", "watch_only"}
++)
++
++
++def build_exposure_menu_response(environ: dict[str, Any]) -> dict[str, Any]:
++    offline = (_qs_str(environ, "offline") or "").lower() in ("1", "true", "yes")
++    if offline:
++        fixture_path = Path(__file__).resolve().parent / "exposure_menu_offline_fixture.json"
++        data = json.loads(fixture_path.read_text(encoding="utf-8"))
++        asset = (_qs_str(environ, "asset") or data.get("asset_id") or "NVDA").strip().upper()
++        direction = (_qs_str(environ, "direction") or data.get("direction") or "long").strip().lower()
++        if data.get("asset_id") == asset and data.get("direction") == direction:
++            return data
++        return {
++            "kind": "exposure_menu_error",
++            "asset_id": asset,
++            "paths": [],
++            "error": f"offline fixture only covers {data.get('asset_id')} {data.get('direction')}",
++        }
++    from src.viz.exposure_menu_boundary import build_exposure_menu_response as _build
++
++    return _build(environ)
++
++
++def build_strategy_suggestion_response(**kwargs: Any) -> dict[str, Any]:
++    from src.viz.strategy_suggestion_boundary import build_strategy_suggestion_response as _build
++
++    return _build(**kwargs)
++
++
++def _qs_str(environ: dict[str, Any], key: str) -> str | None:
++    raw = parse_qs(environ.get("QUERY_STRING") or "", keep_blank_values=False).get(key)
++    if not raw:
++        return None
++    text = str(raw[0]).strip()
++    return text or None
++
++
++def _qs_float(environ: dict[str, Any], key: str) -> float | None:
++    value = _qs_str(environ, key)
++    if value is None:
++        return None
++    try:
++        return float(value)
++    except ValueError:
++        return None
++
++
++def _qs_int(environ: dict[str, Any], key: str) -> int | None:
++    value = _qs_str(environ, key)
++    if value is None:
++        return None
++    try:
++        return int(float(value))
++    except ValueError:
++        return None
++
++
++def _payoff_preference(value: str | None) -> PayoffPreference:
++    key = str(value or "defined_risk").strip().lower()
++    if key in _VALID_PAYOFFS:
++        return key  # type: ignore[return-value]
++    return "defined_risk"
++
++
++def _candidate_from_strategy(payload: dict[str, Any], *, source_order: int) -> dict[str, Any] | None:
++    suggested = payload.get("suggested")
++    if not isinstance(suggested, dict):
++        return None
++    summary = suggested.get("summary") if isinstance(suggested.get("summary"), dict) else {}
++    preset_id = str(suggested.get("preset_id") or "strategy_suggestion")
++    expression_family = str(suggested.get("expression_family") or "")
++    return {
++        "candidate_id": f"strategy:{preset_id}",
++        "label": str(suggested.get("name") or suggested.get("preset_label") or "Strategy Lab structure"),
++        "source": "strategy_suggestion",
++        "source_order": source_order,
++        "direction": "neutral" if expression_family == "range" or preset_id == "short_iron_fly" else None,
++        "leverage": "defined",
++        "time_bound": "dated",
++        "horizon_days": _qs_int({"QUERY_STRING": ""}, "unused"),
++        "trust_badge": "Live",
++        "fit_lenses": ["defined_risk", "capital_light"],
++        "max_loss_usd": summary.get("max_loss_usd"),
++        "summary": summary,
++        "legs": suggested.get("legs") if isinstance(suggested.get("legs"), list) else [],
++        "review": suggested.get("review") if isinstance(suggested.get("review"), dict) else {},
++        "belief_vs_market_glance": suggested.get("belief_vs_market_glance"),
++    }
++
++
++def build_options_expression_fit_ranking_response(environ: dict[str, Any]) -> dict[str, Any]:
++    direction = (_qs_str(environ, "direction") or "long").lower()
++    horizon = (_qs_str(environ, "horizon") or "any").lower()
++    expiry = _qs_str(environ, "expiry")
++    target_horizon_days = _qs_int(environ, "target_horizon_days")
++    max_loss_usd = _qs_float(environ, "max_loss_usd")
++    payoff = _payoff_preference(_qs_str(environ, "payoff_preference"))
++
++    exposure_payload = build_exposure_menu_response(environ)
++    candidates = [
++        {**path, "candidate_id": f"exposure:{path.get('path_id')}", "source": "exposure_menu", "source_order": i}
++        for i, path in enumerate(exposure_payload.get("paths") or [])
++        if isinstance(path, dict)
++    ]
++    strategy_payload: dict[str, Any] | None = None
++    if expiry:
++        strategy_payload = build_strategy_suggestion_response(
++            expiry_date=expiry,
++            forward_mult=_qs_float(environ, "forward_mult") or 1.0,
++            vol_mult=_qs_float(environ, "vol_mult") or 1.0,
++        )
++        strategy_candidate = _candidate_from_strategy(strategy_payload, source_order=len(candidates))
++        if strategy_candidate is not None:
++            strategy_candidate["horizon_days"] = target_horizon_days
++            candidates.append(strategy_candidate)
++
++    prefs = ExpressionFitPreferences(
++        direction=direction if direction in ("long", "short", "neutral") else "long",  # type: ignore[arg-type]
++        belief=_qs_str(environ, "belief") or "",
++        target_horizon_days=target_horizon_days,
++        max_loss_usd=max_loss_usd,
++        payoff_preference=payoff,
++    )
++    ranked = rank_expression_candidates(candidates, prefs)
++    return {
++        **ranked,
++        "kind": EXPRESSION_FIT_RANKING_KIND,
++        "asset_id": exposure_payload.get("asset_id"),
++        "horizon": horizon,
++        "source_kinds": {
++            "exposure_menu": exposure_payload.get("kind"),
++            "strategy_suggestion": strategy_payload.get("kind") if strategy_payload else None,
++        },
++    }
++
++
++def handle_options_expression_fit_ranking_wsgi_path(
++    path: str,
++    environ: dict[str, Any],
++) -> tuple[str, bytes] | None:
++    if (path.rstrip("/") or "/") != OPTIONS_EXPRESSION_FIT_RANKING_HTTP_PATH:
++        return None
++    try:
++        payload = build_options_expression_fit_ranking_response(environ)
++        status = "200 OK"
++    except Exception as exc:  # noqa: BLE001 - boundary returns JSON errors
++        payload = {"kind": "options_expression_fit_ranking_error", "error": str(exc)}
++        status = "503 Service Unavailable"
++    body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
++    return status, body
+diff --git a/tests/test_msos_web_options_expression_fit_ranking.py b/tests/test_msos_web_options_expression_fit_ranking.py
+new file mode 100644
+index 0000000..5a71bb1
+--- /dev/null
++++ b/tests/test_msos_web_options_expression_fit_ranking.py
+@@ -0,0 +1,43 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++REPO = Path(__file__).resolve().parents[1]
++MSOS_WEB = REPO / "apps" / "msos-web"
++
++
++def test_msos_ranking_lib_declares_no_advice_contract_and_weights() -> None:
++    lib = (MSOS_WEB / "src" / "lib" / "optionsExpressionFitRanking.ts").read_text(encoding="utf-8")
++
++    assert "EXPRESSION_FIT_WEIGHTS" in lib
++    assert "direction_fit: 30" in lib
++    assert "horizon_fit: 20" in lib
++    assert "max_loss_fit: 20" in lib
++    assert "payoff_fit: 15" in lib
++    assert "trust_fit: 15" in lib
++    assert "educational_fit_not_recommendation" in lib
++    assert "not financial advice" in lib
++    assert "expected-profit optimization" in lib
++    assert "optionsHorizonComparison" not in lib
++
++
++def test_msos_ranking_component_is_bounded_surface() -> None:
++    component = (MSOS_WEB / "src" / "components" / "OptionsExpressionFitRankingPanel.tsx").read_text(
++        encoding="utf-8"
++    )
++
++    assert "Educational fit ranking" in component
++    assert "ranking.ranked.slice(0, 3)" in component
++    assert "ranking.limitation" in component
++    assert "recommendation" not in component.lower()
++
++
++def test_expression_planning_panel_wires_ranking_without_advice_copy() -> None:
++    panel = (MSOS_WEB / "src" / "components" / "ExpressionPlanningPanel.tsx").read_text(encoding="utf-8")
++
++    assert "OptionsExpressionFitRankingPanel" in panel
++    assert "rankOptionsExpressionFit" in panel
++    assert "buildCandidateFromStrategySuggestion" in panel
++    assert "payoff_preference: \"defined_risk\"" in panel
++    assert "Educational fit ranking" not in panel
++    assert "recommended trade" not in panel.lower()
+diff --git a/tests/test_options_expression_fit_ranking.py b/tests/test_options_expression_fit_ranking.py
+new file mode 100644
+index 0000000..7961c42
+--- /dev/null
++++ b/tests/test_options_expression_fit_ranking.py
+@@ -0,0 +1,146 @@
++from __future__ import annotations
++
++import inspect
++import json
++
++from src.engine.options_expression_fit_ranking import (
++    LIMITATION_TEXT,
++    ExpressionFitPreferences,
++    rank_expression_candidates,
++)
++
++
++def _candidate(path_id: str, **kwargs):
++    base = {
++        "candidate_id": f"exposure:{path_id}",
++        "path_id": path_id,
++        "label": path_id.replace("_", " ").title(),
++        "direction": "long",
++        "leverage": "defined",
++        "time_bound": "dated",
++        "horizon_days": 30,
++        "trust_badge": "Live",
++        "fit_lenses": ["defined_risk"],
++        "max_loss_usd": 500,
++        "source_order": 0,
++    }
++    base.update(kwargs)
++    return base
++
++
++def test_score_components_and_top_fit_are_deterministic() -> None:
++    prefs = ExpressionFitPreferences(
++        direction="long",
++        target_horizon_days=30,
++        max_loss_usd=750,
++        payoff_preference="defined_risk",
++    )
++    candidates = [
++        _candidate("bull_call_spread", source_order=1),
++        _candidate("stock", leverage="none", time_bound="none", fit_lenses=["simplest"], max_loss_usd=None, source_order=0),
++    ]
++
++    first = rank_expression_candidates(candidates, prefs)
++    second = rank_expression_candidates(list(reversed(candidates)), prefs)
++
++    assert first["top_fit"]["candidate_id"] == "exposure:bull_call_spread"
++    assert first["top_fit"]["components"]["direction_fit"]["score"] == 30
++    assert first["top_fit"]["components"]["max_loss_fit"]["score"] == 20
++    assert first["ranked"] == second["ranked"]
++    assert first["limitation"] == LIMITATION_TEXT
++    assert first["recommendation_status"] == "educational_fit_not_recommendation"
++
++
++def test_max_loss_and_payoff_preference_lower_rank_alternative() -> None:
++    prefs = ExpressionFitPreferences(
++        direction="long",
++        target_horizon_days=30,
++        max_loss_usd=500,
++        payoff_preference="capital_light",
++    )
++    ranked = rank_expression_candidates(
++        [
++            _candidate("cheap_spread", max_loss_usd=250, fit_lenses=["capital_light"], source_order=1),
++            _candidate("expensive_spread", max_loss_usd=1_500, fit_lenses=["defined_risk"], source_order=0),
++        ],
++        prefs,
++    )
++
++    assert ranked["top_fit"]["candidate_id"] == "exposure:cheap_spread"
++    lower = ranked["ranked"][1]
++    assert lower["components"]["max_loss_fit"]["score"] == 0
++    assert any("exceeds" in reason for reason in lower["why_lower"])
++
++
++def test_tie_break_prefers_live_then_source_order_then_id() -> None:
++    prefs = ExpressionFitPreferences(direction="long", payoff_preference="defined_risk")
++    ranked = rank_expression_candidates(
++        [
++            _candidate("b", trust_badge="Thin chain", source_order=0),
++            _candidate("c", source_order=2),
++            _candidate("a", source_order=1),
++        ],
++        prefs,
++    )
++
++    assert [row["candidate_id"] for row in ranked["ranked"]] == ["exposure:a", "exposure:c", "exposure:b"]
++
++
++def test_boundary_consumes_current_main_primitives_without_job_a_import(monkeypatch) -> None:
++    import src.viz.options_expression_fit_ranking_boundary as boundary
++
++    monkeypatch.setattr(
++        boundary,
++        "build_exposure_menu_response",
++        lambda environ: {
++            "kind": "exposure_paths",
++            "asset_id": "NVDA",
++            "paths": [_candidate("defined_option")],
++        },
++    )
++    monkeypatch.setattr(
++        boundary,
++        "build_strategy_suggestion_response",
++        lambda **kwargs: {
++            "kind": "strategy_suggestion_boundary",
++            "suggested": {
++                "preset_id": "short_iron_fly",
++                "name": "Iron fly",
++                "expression_family": "range",
++                "summary": {"max_loss_usd": 300},
++                "legs": [],
++            },
++        },
++    )
++
++    payload = boundary.build_options_expression_fit_ranking_response(
++        {"QUERY_STRING": "asset=NVDA&direction=neutral&expiry=2026-09-18&target_horizon_days=30&max_loss_usd=500"}
++    )
++    assert payload["source_kinds"] == {
++        "exposure_menu": "exposure_paths",
++        "strategy_suggestion": "strategy_suggestion_boundary",
++    }
++    assert payload["top_fit"]["candidate_id"] == "strategy:short_iron_fly"
++    assert payload["kind"] == "options_expression_fit_ranking"
++
++    source = inspect.getsource(boundary)
++    assert "options_horizon_comparison" not in source
++
++
++def test_wsgi_handler_returns_stable_json(monkeypatch) -> None:
++    import src.viz.options_expression_fit_ranking_boundary as boundary
++
++    monkeypatch.setattr(
++        boundary,
++        "build_exposure_menu_response",
++        lambda environ: {"kind": "exposure_paths", "asset_id": "NVDA", "paths": [_candidate("defined_option")]},
++    )
++    result = boundary.handle_options_expression_fit_ranking_wsgi_path(
++        "/ppe-display-api/options-expression-fit-ranking.json",
++        {"QUERY_STRING": "asset=NVDA&direction=long&offline=1"},
++    )
++
++    assert result is not None
++    status, body = result
++    assert status == "200 OK"
++    assert json.loads(body)["kind"] == "options_expression_fit_ranking"

@@ -1,0 +1,9 @@
+{
+  "canonical_patch_sha256_by_task": {
+    "Options-ExpressionFit-Product-Slice002": "e48a432db42f8277ff4ca2ef356f7cbaaca049a4979ea9fe8ab3df5026992536"
+  },
+  "corrected_report_sha256": "cb62a11220a30d4431c4a603571a77372561a915398a43fe2dc48d761c56022e",
+  "publication_enabled": false,
+  "source_report_sha256": "63e29aa39563a7ccdadaf392911917239e86b5e9ed9d7898eecc692263864a60",
+  "version": 1
+}

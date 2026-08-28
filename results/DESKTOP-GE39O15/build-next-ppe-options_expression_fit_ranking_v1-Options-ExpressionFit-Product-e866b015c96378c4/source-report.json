@@ -1,0 +1,49 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "apps/msos-web/src/components/ExpressionPlanningPanel.tsx",
+          "apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx",
+          "apps/msos-web/src/lib/optionsExpressionFitRanking.ts",
+          "scripts/rank_options_expression_fit.py",
+          "src/engine/options_expression_fit_ranking.py",
+          "src/viz/options_expression_fit_ranking_boundary.py",
+          "tests/test_msos_web_options_expression_fit_ranking.py",
+          "tests/test_options_expression_fit_ranking.py"
+        ],
+        "metadata": {
+          "output_tail": "n_fit.py)\n- [apps/msos-web/src/lib/optionsExpressionFitRanking.ts](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/Options-ExpressionFit-Product-Slice002/apps/msos-web/src/lib/optionsExpressionFitRanking.ts)\n- [apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/Options-ExpressionFit-Product-Slice002/apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx)\n- [apps/msos-web/src/components/ExpressionPlanningPanel.tsx](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/Options-ExpressionFit-Product-Slice002/apps/msos-web/src/components/ExpressionPlanningPanel.tsx)\n- [tests/test_options_expression_fit_ranking.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/Options-ExpressionFit-Product-Slice002/tests/test_options_expression_fit_ranking.py)\n- [tests/test_msos_web_options_expression_fit_ranking.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/Options-ExpressionFit-Product-Slice002/tests/test_msos_web_options_expression_fit_ranking.py)\n\nValidation run:\n- `python -m pytest tests/test_options_expression_fit_ranking.py tests/test_msos_web_options_expression_fit_ranking.py` passed: `8 passed`\n- `python scripts/rank_options_expression_fit.py --asset NVDA --direction long --horizon any --target-horizon-days 30 --max-loss-usd 1000 --payoff-preference defined_risk --offline` passed\n- `python -m compileall src/engine/options_expression_fit_ranking.py src/viz/options_expression_fit_ranking_boundary.py scripts/rank_options_expression_fit.py` passed\n- `python scripts/check_repository_boundaries.py` passed\n\nWeb build note: `npm.cmd run build` could not run because `apps/msos-web/node_modules` is absent and `next` is not installed in this workspace. No commit, push, smoke, closeout, queue, registry, or control-plane updates were performed.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\workspaces\\Options-ExpressionFit-Product-Slice002"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 8 changed path(s)",
+        "task_id": "Options-ExpressionFit-Product-Slice002"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+    "status": "completed"
+  },
+  "completed_at": "2026-08-28T19:18:55.101752+00:00",
+  "job_id": "build-next-ppe-options_expression_fit_ranking_v1-Options-ExpressionFit-Product-e866b015c96378c4",
+  "job_sha256": "19225a93d06748be43ce7ca03cf23b1e7f57e28e12093ae2a91f1ec00dae921b",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "lane_id": "Options-ExpressionFit-Product-Slice002",
+      "patch_file": "patches/Options-ExpressionFit-Product-Slice002.patch",
+      "patch_sha256": "26687874a7d3d3774baab1d615ee59fd44d55bb1cad8d87520656821eae6aba3",
+      "task_id": "Options-ExpressionFit-Product-Slice002"
+    }
+  ],
+  "publication_enabled": false,
+  "requested_by": "capacity-one refill controller",
+  "source": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\queue\\pending\\build-next-ppe-options_expression_fit_ranking_v1-Options-ExpressionFit-Product-e866b015c96378c4.yaml",
+  "version": 1
+}

@@ -386,6 +386,52 @@ def test_newly_published_job_is_processed_and_verified(tmp_path: Path) -> None:
     assert success["terminal_evidence"]["verified_jobs"] == [job_id]
 
 
+def _drafted_publication_head(host_root: Path) -> dict[str, Any]:
+    heads = list(
+        (
+            host_root
+            / "state"
+            / "publisher-evidence"
+            / "heads"
+            / "publication-review"
+        ).rglob("*.json")
+    )
+    assert len(heads) == 1
+    return json.loads(heads[0].read_text(encoding="utf-8"))
+
+
+def test_published_draft_records_canonical_publication_review(tmp_path: Path) -> None:
+    config_path, product_bare, _, job_id = make_fixture(tmp_path)
+    config = load_publisher_config(config_path)
+    publisher = ControlledPublisher(config, github_client=FakeGitHubClient(product_bare))
+
+    assert publisher.run_once() == (job_id,)
+
+    receipts = list(
+        (config.host_root / "state" / "publisher-evidence" / "sources" / "drafted").rglob(
+            "*.json"
+        )
+    )
+    assert len(receipts) == 1
+    receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
+    assert receipt["receipt_type"] == "publication_review.disposition.drafted.source"
+    assert receipt["source_job_id"] == job_id
+    assert receipt["pr_url"] == "https://example.invalid/pull/1"
+
+    head = _drafted_publication_head(config.host_root)
+    assert head["evidence_kind"] == "publication_review.disposition"
+    assert head["closed_status"] == "final"
+    envelope = json.loads((config.host_root / head["envelope_path"]).read_text(encoding="utf-8"))
+    assert envelope["payload"]["publication_review_disposition"] == "drafted"
+    assert envelope["payload"]["reason_code"] == "publication_review.drafted.v1"
+    assert envelope["payload"]["draft_pr"] == "https://example.invalid/pull/1"
+    assert envelope["source"]["path"] == receipts[0].relative_to(config.host_root).as_posix()
+
+    first_envelope_bytes = (config.host_root / head["envelope_path"]).read_bytes()
+    assert publisher.run_once() == ()
+    assert (config.host_root / head["envelope_path"]).read_bytes() == first_envelope_bytes
+
+
 def test_existing_valid_ledger_entry_is_verified_not_processed(tmp_path: Path) -> None:
     config_path, product_bare, _, job_id = make_fixture(tmp_path)
     config = load_publisher_config(config_path)

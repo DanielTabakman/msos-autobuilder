@@ -1,0 +1,579 @@
+version: 1
+job_id: build-next-ppe-options_expression_fit_ranking_v1-Options-ExpressionFit-Product-e866b015c96378c4
+approved: true
+publication_enabled: false
+requested_by: capacity-one refill controller
+expected_source_head: 367c37e7618183ac9f7640c7b1204aee66469fa7
+founder_build_next:
+  version: 1
+  pipeline_id: ppe
+  work_item_id: options_expression_fit_ranking_v1
+  repository: DanielTabakman/Probability-prediction-engine
+  registered_adapter: ppe_operator
+  source:
+    remote: origin
+    remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+    repository: DanielTabakman/Probability-prediction-engine
+    ref: HEAD
+    remote_ref: 367c37e7618183ac9f7640c7b1204aee66469fa7
+    commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+  work_item_source_sha256_v1: d5b45dd283d166b65369e1d41ef4ada395e0cac77be9b298f9cd67900b0feb14
+  phase_plan: docs/SOP/PHASE_PLANS/options_expression_fit_ranking_v1_relay.json
+  native_slice:
+    slice_id: Options-ExpressionFit-Product-Slice002
+    build_branch: build/auto/Options-ExpressionFit-Product-Slice002
+    layer_preset: PPE_UI
+    worker_mode: local-agent
+    declared_plane: PRODUCT-PLANE
+    touch_set:
+    - src/engine/options_expression_fit_ranking.py
+    - src/viz/options_expression_fit_ranking_boundary.py
+    - scripts/rank_options_expression_fit.py
+    - apps/msos-web/src/lib/optionsExpressionFitRanking.ts
+    - apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx
+    - apps/msos-web/src/components/ExpressionPlanningPanel.tsx
+    - tests/test_options_expression_fit_ranking.py
+    - tests/test_msos_web_options_expression_fit_ranking.py
+    sequence_index: 1
+    total_slices: 4
+    previous_slices:
+    - Options-ExpressionFit-Control-Slice001
+    following_slices:
+    - Options-ExpressionFit-Witness-Slice003
+    - Options-ExpressionFit-Closeout-Slice004
+  prerequisites:
+    source: ppe_native_read_only
+    evidence: &id001
+      frozen_target_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+      target_remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      phase_plan: docs/SOP/PHASE_PLANS/options_expression_fit_ranking_v1_relay.json
+      phase_plan_blob_sha: e294cf9e2fd94c84f966a91350f908a4994a53a3
+      control_slice:
+        slice_id: Options-ExpressionFit-Control-Slice001
+        implementationStatus: COMPLETE
+        nonBlocking: true
+      independence_contract:
+        buildsFromFrozenCurrentMain: true
+        doesNotImportJobA: true
+        doesNotAssumeJobAMerged: true
+        nativePrerequisiteOnJobA: false
+      source_files:
+      - path: docs/SOP/PHASE_PLANS/options_expression_fit_ranking_v1_relay.json
+        exists: true
+        git_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+        blob_sha: e294cf9e2fd94c84f966a91350f908a4994a53a3
+        sha256: 4676f5786bb1bda2b392029868c86688a9fedde5494c7d6e594b0d4f6e03d531
+      - path: docs/SOP/SPRINT_OPTIONS_EXPRESSION_FIT_RANKING_V1.md
+        exists: true
+        git_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+        blob_sha: 2e1fe7a3eef9b9a0aba98aac772331ce7fdb61fa
+        sha256: 5a5b8d2f81021ec21aae09c1037d08091dc056b39d7d8809c1719623c8faa98f
+      - path: docs/SOP/POST_OPTIONS_EXPRESSION_FIT_RANKING_V1_SELECTION.md
+        exists: true
+        git_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+        blob_sha: f148cccfcaaeb4e27dcedd0235adfb600c9c7acc
+        sha256: d6802294683eb965f432b621b149297136c9b894021be5fd6ccaa622bc2cdb74
+      - path: docs/SOP/OPTIONS_EXPRESSION_FIT_RANKING_V1_EVIDENCE_STATUS.md
+        exists: true
+        git_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+        blob_sha: 3668455cc5e30bfb6135767e86e0b4beb3bd44ac
+        sha256: fc7d604f9857d0b88588484fb767cfde146abd7857435412768e526184fa25ac
+      - path: docs/SOP/ACTIVE_PHASE_MANIFEST.json
+        exists: true
+        git_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+        blob_sha: bef16bafa160f5240b85c69b119b6ba627e041bb
+        sha256: c1425fc9fda014c0379113ff849a0466e3c31e5c4f489975becfbb913bf067dc
+    required_slices: &id002
+    - Options-ExpressionFit-Control-Slice001
+    satisfied_slices: &id003
+    - Options-ExpressionFit-Control-Slice001
+    non_blocking_slices: &id004 []
+  portfolio_selection_evidence:
+    version: 1
+    source:
+      remote: origin
+      remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      repository: DanielTabakman/Probability-prediction-engine
+      ref: HEAD
+      remote_ref: 367c37e7618183ac9f7640c7b1204aee66469fa7
+      commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+    selected:
+      pipeline_id: ppe
+      work_item_id: options_expression_fit_ranking_v1
+      trace: docs/SOP/PHASE_PLANS/options_expression_fit_ranking_v1_relay.json
+      packet_sha256: 669c25fc495014c80d830681fb73b9c1787f2625487a29d92ac68975b1758b1a
+    native_slice:
+      slice_id: Options-ExpressionFit-Product-Slice002
+      build_branch: build/auto/Options-ExpressionFit-Product-Slice002
+      layer_preset: PPE_UI
+      worker_mode: local-agent
+      declared_plane: PRODUCT-PLANE
+      touch_set:
+      - src/engine/options_expression_fit_ranking.py
+      - src/viz/options_expression_fit_ranking_boundary.py
+      - scripts/rank_options_expression_fit.py
+      - apps/msos-web/src/lib/optionsExpressionFitRanking.ts
+      - apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx
+      - apps/msos-web/src/components/ExpressionPlanningPanel.tsx
+      - tests/test_options_expression_fit_ranking.py
+      - tests/test_msos_web_options_expression_fit_ranking.py
+      sequence_index: 1
+      total_slices: 4
+      previous_slices:
+      - Options-ExpressionFit-Control-Slice001
+      following_slices:
+      - Options-ExpressionFit-Witness-Slice003
+      - Options-ExpressionFit-Closeout-Slice004
+    prerequisites:
+      source: ppe_native_read_only
+      evidence: *id001
+      required_slices: *id002
+      satisfied_slices: *id003
+      non_blocking_slices: *id004
+    packet_sha256: 669c25fc495014c80d830681fb73b9c1787f2625487a29d92ac68975b1758b1a
+    admitted_target:
+      target_repository: DanielTabakman/Probability-prediction-engine
+      target_source_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+      target_remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      work_item_id: options_expression_fit_ranking_v1
+      pipeline_id: ppe
+      allowed_paths:
+      - src/engine/options_expression_fit_ranking.py
+      - src/viz/options_expression_fit_ranking_boundary.py
+      - scripts/rank_options_expression_fit.py
+      - apps/msos-web/src/lib/optionsExpressionFitRanking.ts
+      - apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx
+      - apps/msos-web/src/components/ExpressionPlanningPanel.tsx
+      - tests/test_options_expression_fit_ranking.py
+      - tests/test_msos_web_options_expression_fit_ranking.py
+      adapter: ppe_operator
+      dependency_source_sha256: 47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394
+      validation_identity: 79e6063b2732d4cc900384fffc577550c08233c1ed7c9232b80207e2a2888f87
+      packet_sha256: 669c25fc495014c80d830681fb73b9c1787f2625487a29d92ac68975b1758b1a
+    requested_exclusions:
+    - options_horizon_comparison_v1
+    refill_attempt:
+      version: 1
+      generation_id: refill-superseded-b5b9ae6b7c855baf1ddd0e06
+      attempt_ordinal: 1
+      retry_ordinal: 0
+      reason: initial
+      selected_work_item_id: options_expression_fit_ranking_v1
+    identity_sha256: 69f7bfe24152905ea48a2a8edd99e6537d7c26a551c38225022acce107cdf2a1
+  refill_attempt:
+    version: 1
+    generation_id: refill-superseded-b5b9ae6b7c855baf1ddd0e06
+    attempt_ordinal: 1
+    retry_ordinal: 0
+    reason: initial
+    selected_work_item_id: options_expression_fit_ranking_v1
+  authority:
+    publication_enabled: false
+    merge_enabled: false
+    product_main_write_enabled: false
+  work_admission:
+    status: NEW_WORK_ADMITTED
+    objective_sha256: aaacb5bf9aa1cf892167ea4eb8f974406168f23767702ec526c072299dec44df
+    claim_generation: 1
+    claim_writer_id: build-next:build-next-ppe-options_expression_fit_ranking_v1-Options-ExpressionFit-Product-e866b015c96378c4
+    authorized_paths:
+    - src/engine/options_expression_fit_ranking.py
+    - src/viz/options_expression_fit_ranking_boundary.py
+    - scripts/rank_options_expression_fit.py
+    - apps/msos-web/src/lib/optionsExpressionFitRanking.ts
+    - apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx
+    - apps/msos-web/src/components/ExpressionPlanningPanel.tsx
+    - tests/test_options_expression_fit_ranking.py
+    - tests/test_msos_web_options_expression_fit_ranking.py
+    objective_identity:
+      repository: DanielTabakman/Probability-prediction-engine
+      linked_issue: null
+      work_item_id: options_expression_fit_ranking_v1
+      stable_key: 0361149329148ff48cdb86517bda2a56dd42daec89d07bb0bb5d9164180e65a0
+      acceptance_contract_sha256: 4b7c00768ab801799645d54f37eea9044c3f0da87c9ade05ac20e9f97bc37665
+      error_signature: null
+      release_identity: null
+    acceptance_contract:
+      version: 1
+      pipeline_id: ppe
+      work_item_id: options_expression_fit_ranking_v1
+      adapter: ppe_operator
+      target_repository: DanielTabakman/Probability-prediction-engine
+      native_slice_id: Options-ExpressionFit-Product-Slice002
+      authorized_paths:
+      - src/engine/options_expression_fit_ranking.py
+      - src/viz/options_expression_fit_ranking_boundary.py
+      - scripts/rank_options_expression_fit.py
+      - apps/msos-web/src/lib/optionsExpressionFitRanking.ts
+      - apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx
+      - apps/msos-web/src/components/ExpressionPlanningPanel.tsx
+      - tests/test_options_expression_fit_ranking.py
+      - tests/test_msos_web_options_expression_fit_ranking.py
+      forbidden_paths:
+      - .git/**
+      - .github/workflows/**
+      - artifacts/**
+      - runtime/**
+      - state/**
+      - queue/**
+      - config/founder_pipeline_registry.json
+      - docs/SOP/PHASE_QUEUE.json
+      - docs/SOP/ACTIVE_PHASE_MANIFEST.json
+      - docs/SOP/FOUNDER_PIPELINE_COMMANDS_V1.md
+      - docs/SOP/PIPELINE_CREATION_SOP_V1.md
+      - docs/SOP/SCHEDULED_AUTOBUILDER_LANE_POLICY_V1.md
+      - docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md
+      - docs/SOP/SPRINT_*.md
+      - docs/SOP/*SELECTION*.md
+      - docs/SOP/POST_*_SELECTION*.md
+      - docs/SOP/*PRIORITY*.md
+      - docs/SOP/*FRONTIER*.md
+      - docs/SOP/*MANIFEST*.json
+      - artifacts/orchestrator/**
+      - artifacts/control_plane/**
+      - artifacts/relay/**
+      - artifacts/leases/**
+      publication_enabled: false
+      merge_enabled: false
+      product_main_write_enabled: false
+      target_source_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+      packet_sha256: 669c25fc495014c80d830681fb73b9c1787f2625487a29d92ac68975b1758b1a
+      validation_identity: 79e6063b2732d4cc900384fffc577550c08233c1ed7c9232b80207e2a2888f87
+    execution_validation_contract_sha256: c06b691fec3f1da53dd5383f2460093e279d52a1afdf583d6697d3bc2cdda6c4
+    admitted_target:
+      target_repository: DanielTabakman/Probability-prediction-engine
+      target_source_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+      target_remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      work_item_id: options_expression_fit_ranking_v1
+      pipeline_id: ppe
+      allowed_paths:
+      - src/engine/options_expression_fit_ranking.py
+      - src/viz/options_expression_fit_ranking_boundary.py
+      - scripts/rank_options_expression_fit.py
+      - apps/msos-web/src/lib/optionsExpressionFitRanking.ts
+      - apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx
+      - apps/msos-web/src/components/ExpressionPlanningPanel.tsx
+      - tests/test_options_expression_fit_ranking.py
+      - tests/test_msos_web_options_expression_fit_ranking.py
+      adapter: ppe_operator
+      dependency_source_sha256: 47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394
+      validation_identity: 79e6063b2732d4cc900384fffc577550c08233c1ed7c9232b80207e2a2888f87
+      packet_sha256: 669c25fc495014c80d830681fb73b9c1787f2625487a29d92ac68975b1758b1a
+candidate_validation:
+  version: 1
+  pipeline_id: ppe
+  adapter: ppe_operator
+  target_repository: DanielTabakman/Probability-prediction-engine
+  source_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+  job_id: build-next-ppe-options_expression_fit_ranking_v1-Options-ExpressionFit-Product-e866b015c96378c4
+  work_item_id: options_expression_fit_ranking_v1
+  native_slice_id: Options-ExpressionFit-Product-Slice002
+  allowed_changed_paths:
+  - apps/msos-web/src/components/ExpressionPlanningPanel.tsx
+  - apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx
+  - apps/msos-web/src/lib/optionsExpressionFitRanking.ts
+  - scripts/rank_options_expression_fit.py
+  - src/engine/options_expression_fit_ranking.py
+  - src/viz/options_expression_fit_ranking_boundary.py
+  - tests/test_msos_web_options_expression_fit_ranking.py
+  - tests/test_options_expression_fit_ranking.py
+  dependency_policy:
+    version: 1
+    adapter: ppe_operator
+    profile_id: ppe-ci-pytest-v1
+    source: accepted_ppe_ci_bootstrap
+    source_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+    dependency_source_path: requirements.txt
+    dependency_source_sha256: 47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394
+    network_allowed: true
+    candidate_environment_required: true
+    strategy: candidate_local_venv_requirements_test_tooling_editable_install
+    test_tooling:
+    - pytest
+    - pytest-xdist
+    - ruff
+  bootstrap:
+  - name: upgrade-pip
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - --upgrade
+    - pip
+    cwd: .
+    timeout_seconds: 600
+    required: true
+  - name: install-requirements
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - -r
+    - requirements.txt
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  - name: install-test-tooling
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - pytest
+    - pytest-xdist
+    - ruff
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  - name: install-candidate-package
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - -e
+    - .
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  checks:
+  - name: repository-pytest
+    argv:
+    - python
+    - -m
+    - pytest
+    - -q
+    cwd: .
+    timeout_seconds: 1800
+    required: true
+  publication_enabled: false
+  merge_enabled: false
+  product_main_write_enabled: false
+  contract_sha256: c06b691fec3f1da53dd5383f2460093e279d52a1afdf583d6697d3bc2cdda6c4
+manifest:
+  version: 1
+  publication_enabled: false
+  lanes:
+  - task_id: Options-ExpressionFit-Product-Slice002
+    lane_id: Options-ExpressionFit-Product-Slice002
+    chapter_id: OPTIONS_EXPRESSION_FIT_RANKING_V1
+    branch: build/auto/Options-ExpressionFit-Product-Slice002
+    layer: PPE_UI
+    worker_mode: local-agent
+    preferred_cost_class: standard
+    allowed_paths:
+    - src/engine/options_expression_fit_ranking.py
+    - src/viz/options_expression_fit_ranking_boundary.py
+    - scripts/rank_options_expression_fit.py
+    - apps/msos-web/src/lib/optionsExpressionFitRanking.ts
+    - apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx
+    - apps/msos-web/src/components/ExpressionPlanningPanel.tsx
+    - tests/test_options_expression_fit_ranking.py
+    - tests/test_msos_web_options_expression_fit_ranking.py
+    forbidden_paths:
+    - .git/**
+    - .github/workflows/**
+    - artifacts/**
+    - runtime/**
+    - state/**
+    - queue/**
+    - config/founder_pipeline_registry.json
+    - docs/SOP/PHASE_QUEUE.json
+    - docs/SOP/ACTIVE_PHASE_MANIFEST.json
+    - docs/SOP/FOUNDER_PIPELINE_COMMANDS_V1.md
+    - docs/SOP/PIPELINE_CREATION_SOP_V1.md
+    - docs/SOP/SCHEDULED_AUTOBUILDER_LANE_POLICY_V1.md
+    - docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md
+    - docs/SOP/SPRINT_*.md
+    - docs/SOP/*SELECTION*.md
+    - docs/SOP/POST_*_SELECTION*.md
+    - docs/SOP/*PRIORITY*.md
+    - docs/SOP/*FRONTIER*.md
+    - docs/SOP/*MANIFEST*.json
+    - artifacts/orchestrator/**
+    - artifacts/control_plane/**
+    - artifacts/relay/**
+    - artifacts/leases/**
+    allow_changes: true
+    instruction: "Implementation thread. THREAD_ROLE: codex_build.\n\nImplement only\
+      \ the bounded work item selected from Autobuilder-owned approved job packets.\n\
+      Pipeline ID: ppe\nWork-item ID: options_expression_fit_ranking_v1\nSource repository:\
+      \ DanielTabakman/Probability-prediction-engine\nExact source commit: 367c37e7618183ac9f7640c7b1204aee66469fa7\n\
+      Canonical source ref: 367c37e7618183ac9f7640c7b1204aee66469fa7\nCanonical source\
+      \ remote: https://github.com/DanielTabakman/Probability-prediction-engine.git\n\
+      Registered phase plan: docs/SOP/PHASE_PLANS/options_expression_fit_ranking_v1_relay.json\n\
+      Native sliceId: Options-ExpressionFit-Product-Slice002\nNative buildBranch:\
+      \ build/auto/Options-ExpressionFit-Product-Slice002\nNative layerPreset: PPE_UI\n\
+      Native workerMode: local-agent\nNative sequence: 2 of 4\n\nAuthority and publication\
+      \ boundary:\n- Do not write product main or merge.\n- Do not force-push, enable\
+      \ automerge, mark a PR ready, or publish directly.\n- Produce only workspace\
+      \ changes for the Autobuilder relay/gate/publisher path.\n- Preserve the controlled\
+      \ draft publisher as the only product publisher.\n- Treat sprint specs, selection\
+      \ records, queues, manifests, registries, leases, and operator state as read-only\
+      \ canon/evidence.\n- Do not perform smoke, closeout, selection, queue, or control-plane\
+      \ updates.\n\nAllowed paths:\n- src/engine/options_expression_fit_ranking.py\n\
+      - src/viz/options_expression_fit_ranking_boundary.py\n- scripts/rank_options_expression_fit.py\n\
+      - apps/msos-web/src/lib/optionsExpressionFitRanking.ts\n- apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx\n\
+      - apps/msos-web/src/components/ExpressionPlanningPanel.tsx\n- tests/test_options_expression_fit_ranking.py\n\
+      - tests/test_msos_web_options_expression_fit_ranking.py\n\nForbidden paths:\n\
+      - .git/**\n- .github/workflows/**\n- artifacts/**\n- runtime/**\n- state/**\n\
+      - queue/**\n- config/founder_pipeline_registry.json\n- docs/SOP/PHASE_QUEUE.json\n\
+      - docs/SOP/ACTIVE_PHASE_MANIFEST.json\n- docs/SOP/FOUNDER_PIPELINE_COMMANDS_V1.md\n\
+      - docs/SOP/PIPELINE_CREATION_SOP_V1.md\n- docs/SOP/SCHEDULED_AUTOBUILDER_LANE_POLICY_V1.md\n\
+      - docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md\n- docs/SOP/SPRINT_*.md\n\
+      - docs/SOP/*SELECTION*.md\n- docs/SOP/POST_*_SELECTION*.md\n- docs/SOP/*PRIORITY*.md\n\
+      - docs/SOP/*FRONTIER*.md\n- docs/SOP/*MANIFEST*.json\n- artifacts/orchestrator/**\n\
+      - artifacts/control_plane/**\n- artifacts/relay/**\n- artifacts/leases/**\n\n\
+      Acceptance criteria and validation requirements:\n- Implement only the selected\
+      \ native PPE implementation slice.\n- Preserve native PPE sequencing; do not\
+      \ execute later smoke or closeout slices.\n- Read sprint spec as canon: docs/SOP/SPRINT_OPTIONS_EXPRESSION_FIT_RANKING_V1.md\n\
+      - Read selection record as canon: docs/SOP/POST_OPTIONS_EXPRESSION_FIT_RANKING_V1_SELECTION.md\n\
+      - Add or update focused tests for changed behavior.\n- Run the focused tests\
+      \ and relevant repository gates before closeout.\n- Return evidence suitable\
+      \ for the existing relay, candidate gate, revision loop, and controlled publisher.\n\
+      \nPortfolio-selection evidence identity:\n{\n  \"admitted_target\": {\n    \"\
+      adapter\": \"ppe_operator\",\n    \"allowed_paths\": [\n      \"src/engine/options_expression_fit_ranking.py\"\
+      ,\n      \"src/viz/options_expression_fit_ranking_boundary.py\",\n      \"scripts/rank_options_expression_fit.py\"\
+      ,\n      \"apps/msos-web/src/lib/optionsExpressionFitRanking.ts\",\n      \"\
+      apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx\",\n     \
+      \ \"apps/msos-web/src/components/ExpressionPlanningPanel.tsx\",\n      \"tests/test_options_expression_fit_ranking.py\"\
+      ,\n      \"tests/test_msos_web_options_expression_fit_ranking.py\"\n    ],\n\
+      \    \"dependency_source_sha256\": \"47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394\"\
+      ,\n    \"packet_sha256\": \"669c25fc495014c80d830681fb73b9c1787f2625487a29d92ac68975b1758b1a\"\
+      ,\n    \"pipeline_id\": \"ppe\",\n    \"target_remote_url\": \"https://github.com/DanielTabakman/Probability-prediction-engine.git\"\
+      ,\n    \"target_repository\": \"DanielTabakman/Probability-prediction-engine\"\
+      ,\n    \"target_source_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n    \"validation_identity\": \"79e6063b2732d4cc900384fffc577550c08233c1ed7c9232b80207e2a2888f87\"\
+      ,\n    \"work_item_id\": \"options_expression_fit_ranking_v1\"\n  },\n  \"identity_sha256\"\
+      : \"69f7bfe24152905ea48a2a8edd99e6537d7c26a551c38225022acce107cdf2a1\",\n  \"\
+      native_slice\": {\n    \"build_branch\": \"build/auto/Options-ExpressionFit-Product-Slice002\"\
+      ,\n    \"declared_plane\": \"PRODUCT-PLANE\",\n    \"following_slices\": [\n\
+      \      \"Options-ExpressionFit-Witness-Slice003\",\n      \"Options-ExpressionFit-Closeout-Slice004\"\
+      \n    ],\n    \"layer_preset\": \"PPE_UI\",\n    \"previous_slices\": [\n  \
+      \    \"Options-ExpressionFit-Control-Slice001\"\n    ],\n    \"sequence_index\"\
+      : 1,\n    \"slice_id\": \"Options-ExpressionFit-Product-Slice002\",\n    \"\
+      total_slices\": 4,\n    \"touch_set\": [\n      \"src/engine/options_expression_fit_ranking.py\"\
+      ,\n      \"src/viz/options_expression_fit_ranking_boundary.py\",\n      \"scripts/rank_options_expression_fit.py\"\
+      ,\n      \"apps/msos-web/src/lib/optionsExpressionFitRanking.ts\",\n      \"\
+      apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx\",\n     \
+      \ \"apps/msos-web/src/components/ExpressionPlanningPanel.tsx\",\n      \"tests/test_options_expression_fit_ranking.py\"\
+      ,\n      \"tests/test_msos_web_options_expression_fit_ranking.py\"\n    ],\n\
+      \    \"worker_mode\": \"local-agent\"\n  },\n  \"packet_sha256\": \"669c25fc495014c80d830681fb73b9c1787f2625487a29d92ac68975b1758b1a\"\
+      ,\n  \"prerequisites\": {\n    \"evidence\": {\n      \"control_slice\": {\n\
+      \        \"implementationStatus\": \"COMPLETE\",\n        \"nonBlocking\": true,\n\
+      \        \"slice_id\": \"Options-ExpressionFit-Control-Slice001\"\n      },\n\
+      \      \"frozen_target_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n      \"independence_contract\": {\n        \"buildsFromFrozenCurrentMain\"\
+      : true,\n        \"doesNotAssumeJobAMerged\": true,\n        \"doesNotImportJobA\"\
+      : true,\n        \"nativePrerequisiteOnJobA\": false\n      },\n      \"phase_plan\"\
+      : \"docs/SOP/PHASE_PLANS/options_expression_fit_ranking_v1_relay.json\",\n \
+      \     \"phase_plan_blob_sha\": \"e294cf9e2fd94c84f966a91350f908a4994a53a3\"\
+      ,\n      \"source_files\": [\n        {\n          \"blob_sha\": \"e294cf9e2fd94c84f966a91350f908a4994a53a3\"\
+      ,\n          \"exists\": true,\n          \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n          \"path\": \"docs/SOP/PHASE_PLANS/options_expression_fit_ranking_v1_relay.json\"\
+      ,\n          \"sha256\": \"4676f5786bb1bda2b392029868c86688a9fedde5494c7d6e594b0d4f6e03d531\"\
+      \n        },\n        {\n          \"blob_sha\": \"2e1fe7a3eef9b9a0aba98aac772331ce7fdb61fa\"\
+      ,\n          \"exists\": true,\n          \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n          \"path\": \"docs/SOP/SPRINT_OPTIONS_EXPRESSION_FIT_RANKING_V1.md\"\
+      ,\n          \"sha256\": \"5a5b8d2f81021ec21aae09c1037d08091dc056b39d7d8809c1719623c8faa98f\"\
+      \n        },\n        {\n          \"blob_sha\": \"f148cccfcaaeb4e27dcedd0235adfb600c9c7acc\"\
+      ,\n          \"exists\": true,\n          \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n          \"path\": \"docs/SOP/POST_OPTIONS_EXPRESSION_FIT_RANKING_V1_SELECTION.md\"\
+      ,\n          \"sha256\": \"d6802294683eb965f432b621b149297136c9b894021be5fd6ccaa622bc2cdb74\"\
+      \n        },\n        {\n          \"blob_sha\": \"3668455cc5e30bfb6135767e86e0b4beb3bd44ac\"\
+      ,\n          \"exists\": true,\n          \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n          \"path\": \"docs/SOP/OPTIONS_EXPRESSION_FIT_RANKING_V1_EVIDENCE_STATUS.md\"\
+      ,\n          \"sha256\": \"fc7d604f9857d0b88588484fb767cfde146abd7857435412768e526184fa25ac\"\
+      \n        },\n        {\n          \"blob_sha\": \"bef16bafa160f5240b85c69b119b6ba627e041bb\"\
+      ,\n          \"exists\": true,\n          \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n          \"path\": \"docs/SOP/ACTIVE_PHASE_MANIFEST.json\",\n          \"\
+      sha256\": \"c1425fc9fda014c0379113ff849a0466e3c31e5c4f489975becfbb913bf067dc\"\
+      \n        }\n      ],\n      \"target_remote_url\": \"https://github.com/DanielTabakman/Probability-prediction-engine.git\"\
+      \n    },\n    \"non_blocking_slices\": [],\n    \"required_slices\": [\n   \
+      \   \"Options-ExpressionFit-Control-Slice001\"\n    ],\n    \"satisfied_slices\"\
+      : [\n      \"Options-ExpressionFit-Control-Slice001\"\n    ],\n    \"source\"\
+      : \"ppe_native_read_only\"\n  },\n  \"refill_attempt\": {\n    \"attempt_ordinal\"\
+      : 1,\n    \"generation_id\": \"refill-superseded-b5b9ae6b7c855baf1ddd0e06\"\
+      ,\n    \"reason\": \"initial\",\n    \"retry_ordinal\": 0,\n    \"selected_work_item_id\"\
+      : \"options_expression_fit_ranking_v1\",\n    \"version\": 1\n  },\n  \"requested_exclusions\"\
+      : [\n    \"options_horizon_comparison_v1\"\n  ],\n  \"selected\": {\n    \"\
+      packet_sha256\": \"669c25fc495014c80d830681fb73b9c1787f2625487a29d92ac68975b1758b1a\"\
+      ,\n    \"pipeline_id\": \"ppe\",\n    \"trace\": \"docs/SOP/PHASE_PLANS/options_expression_fit_ranking_v1_relay.json\"\
+      ,\n    \"work_item_id\": \"options_expression_fit_ranking_v1\"\n  },\n  \"source\"\
+      : {\n    \"commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\",\n    \"ref\"\
+      : \"HEAD\",\n    \"remote\": \"origin\",\n    \"remote_ref\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n    \"remote_url\": \"https://github.com/DanielTabakman/Probability-prediction-engine.git\"\
+      ,\n    \"repository\": \"DanielTabakman/Probability-prediction-engine\"\n  },\n\
+      \  \"version\": 1\n}\n\nRefill attempt context:\n{\n  \"attempt_ordinal\": 1,\n\
+      \  \"generation_id\": \"refill-superseded-b5b9ae6b7c855baf1ddd0e06\",\n  \"\
+      reason\": \"initial\",\n  \"retry_ordinal\": 0,\n  \"selected_work_item_id\"\
+      : \"options_expression_fit_ranking_v1\",\n  \"version\": 1\n}\n\nPipeline-native\
+      \ prerequisite evidence:\n{\n  \"evidence\": {\n    \"control_slice\": {\n \
+      \     \"implementationStatus\": \"COMPLETE\",\n      \"nonBlocking\": true,\n\
+      \      \"slice_id\": \"Options-ExpressionFit-Control-Slice001\"\n    },\n  \
+      \  \"frozen_target_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\",\n\
+      \    \"independence_contract\": {\n      \"buildsFromFrozenCurrentMain\": true,\n\
+      \      \"doesNotAssumeJobAMerged\": true,\n      \"doesNotImportJobA\": true,\n\
+      \      \"nativePrerequisiteOnJobA\": false\n    },\n    \"phase_plan\": \"docs/SOP/PHASE_PLANS/options_expression_fit_ranking_v1_relay.json\"\
+      ,\n    \"phase_plan_blob_sha\": \"e294cf9e2fd94c84f966a91350f908a4994a53a3\"\
+      ,\n    \"source_files\": [\n      {\n        \"blob_sha\": \"e294cf9e2fd94c84f966a91350f908a4994a53a3\"\
+      ,\n        \"exists\": true,\n        \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n        \"path\": \"docs/SOP/PHASE_PLANS/options_expression_fit_ranking_v1_relay.json\"\
+      ,\n        \"sha256\": \"4676f5786bb1bda2b392029868c86688a9fedde5494c7d6e594b0d4f6e03d531\"\
+      \n      },\n      {\n        \"blob_sha\": \"2e1fe7a3eef9b9a0aba98aac772331ce7fdb61fa\"\
+      ,\n        \"exists\": true,\n        \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n        \"path\": \"docs/SOP/SPRINT_OPTIONS_EXPRESSION_FIT_RANKING_V1.md\"\
+      ,\n        \"sha256\": \"5a5b8d2f81021ec21aae09c1037d08091dc056b39d7d8809c1719623c8faa98f\"\
+      \n      },\n      {\n        \"blob_sha\": \"f148cccfcaaeb4e27dcedd0235adfb600c9c7acc\"\
+      ,\n        \"exists\": true,\n        \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n        \"path\": \"docs/SOP/POST_OPTIONS_EXPRESSION_FIT_RANKING_V1_SELECTION.md\"\
+      ,\n        \"sha256\": \"d6802294683eb965f432b621b149297136c9b894021be5fd6ccaa622bc2cdb74\"\
+      \n      },\n      {\n        \"blob_sha\": \"3668455cc5e30bfb6135767e86e0b4beb3bd44ac\"\
+      ,\n        \"exists\": true,\n        \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n        \"path\": \"docs/SOP/OPTIONS_EXPRESSION_FIT_RANKING_V1_EVIDENCE_STATUS.md\"\
+      ,\n        \"sha256\": \"fc7d604f9857d0b88588484fb767cfde146abd7857435412768e526184fa25ac\"\
+      \n      },\n      {\n        \"blob_sha\": \"bef16bafa160f5240b85c69b119b6ba627e041bb\"\
+      ,\n        \"exists\": true,\n        \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n        \"path\": \"docs/SOP/ACTIVE_PHASE_MANIFEST.json\",\n        \"sha256\"\
+      : \"c1425fc9fda014c0379113ff849a0466e3c31e5c4f489975becfbb913bf067dc\"\n   \
+      \   }\n    ],\n    \"target_remote_url\": \"https://github.com/DanielTabakman/Probability-prediction-engine.git\"\
+      \n  },\n  \"non_blocking_slices\": [],\n  \"required_slices\": [\n    \"Options-ExpressionFit-Control-Slice001\"\
+      \n  ],\n  \"satisfied_slices\": [\n    \"Options-ExpressionFit-Control-Slice001\"\
+      \n  ],\n  \"source\": \"ppe_native_read_only\"\n}\n\nRelevant canon/task packet:\n\
+      {\n  \"following_slices\": [\n    \"Options-ExpressionFit-Witness-Slice003\"\
+      ,\n    \"Options-ExpressionFit-Closeout-Slice004\"\n  ],\n  \"phase_plan\":\
+      \ \"docs/SOP/PHASE_PLANS/options_expression_fit_ranking_v1_relay.json\",\n \
+      \ \"previous_slices\": [\n    \"Options-ExpressionFit-Control-Slice001\"\n \
+      \ ],\n  \"selected_slice\": {\n    \"build_branch\": \"build/auto/Options-ExpressionFit-Product-Slice002\"\
+      ,\n    \"declared_plane\": \"PRODUCT-PLANE\",\n    \"following_slices\": [\n\
+      \      \"Options-ExpressionFit-Witness-Slice003\",\n      \"Options-ExpressionFit-Closeout-Slice004\"\
+      \n    ],\n    \"layer_preset\": \"PPE_UI\",\n    \"previous_slices\": [\n  \
+      \    \"Options-ExpressionFit-Control-Slice001\"\n    ],\n    \"raw_slice\":\
+      \ {\n      \"buildBranch\": \"build/auto/Options-ExpressionFit-Product-Slice002\"\
+      ,\n      \"declaredPlane\": \"PRODUCT-PLANE\",\n      \"hardMinutes\": 240,\n\
+      \      \"implementationStatus\": \"PENDING\",\n      \"layerPreset\": \"PPE_UI\"\
+      ,\n      \"maxAttempts\": 2,\n      \"sliceId\": \"Options-ExpressionFit-Product-Slice002\"\
+      ,\n      \"sprintSpecPath\": \"docs/SOP/SPRINT_OPTIONS_EXPRESSION_FIT_RANKING_V1.md\"\
+      ,\n      \"susMinutes\": 90,\n      \"touchSet\": [\n        \"src/engine/options_expression_fit_ranking.py\"\
+      ,\n        \"src/viz/options_expression_fit_ranking_boundary.py\",\n       \
+      \ \"scripts/rank_options_expression_fit.py\",\n        \"apps/msos-web/src/lib/optionsExpressionFitRanking.ts\"\
+      ,\n        \"apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx\"\
+      ,\n        \"apps/msos-web/src/components/ExpressionPlanningPanel.tsx\",\n \
+      \       \"tests/test_options_expression_fit_ranking.py\",\n        \"tests/test_msos_web_options_expression_fit_ranking.py\"\
+      \n      ],\n      \"workerMode\": \"local-agent\"\n    },\n    \"selection_record\"\
+      : \"docs/SOP/POST_OPTIONS_EXPRESSION_FIT_RANKING_V1_SELECTION.md\",\n    \"\
+      sequence_index\": 1,\n    \"slice_id\": \"Options-ExpressionFit-Product-Slice002\"\
+      ,\n    \"sprint_spec_path\": \"docs/SOP/SPRINT_OPTIONS_EXPRESSION_FIT_RANKING_V1.md\"\
+      ,\n    \"total_slices\": 4,\n    \"touch_set\": [\n      \"src/engine/options_expression_fit_ranking.py\"\
+      ,\n      \"src/viz/options_expression_fit_ranking_boundary.py\",\n      \"scripts/rank_options_expression_fit.py\"\
+      ,\n      \"apps/msos-web/src/lib/optionsExpressionFitRanking.ts\",\n      \"\
+      apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx\",\n     \
+      \ \"apps/msos-web/src/components/ExpressionPlanningPanel.tsx\",\n      \"tests/test_options_expression_fit_ranking.py\"\
+      ,\n      \"tests/test_msos_web_options_expression_fit_ranking.py\"\n    ],\n\
+      \    \"worker_mode\": \"local-agent\"\n  },\n  \"selection_record\": \"docs/SOP/POST_OPTIONS_EXPRESSION_FIT_RANKING_V1_SELECTION.md\"\
+      ,\n  \"sprint_spec_path\": \"docs/SOP/SPRINT_OPTIONS_EXPRESSION_FIT_RANKING_V1.md\"\
+      \n}\n\nNon-goals:\n- Do not charter new product scope.\n- Do not alter PPE registry\
+      \ or priority policy.\n- Do not run continuous refill or dispatch additional\
+      \ work."

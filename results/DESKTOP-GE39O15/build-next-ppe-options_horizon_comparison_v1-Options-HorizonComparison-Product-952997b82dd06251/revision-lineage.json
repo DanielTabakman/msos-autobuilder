@@ -1,0 +1,12 @@
+{
+  "gate_report_sha256": "5e5a5d13723611a8176d2b3e51c9a38a7d79867a3385927d58f77eeb0f284a32",
+  "job_id": "build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251",
+  "not_applicable_evidence": true,
+  "producer": "controlled_publisher",
+  "product_commit": "59467d5f37fa19af83574f559382f1caa5d30454",
+  "publication_report_sha256": "31ea5012f8eda177d80bbdffc8935c1875d54a28ef2f35e03767c583027cb6b8",
+  "revision_disposition": "not_applicable",
+  "revision_evidence_id": "f47f56809889c170fca3a0a3e606ccda",
+  "revision_evidence_sha256": "fa948d3d8c27e50875cb94da9aec5569d8095eb0e38f3e21a6f5f9f82d78dd3f",
+  "version": 1
+}

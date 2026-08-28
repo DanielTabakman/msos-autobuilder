@@ -1,0 +1,14 @@
+{
+  "canon_conflict": false,
+  "claim_generation": 2,
+  "claim_writer_id": "build-next:build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251",
+  "evidence_conflict": false,
+  "founder_decision_required": false,
+  "job_id": "build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251",
+  "objective_sha256": "22c420a38318a12b5bb307fbc3aa5b063cbc06813d69f95d85aab31455cab2dc",
+  "ownership_conflict": false,
+  "pr_number": 5427,
+  "producer": "controlled_publisher",
+  "product_commit": "59467d5f37fa19af83574f559382f1caa5d30454",
+  "version": 1
+}

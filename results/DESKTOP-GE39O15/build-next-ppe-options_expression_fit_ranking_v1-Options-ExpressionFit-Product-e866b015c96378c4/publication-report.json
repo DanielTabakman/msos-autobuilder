@@ -1,0 +1,237 @@
+{
+  "changed_paths": [
+    "apps/msos-web/src/components/ExpressionPlanningPanel.tsx",
+    "apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx",
+    "apps/msos-web/src/lib/optionsExpressionFitRanking.ts",
+    "scripts/rank_options_expression_fit.py",
+    "src/engine/options_expression_fit_ranking.py",
+    "src/viz/options_expression_fit_ranking_boundary.py",
+    "tests/test_msos_web_options_expression_fit_ranking.py",
+    "tests/test_options_expression_fit_ranking.py"
+  ],
+  "checks": [
+    {
+      "argv": [
+        "python",
+        "-c",
+        "import ast\nimport pathlib\npy_paths = [\n    \"src/engine/options_expression_fit_ranking.py\",\n    \"src/viz/options_expression_fit_ranking_boundary.py\",\n    \"scripts/rank_options_expression_fit.py\",\n    \"tests/test_options_expression_fit_ranking.py\",\n    \"tests/test_msos_web_options_expression_fit_ranking.py\",\n]\nother_paths = [\n    \"apps/msos-web/src/lib/optionsExpressionFitRanking.ts\",\n    \"apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx\",\n    \"apps/msos-web/src/components/ExpressionPlanningPanel.tsx\",\n]\nfor path in py_paths:\n    ast.parse(pathlib.Path(path).read_text(encoding=\"utf-8\"))\nfor path in other_paths:\n    text = pathlib.Path(path).read_text(encoding=\"utf-8\")\n    if not text.strip():\n        raise SystemExit(\"empty patched file: \" + path)\n"
+      ],
+      "cwd": ".",
+      "finished_at": "2026-08-28T19:39:18.934783+00:00",
+      "name": "patched-sources-parse",
+      "passed": true,
+      "phase": "check",
+      "required": true,
+      "returncode": 0,
+      "skipped": false,
+      "started_at": "2026-08-28T19:39:18.120730+00:00",
+      "stderr": "",
+      "stdout": "",
+      "timed_out": false
+    }
+  ],
+  "claim_release_handoff": {
+    "allowed_terminal_states": [
+      "abandoned",
+      "failed",
+      "merged",
+      "released",
+      "superseded"
+    ],
+    "authorized_paths": [
+      "apps/msos-web/src/components/ExpressionPlanningPanel.tsx",
+      "apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx",
+      "apps/msos-web/src/lib/optionsExpressionFitRanking.ts",
+      "scripts/rank_options_expression_fit.py",
+      "src/engine/options_expression_fit_ranking.py",
+      "src/viz/options_expression_fit_ranking_boundary.py",
+      "tests/test_msos_web_options_expression_fit_ranking.py",
+      "tests/test_options_expression_fit_ranking.py"
+    ],
+    "bounded_failure_behavior": {
+      "accepted_abandonment": "release as abandoned with founder/owner disposition evidence",
+      "submission_or_publication_failure": "release as failed with bounded failure evidence",
+      "superseded_duplicate": "release as superseded with canonical successor evidence"
+    },
+    "claim_generation": 1,
+    "consumer": "completion-controller",
+    "handoff": "msos-autobuilder.work_admission.claim_release.v1",
+    "immutability": "consumer must match objective_sha256, writer_id and claim_generation before release",
+    "linked_issue": null,
+    "objective_sha256": "aaacb5bf9aa1cf892167ea4eb8f974406168f23767702ec526c072299dec44df",
+    "release_api": "msos_autobuilder.work_admission.release_claim",
+    "repository": "DanielTabakman/Probability-prediction-engine",
+    "verified_completion_terminal_state": "merged",
+    "version": 1,
+    "writer_id": "build-next:build-next-ppe-options_expression_fit_ranking_v1-Options-ExpressionFit-Product-e866b015c96378c4"
+  },
+  "draft": true,
+  "gate_report_sha256": "6a87812f4d9c4bc23af1f50f3460ca6d629d3d52a64a105b889b59b3c34e073d",
+  "job_id": "build-next-ppe-options_expression_fit_ranking_v1-Options-ExpressionFit-Product-e866b015c96378c4",
+  "main_write_enabled": false,
+  "merge_enabled": false,
+  "pr_number": 5428,
+  "pr_url": "https://github.com/DanielTabakman/Probability-prediction-engine/pull/5428",
+  "product_base_branch": "main",
+  "product_base_head": "5fbcd0cd5a57dabb16528b628d89d3f2feead16e",
+  "product_branch": "autobuilder/build-next-ppe-options_expression_fit_ranking_v1-Options-ExpressionFit-Product-e866b015c96378c4",
+  "product_commit": "1dc88f027f1fb1ab16338764ead76a2830e56b0c",
+  "published_at": "2026-08-28T19:39:26.540707+00:00",
+  "source_report_sha256": "cb62a11220a30d4431c4a603571a77372561a915398a43fe2dc48d761c56022e",
+  "status": "published-draft",
+  "version": 1,
+  "work_admission": {
+    "canonical": null,
+    "claim": {
+      "authorized_paths": [
+        "apps/msos-web/src/components/ExpressionPlanningPanel.tsx",
+        "apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx",
+        "apps/msos-web/src/lib/optionsExpressionFitRanking.ts",
+        "scripts/rank_options_expression_fit.py",
+        "src/engine/options_expression_fit_ranking.py",
+        "src/viz/options_expression_fit_ranking_boundary.py",
+        "tests/test_msos_web_options_expression_fit_ranking.py",
+        "tests/test_options_expression_fit_ranking.py"
+      ],
+      "branch": "build/auto/Options-ExpressionFit-Product-Slice002",
+      "claimed_at": "2026-08-28T19:09:22Z",
+      "evidence": {
+        "admission_phase": "build_next.pre_feed_submission",
+        "authorized_paths": [
+          "apps/msos-web/src/components/ExpressionPlanningPanel.tsx",
+          "apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx",
+          "apps/msos-web/src/lib/optionsExpressionFitRanking.ts",
+          "scripts/rank_options_expression_fit.py",
+          "src/engine/options_expression_fit_ranking.py",
+          "src/viz/options_expression_fit_ranking_boundary.py",
+          "tests/test_msos_web_options_expression_fit_ranking.py",
+          "tests/test_options_expression_fit_ranking.py"
+        ],
+        "claim_lifecycle": "active until verified merge, explicit supersession, accepted abandonment, or bounded failure disposition",
+        "classifications": [],
+        "github_duplicate_discovery": {
+          "candidate_count": 0,
+          "repository": "DanielTabakman/Probability-prediction-engine",
+          "searched_issues": true,
+          "searched_pull_requests": true
+        },
+        "job_id": "build-next-ppe-options_expression_fit_ranking_v1-Options-ExpressionFit-Product-e866b015c96378c4",
+        "objective": {
+          "acceptance_contract_sha256": "4b7c00768ab801799645d54f37eea9044c3f0da87c9ade05ac20e9f97bc37665",
+          "error_signature": null,
+          "linked_issue": null,
+          "release_identity": null,
+          "repository": "DanielTabakman/Probability-prediction-engine",
+          "stable_key": "0361149329148ff48cdb86517bda2a56dd42daec89d07bb0bb5d9164180e65a0",
+          "work_item_id": "options_expression_fit_ranking_v1"
+        },
+        "objective_sha256": "aaacb5bf9aa1cf892167ea4eb8f974406168f23767702ec526c072299dec44df",
+        "pipeline_id": "ppe",
+        "source_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+        "target_repository": "DanielTabakman/Probability-prediction-engine",
+        "work_item_id": "options_expression_fit_ranking_v1"
+      },
+      "generation": 1,
+      "linked_issue": null,
+      "objective_sha256": "aaacb5bf9aa1cf892167ea4eb8f974406168f23767702ec526c072299dec44df",
+      "pr_number": null,
+      "repository": "DanielTabakman/Probability-prediction-engine",
+      "state": "active",
+      "updated_at": "2026-08-28T19:09:22Z",
+      "version": 1,
+      "writer_id": "build-next:build-next-ppe-options_expression_fit_ranking_v1-Options-ExpressionFit-Product-e866b015c96378c4"
+    },
+    "classifications": [],
+    "evidence": {
+      "admission_phase": "controlled_publisher.pre_branch_pr",
+      "authorized_paths": [
+        "apps/msos-web/src/components/ExpressionPlanningPanel.tsx",
+        "apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx",
+        "apps/msos-web/src/lib/optionsExpressionFitRanking.ts",
+        "scripts/rank_options_expression_fit.py",
+        "src/engine/options_expression_fit_ranking.py",
+        "src/viz/options_expression_fit_ranking_boundary.py",
+        "tests/test_msos_web_options_expression_fit_ranking.py",
+        "tests/test_options_expression_fit_ranking.py"
+      ],
+      "claim_lifecycle": "active until verified merge, explicit supersession, accepted abandonment, or bounded failure disposition",
+      "claim_path": "C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/state/work-admission/claims/aaacb5bf9aa1cf892167ea4eb8f974406168f23767702ec526c072299dec44df.json",
+      "classifications": [],
+      "existing_claim": {
+        "authorized_paths": [
+          "apps/msos-web/src/components/ExpressionPlanningPanel.tsx",
+          "apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx",
+          "apps/msos-web/src/lib/optionsExpressionFitRanking.ts",
+          "scripts/rank_options_expression_fit.py",
+          "src/engine/options_expression_fit_ranking.py",
+          "src/viz/options_expression_fit_ranking_boundary.py",
+          "tests/test_msos_web_options_expression_fit_ranking.py",
+          "tests/test_options_expression_fit_ranking.py"
+        ],
+        "branch": "build/auto/Options-ExpressionFit-Product-Slice002",
+        "claimed_at": "2026-08-28T19:09:22Z",
+        "evidence": {
+          "admission_phase": "build_next.pre_feed_submission",
+          "authorized_paths": [
+            "apps/msos-web/src/components/ExpressionPlanningPanel.tsx",
+            "apps/msos-web/src/components/OptionsExpressionFitRankingPanel.tsx",
+            "apps/msos-web/src/lib/optionsExpressionFitRanking.ts",
+            "scripts/rank_options_expression_fit.py",
+            "src/engine/options_expression_fit_ranking.py",
+            "src/viz/options_expression_fit_ranking_boundary.py",
+            "tests/test_msos_web_options_expression_fit_ranking.py",
+            "tests/test_options_expression_fit_ranking.py"
+          ],
+          "claim_lifecycle": "active until verified merge, explicit supersession, accepted abandonment, or bounded failure disposition",
+          "classifications": [],
+          "github_duplicate_discovery": {
+            "candidate_count": 0,
+            "repository": "DanielTabakman/Probability-prediction-engine",
+            "searched_issues": true,
+            "searched_pull_requests": true
+          },
+          "job_id": "build-next-ppe-options_expression_fit_ranking_v1-Options-ExpressionFit-Product-e866b015c96378c4",
+          "objective": {
+            "acceptance_contract_sha256": "4b7c00768ab801799645d54f37eea9044c3f0da87c9ade05ac20e9f97bc37665",
+            "error_signature": null,
+            "linked_issue": null,
+            "release_identity": null,
+            "repository": "DanielTabakman/Probability-prediction-engine",
+            "stable_key": "0361149329148ff48cdb86517bda2a56dd42daec89d07bb0bb5d9164180e65a0",
+            "work_item_id": "options_expression_fit_ranking_v1"
+          },
+          "objective_sha256": "aaacb5bf9aa1cf892167ea4eb8f974406168f23767702ec526c072299dec44df",
+          "pipeline_id": "ppe",
+          "source_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+          "target_repository": "DanielTabakman/Probability-prediction-engine",
+          "work_item_id": "options_expression_fit_ranking_v1"
+        },
+        "generation": 1,
+        "linked_issue": null,
+        "objective_sha256": "aaacb5bf9aa1cf892167ea4eb8f974406168f23767702ec526c072299dec44df",
+        "pr_number": null,
+        "repository": "DanielTabakman/Probability-prediction-engine",
+        "state": "active",
+        "updated_at": "2026-08-28T19:09:22Z",
+        "version": 1,
+        "writer_id": "build-next:build-next-ppe-options_expression_fit_ranking_v1-Options-ExpressionFit-Product-e866b015c96378c4"
+      },
+      "job_id": "build-next-ppe-options_expression_fit_ranking_v1-Options-ExpressionFit-Product-e866b015c96378c4",
+      "job_yaml": "C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/state/publisher-results-repo/results/DESKTOP-GE39O15/build-next-ppe-options_expression_fit_ranking_v1-Options-ExpressionFit-Product-e866b015c96378c4/job.yaml",
+      "objective": {
+        "acceptance_contract_sha256": "4b7c00768ab801799645d54f37eea9044c3f0da87c9ade05ac20e9f97bc37665",
+        "error_signature": null,
+        "linked_issue": null,
+        "release_identity": null,
+        "repository": "DanielTabakman/Probability-prediction-engine",
+        "stable_key": "0361149329148ff48cdb86517bda2a56dd42daec89d07bb0bb5d9164180e65a0",
+        "work_item_id": "options_expression_fit_ranking_v1"
+      },
+      "objective_sha256": "aaacb5bf9aa1cf892167ea4eb8f974406168f23767702ec526c072299dec44df",
+      "plan_branch": "autobuilder/build-next-ppe-options_expression_fit_ranking_v1-Options-ExpressionFit-Product-e866b015c96378c4"
+    },
+    "message": "Existing durable writer claim matches this writer.",
+    "objective_sha256": "aaacb5bf9aa1cf892167ea4eb8f974406168f23767702ec526c072299dec44df",
+    "status": "NEW_WORK_ADMITTED"
+  }
+}

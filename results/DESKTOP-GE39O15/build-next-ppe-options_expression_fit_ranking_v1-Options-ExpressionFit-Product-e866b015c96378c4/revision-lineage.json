@@ -1,0 +1,12 @@
+{
+  "gate_report_sha256": "6a87812f4d9c4bc23af1f50f3460ca6d629d3d52a64a105b889b59b3c34e073d",
+  "job_id": "build-next-ppe-options_expression_fit_ranking_v1-Options-ExpressionFit-Product-e866b015c96378c4",
+  "not_applicable_evidence": true,
+  "producer": "controlled_publisher",
+  "product_commit": "1dc88f027f1fb1ab16338764ead76a2830e56b0c",
+  "publication_report_sha256": "371c89a1cc45acfed5e10b7960d7713524f36a2d768a754dfed189a096072a89",
+  "revision_disposition": "not_applicable",
+  "revision_evidence_id": "217f1f8b39ad2ead275e27376b994d27",
+  "revision_evidence_sha256": "902152908e268d859f998878b33d7e6b8758167b09fe2ddb53a5498cfe397022",
+  "version": 1
+}

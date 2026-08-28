@@ -1,0 +1,14 @@
+{
+  "canon_conflict": false,
+  "claim_generation": 1,
+  "claim_writer_id": "build-next:build-next-ppe-options_expression_fit_ranking_v1-Options-ExpressionFit-Product-e866b015c96378c4",
+  "evidence_conflict": false,
+  "founder_decision_required": false,
+  "job_id": "build-next-ppe-options_expression_fit_ranking_v1-Options-ExpressionFit-Product-e866b015c96378c4",
+  "objective_sha256": "aaacb5bf9aa1cf892167ea4eb8f974406168f23767702ec526c072299dec44df",
+  "ownership_conflict": false,
+  "pr_number": 5428,
+  "producer": "controlled_publisher",
+  "product_commit": "1dc88f027f1fb1ab16338764ead76a2830e56b0c",
+  "version": 1
+}

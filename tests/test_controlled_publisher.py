@@ -746,3 +746,36 @@ def test_controlled_publisher_rejects_source_report_only_evidence(tmp_path: Path
     )
     with pytest.raises(PublisherError, match="corrected canonical report"):
         publisher.run_once()
+
+
+def test_publisher_related_work_uses_search_instead_of_listing_history() -> None:
+    """Admission must not enumerate every issue/PR; that blows the page budget.
+
+    The live publisher failed closed with "GitHub issue discovery exceeded bounded
+    page limit" while trying to publish the already-passed options-horizon job.
+    """
+    client = GitHubDraftClient("DanielTabakman/Probability-prediction-engine", "token")
+    calls: list[str] = []
+
+    def fake_request(
+        method: str,
+        path: str,
+        payload: object = None,
+    ) -> object:
+        del method, payload
+        calls.append(path)
+        if path.startswith("/search/issues"):
+            return {"items": []}
+        raise AssertionError(f"unexpected GitHub path: {path}")
+
+    client._request = fake_request  # type: ignore[method-assign]
+    result = client.find_related_work(
+        linked_issue=None,
+        objective_sha256="a" * 64,
+        acceptance_contract_sha256="b" * 64,
+        changed_paths=["src/engine/options_horizon_comparison.py"],
+    )
+    assert result == []
+    assert any(path.startswith("/search/issues") for path in calls)
+    assert not any("/issues?state=all" in path for path in calls)
+    assert not any("/pulls?state=all" in path for path in calls)

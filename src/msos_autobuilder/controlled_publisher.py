@@ -589,6 +589,38 @@ class GitHubDraftClient:
                 return items
         raise PublisherError(f"GitHub {label} discovery exceeded bounded page limit")
 
+    def _search(self, query: str, label: str) -> list[dict[str, Any]]:
+        """Resolve one bounded search query instead of enumerating repository history."""
+        items: list[dict[str, Any]] = []
+        encoded = urllib.parse.quote_plus(query)
+        for page in range(1, 11):
+            payload = self._request(
+                "GET",
+                f"/search/issues?q={encoded}&per_page=100&page={page}",
+            )
+            if not isinstance(payload, dict):
+                raise PublisherError(f"GitHub {label} search returned an invalid payload")
+            batch = payload.get("items")
+            if not isinstance(batch, list):
+                raise PublisherError(f"GitHub {label} search returned invalid items")
+            items.extend(item for item in batch if isinstance(item, dict))
+            if len(batch) < 100:
+                return items
+        raise PublisherError(f"GitHub {label} search exceeded bounded page limit")
+
+    def _pull_paths(self, number: int) -> list[str]:
+        file_items = self._paged_list(
+            f"/repos/{self.repo_full_name}/pulls/{number}/files",
+            "pull-request file",
+        )
+        return sorted(
+            {
+                str(file.get("filename") or "").replace("\\", "/")
+                for file in file_items
+                if file.get("filename")
+            }
+        )
+
     def find_related_work(
         self,
         *,
@@ -597,30 +629,42 @@ class GitHubDraftClient:
         acceptance_contract_sha256: str | None = None,
         changed_paths: Sequence[str],
     ) -> list[dict[str, Any]]:
-        """Discover candidate issue/PR overlaps through read-only GitHub APIs."""
+        """Discover candidate issue/PR overlaps through targeted GitHub search.
+
+        Enumerating every issue and pull request exceeds the bounded page limit on any
+        long-lived product repository, which is what blocked publication of the passed
+        options-horizon candidate.
+        """
         requested_paths = {path.replace("\\", "/").strip("/") for path in changed_paths}
+        scope = f"repo:{self.repo_full_name}"
         candidates: list[dict[str, Any]] = []
-        issues = self._paged_list(
-            f"/repos/{self.repo_full_name}/issues?state=all",
-            "issue",
-        )
-        for item in issues:
-            if "pull_request" in item:
-                continue
-            number = item.get("number")
-            if not isinstance(number, int):
-                continue
+
+        issues: dict[int, dict[str, Any]] = {}
+        if linked_issue is not None:
+            item = self._request("GET", f"/repos/{self.repo_full_name}/issues/{linked_issue}")
+            if isinstance(item, dict) and "pull_request" not in item:
+                number = item.get("number")
+                if isinstance(number, int):
+                    issues[number] = item
+        for digest in dict.fromkeys(
+            value for value in (objective_sha256, acceptance_contract_sha256) if value
+        ):
+            for item in self._search(f'{scope} "{digest}"', "equivalence"):
+                number = item.get("number")
+                if not isinstance(number, int) or "pull_request" in item:
+                    continue
+                issues.setdefault(number, item)
+
+        for number, item in sorted(issues.items()):
             body = str(item.get("body") or "")
             title = str(item.get("title") or "")
-            candidate_issue = number
-            same_issue = linked_issue is not None and candidate_issue == linked_issue
+            same_issue = linked_issue is not None and number == linked_issue
             same_objective = objective_sha256 in body or objective_sha256 in title
             same_contract = (
                 acceptance_contract_sha256 is not None
                 and (acceptance_contract_sha256 in body or acceptance_contract_sha256 in title)
             )
-            mentions_path = any(path and path in body for path in requested_paths)
-            if not (same_issue or same_objective or same_contract or mentions_path):
+            if not (same_issue or same_objective or same_contract):
                 continue
             candidates.append(
                 {
@@ -629,12 +673,12 @@ class GitHubDraftClient:
                     "title": title,
                     "state": str(item.get("state") or ""),
                     "branch": "",
-                    "linked_issue": candidate_issue,
+                    "linked_issue": number,
                     "objective_sha256": objective_sha256 if same_objective else None,
                     "acceptance_contract_sha256": (
                         acceptance_contract_sha256 if same_contract else None
                     ),
-                    "changed_paths": sorted(path for path in requested_paths if path in body),
+                    "changed_paths": [],
                     "canonical": False,
                     "merged": False,
                     "unique_required_change": False,
@@ -642,29 +686,30 @@ class GitHubDraftClient:
                 }
             )
 
-        pulls = self._paged_list(
-            f"/repos/{self.repo_full_name}/pulls?state=all",
-            "pull-request",
-        )
-        for item in pulls:
+        pulls: dict[int, dict[str, Any]] = {}
+        for digest in dict.fromkeys(
+            value for value in (objective_sha256, acceptance_contract_sha256) if value
+        ):
+            for item in self._search(f'{scope} is:pr "{digest}"', "PR equivalence"):
+                number = item.get("number")
+                if isinstance(number, int):
+                    pulls.setdefault(number, item)
+        for item in self._search(f"{scope} is:pr is:open", "open PR"):
             number = item.get("number")
-            if not isinstance(number, int):
-                continue
-            file_items = self._paged_list(
-                f"/repos/{self.repo_full_name}/pulls/{number}/files",
-                "pull-request file",
-            )
-            pr_paths = sorted(
-                {
-                    str(file.get("filename") or "").replace("\\", "/")
-                    for file in file_items
-                    if file.get("filename")
-                }
-            )
-            body = str(item.get("body") or "")
+            if isinstance(number, int):
+                pulls.setdefault(number, item)
+
+        for number, item in sorted(pulls.items()):
+            detail = item
+            if "head" not in item or "merged_at" not in item:
+                fetched = self._request("GET", f"/repos/{self.repo_full_name}/pulls/{number}")
+                if isinstance(fetched, dict):
+                    detail = fetched
+            pr_paths = self._pull_paths(number)
+            body = str(detail.get("body") or item.get("body") or "")
             candidate_issue = _linked_issue_from_text(body)
-            head = item.get("head") if isinstance(item.get("head"), dict) else {}
-            merged = bool(item.get("merged_at"))
+            head = detail.get("head") if isinstance(detail.get("head"), dict) else {}
+            merged = bool(detail.get("merged_at"))
             same_issue = linked_issue is not None and candidate_issue == linked_issue
             same_objective = objective_sha256 in body
             same_contract = (
@@ -678,8 +723,8 @@ class GitHubDraftClient:
                 {
                     "kind": "pull_request",
                     "number": number,
-                    "title": str(item.get("title") or ""),
-                    "state": str(item.get("state") or ""),
+                    "title": str(detail.get("title") or item.get("title") or ""),
+                    "state": str(detail.get("state") or item.get("state") or ""),
                     "branch": str(head.get("ref") or ""),
                     "linked_issue": candidate_issue,
                     "objective_sha256": objective_sha256 if same_objective else None,
@@ -689,7 +734,7 @@ class GitHubDraftClient:
                     "changed_paths": pr_paths,
                     "canonical": merged,
                     "merged": merged,
-                    "url": str(item.get("html_url") or ""),
+                    "url": str(detail.get("html_url") or item.get("html_url") or ""),
                 }
             )
         return candidates

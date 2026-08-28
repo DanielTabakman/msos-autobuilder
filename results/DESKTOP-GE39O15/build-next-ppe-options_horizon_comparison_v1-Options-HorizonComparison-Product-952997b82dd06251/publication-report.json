@@ -1,0 +1,230 @@
+{
+  "changed_paths": [
+    "apps/msos-web/src/components/OptionsHorizonClient.tsx",
+    "apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx",
+    "apps/msos-web/src/lib/optionsHorizonComparison.ts",
+    "src/engine/options_horizon_comparison.py",
+    "src/viz/options_horizon_comparison_boundary.py",
+    "tests/test_msos_web_options_horizon_comparison.py",
+    "tests/test_options_horizon_comparison.py"
+  ],
+  "checks": [
+    {
+      "argv": [
+        "python",
+        "-c",
+        "import ast\nimport pathlib\npy_paths = [\n    \"src/engine/options_horizon_comparison.py\",\n    \"src/viz/options_horizon_comparison_boundary.py\",\n    \"tests/test_options_horizon_comparison.py\",\n    \"tests/test_msos_web_options_horizon_comparison.py\",\n]\nother_paths = [\n    \"apps/msos-web/src/components/OptionsHorizonClient.tsx\",\n    \"apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx\",\n    \"apps/msos-web/src/lib/optionsHorizonComparison.ts\",\n]\nfor path in py_paths:\n    ast.parse(pathlib.Path(path).read_text(encoding=\"utf-8\"))\nfor path in other_paths:\n    text = pathlib.Path(path).read_text(encoding=\"utf-8\")\n    if not text.strip():\n        raise SystemExit(\"empty patched file: \" + path)\n"
+      ],
+      "cwd": ".",
+      "finished_at": "2026-08-28T15:59:29.843910+00:00",
+      "name": "patched-sources-parse",
+      "passed": true,
+      "phase": "check",
+      "required": true,
+      "returncode": 0,
+      "skipped": false,
+      "started_at": "2026-08-28T15:59:25.093303+00:00",
+      "stderr": "",
+      "stdout": "",
+      "timed_out": false
+    }
+  ],
+  "claim_release_handoff": {
+    "allowed_terminal_states": [
+      "abandoned",
+      "failed",
+      "merged",
+      "released",
+      "superseded"
+    ],
+    "authorized_paths": [
+      "apps/msos-web/src/components/OptionsHorizonClient.tsx",
+      "apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx",
+      "apps/msos-web/src/lib/optionsHorizonComparison.ts",
+      "src/engine/options_horizon_comparison.py",
+      "src/viz/options_horizon_comparison_boundary.py",
+      "tests/test_msos_web_options_horizon_comparison.py",
+      "tests/test_options_horizon_comparison.py"
+    ],
+    "bounded_failure_behavior": {
+      "accepted_abandonment": "release as abandoned with founder/owner disposition evidence",
+      "submission_or_publication_failure": "release as failed with bounded failure evidence",
+      "superseded_duplicate": "release as superseded with canonical successor evidence"
+    },
+    "claim_generation": 2,
+    "consumer": "completion-controller",
+    "handoff": "msos-autobuilder.work_admission.claim_release.v1",
+    "immutability": "consumer must match objective_sha256, writer_id and claim_generation before release",
+    "linked_issue": null,
+    "objective_sha256": "22c420a38318a12b5bb307fbc3aa5b063cbc06813d69f95d85aab31455cab2dc",
+    "release_api": "msos_autobuilder.work_admission.release_claim",
+    "repository": "DanielTabakman/Probability-prediction-engine",
+    "verified_completion_terminal_state": "merged",
+    "version": 1,
+    "writer_id": "build-next:build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251"
+  },
+  "draft": true,
+  "gate_report_sha256": "5e5a5d13723611a8176d2b3e51c9a38a7d79867a3385927d58f77eeb0f284a32",
+  "job_id": "build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251",
+  "main_write_enabled": false,
+  "merge_enabled": false,
+  "pr_number": 5427,
+  "pr_url": "https://github.com/DanielTabakman/Probability-prediction-engine/pull/5427",
+  "product_base_branch": "main",
+  "product_base_head": "5fbcd0cd5a57dabb16528b628d89d3f2feead16e",
+  "product_branch": "autobuilder/build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251",
+  "product_commit": "59467d5f37fa19af83574f559382f1caa5d30454",
+  "published_at": "2026-08-28T16:00:02.037377+00:00",
+  "source_report_sha256": "1c10706448d67328251d80b86232026c9d1dbaef47b898ab44ea94ce293e2635",
+  "status": "published-draft",
+  "version": 1,
+  "work_admission": {
+    "canonical": null,
+    "claim": {
+      "authorized_paths": [
+        "apps/msos-web/src/components/OptionsHorizonClient.tsx",
+        "apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx",
+        "apps/msos-web/src/lib/optionsHorizonComparison.ts",
+        "src/engine/options_horizon_comparison.py",
+        "src/viz/options_horizon_comparison_boundary.py",
+        "tests/test_msos_web_options_horizon_comparison.py",
+        "tests/test_options_horizon_comparison.py"
+      ],
+      "branch": "build/auto/Options-HorizonComparison-Product-Slice002",
+      "claimed_at": "2026-08-26T15:42:06Z",
+      "evidence": {
+        "admission_phase": "build_next.pre_feed_submission",
+        "authorized_paths": [
+          "apps/msos-web/src/components/OptionsHorizonClient.tsx",
+          "apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx",
+          "apps/msos-web/src/lib/optionsHorizonComparison.ts",
+          "src/engine/options_horizon_comparison.py",
+          "src/viz/options_horizon_comparison_boundary.py",
+          "tests/test_msos_web_options_horizon_comparison.py",
+          "tests/test_options_horizon_comparison.py"
+        ],
+        "claim_lifecycle": "active until verified merge, explicit supersession, accepted abandonment, or bounded failure disposition",
+        "classifications": [],
+        "github_duplicate_discovery": {
+          "candidate_count": 0,
+          "repository": "DanielTabakman/Probability-prediction-engine",
+          "searched_issues": true,
+          "searched_pull_requests": true
+        },
+        "job_id": "build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251",
+        "objective": {
+          "acceptance_contract_sha256": "53f633dbc065359553b6833e3846659fb838c8964e50f8533e2491341ee611fe",
+          "error_signature": null,
+          "linked_issue": null,
+          "release_identity": null,
+          "repository": "DanielTabakman/Probability-prediction-engine",
+          "stable_key": "69cf3480ed419192983c94f34f20a457bb42644428ba8d1afb9b2e038047e2fe",
+          "work_item_id": "options_horizon_comparison_v1"
+        },
+        "objective_sha256": "22c420a38318a12b5bb307fbc3aa5b063cbc06813d69f95d85aab31455cab2dc",
+        "pipeline_id": "ppe",
+        "source_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+        "target_repository": "DanielTabakman/Probability-prediction-engine",
+        "work_item_id": "options_horizon_comparison_v1"
+      },
+      "generation": 2,
+      "linked_issue": null,
+      "objective_sha256": "22c420a38318a12b5bb307fbc3aa5b063cbc06813d69f95d85aab31455cab2dc",
+      "pr_number": null,
+      "repository": "DanielTabakman/Probability-prediction-engine",
+      "state": "active",
+      "updated_at": "2026-08-26T15:42:06Z",
+      "version": 1,
+      "writer_id": "build-next:build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251"
+    },
+    "classifications": [],
+    "evidence": {
+      "admission_phase": "controlled_publisher.pre_branch_pr",
+      "authorized_paths": [
+        "apps/msos-web/src/components/OptionsHorizonClient.tsx",
+        "apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx",
+        "apps/msos-web/src/lib/optionsHorizonComparison.ts",
+        "src/engine/options_horizon_comparison.py",
+        "src/viz/options_horizon_comparison_boundary.py",
+        "tests/test_msos_web_options_horizon_comparison.py",
+        "tests/test_options_horizon_comparison.py"
+      ],
+      "claim_lifecycle": "active until verified merge, explicit supersession, accepted abandonment, or bounded failure disposition",
+      "claim_path": "C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/state/work-admission/claims/22c420a38318a12b5bb307fbc3aa5b063cbc06813d69f95d85aab31455cab2dc.json",
+      "classifications": [],
+      "existing_claim": {
+        "authorized_paths": [
+          "apps/msos-web/src/components/OptionsHorizonClient.tsx",
+          "apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx",
+          "apps/msos-web/src/lib/optionsHorizonComparison.ts",
+          "src/engine/options_horizon_comparison.py",
+          "src/viz/options_horizon_comparison_boundary.py",
+          "tests/test_msos_web_options_horizon_comparison.py",
+          "tests/test_options_horizon_comparison.py"
+        ],
+        "branch": "build/auto/Options-HorizonComparison-Product-Slice002",
+        "claimed_at": "2026-08-26T15:42:06Z",
+        "evidence": {
+          "admission_phase": "build_next.pre_feed_submission",
+          "authorized_paths": [
+            "apps/msos-web/src/components/OptionsHorizonClient.tsx",
+            "apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx",
+            "apps/msos-web/src/lib/optionsHorizonComparison.ts",
+            "src/engine/options_horizon_comparison.py",
+            "src/viz/options_horizon_comparison_boundary.py",
+            "tests/test_msos_web_options_horizon_comparison.py",
+            "tests/test_options_horizon_comparison.py"
+          ],
+          "claim_lifecycle": "active until verified merge, explicit supersession, accepted abandonment, or bounded failure disposition",
+          "classifications": [],
+          "github_duplicate_discovery": {
+            "candidate_count": 0,
+            "repository": "DanielTabakman/Probability-prediction-engine",
+            "searched_issues": true,
+            "searched_pull_requests": true
+          },
+          "job_id": "build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251",
+          "objective": {
+            "acceptance_contract_sha256": "53f633dbc065359553b6833e3846659fb838c8964e50f8533e2491341ee611fe",
+            "error_signature": null,
+            "linked_issue": null,
+            "release_identity": null,
+            "repository": "DanielTabakman/Probability-prediction-engine",
+            "stable_key": "69cf3480ed419192983c94f34f20a457bb42644428ba8d1afb9b2e038047e2fe",
+            "work_item_id": "options_horizon_comparison_v1"
+          },
+          "objective_sha256": "22c420a38318a12b5bb307fbc3aa5b063cbc06813d69f95d85aab31455cab2dc",
+          "pipeline_id": "ppe",
+          "source_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+          "target_repository": "DanielTabakman/Probability-prediction-engine",
+          "work_item_id": "options_horizon_comparison_v1"
+        },
+        "generation": 2,
+        "linked_issue": null,
+        "objective_sha256": "22c420a38318a12b5bb307fbc3aa5b063cbc06813d69f95d85aab31455cab2dc",
+        "pr_number": null,
+        "repository": "DanielTabakman/Probability-prediction-engine",
+        "state": "active",
+        "updated_at": "2026-08-26T15:42:06Z",
+        "version": 1,
+        "writer_id": "build-next:build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251"
+      },
+      "job_id": "build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251",
+      "job_yaml": "C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/state/publisher-results-repo/results/DESKTOP-GE39O15/build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251/job.yaml",
+      "objective": {
+        "acceptance_contract_sha256": "53f633dbc065359553b6833e3846659fb838c8964e50f8533e2491341ee611fe",
+        "error_signature": null,
+        "linked_issue": null,
+        "release_identity": null,
+        "repository": "DanielTabakman/Probability-prediction-engine",
+        "stable_key": "69cf3480ed419192983c94f34f20a457bb42644428ba8d1afb9b2e038047e2fe",
+        "work_item_id": "options_horizon_comparison_v1"
+      },
+      "objective_sha256": "22c420a38318a12b5bb307fbc3aa5b063cbc06813d69f95d85aab31455cab2dc",
+      "plan_branch": "autobuilder/build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251"
+    },
+    "message": "Existing durable writer claim matches this writer.",
+    "objective_sha256": "22c420a38318a12b5bb307fbc3aa5b063cbc06813d69f95d85aab31455cab2dc",
+    "status": "NEW_WORK_ADMITTED"
+  }
+}

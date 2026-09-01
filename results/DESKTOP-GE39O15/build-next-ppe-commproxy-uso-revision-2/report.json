@@ -1,0 +1,67 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "config/assets.yaml",
+          "scripts/witness_asset_catalog.py",
+          "src/viz/embed_display_boundary.py",
+          "tests/test_assets_registry.py",
+          "tests/test_lab_asset_selection.py"
+        ],
+        "metadata": {
+          "output_tail": "t_id_from_environ({\"QUERY_STRING\": f\"{LAB_ASSET_QUERY_PARAM}=USO\"}) == \"USO\"\n \n \n def test_display_asset_meta_labels() -> None:\n\ntokens used\n94,014\nImplemented the full USO slice from the clean checkout, with no commit/push/PR.\n\nChanged:\n- Added enabled `USO` in [config/assets.yaml](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-CommProxy-Core-Slice002-revision-1-revision-2/config/assets.yaml:99) as `commodity_proxy`, `venue: equity`, yfinance-backed ETF options.\n- Added honest commodity proxy catalog copy in [src/viz/embed_display_boundary.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-CommProxy-Core-Slice002-revision-1-revision-2/src/viz/embed_display_boundary.py:57): `Commodities (ETF options)` plus non-futures disclosure.\n- Added USO to witness defaults/help in [scripts/witness_asset_catalog.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-CommProxy-Core-Slice002-revision-1-revision-2/scripts/witness_asset_catalog.py:145).\n- Updated expected registry/catalog/lab lists in [tests/test_assets_registry.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-CommProxy-Core-Slice002-revision-1-revision-2/tests/test_assets_registry.py:83) and [tests/test_lab_asset_selection.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-CommProxy-Core-Slice002-revision-1-revision-2/tests/test_lab_asset_selection.py:18).\n\nValidation:\n- `python -m py_compile src/viz/embed_display_boundary.py scripts/witness_asset_catalog.py` passed.\n- YAML parse/runtime registry check passed: enabled IDs now include `USO`; lab selector returns `[\"BTC\", \"ETH\", \"SOL\", \"IWM\", \"QQQ\", \"SPY\", \"NVDA\", \"USO\"]`; catalog validation returned `(True, None)`.\n- Focused pytest and witness CLI could not run in this shell because the local default Python is missing `pandas`, causing import failure before tests execute.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\workspaces\\PPE-CommProxy-Core-Slice002-revision-1-revision-2"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 5 changed path(s)",
+        "task_id": "PPE-CommProxy-Core-Slice002-revision-1-revision-2"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+    "status": "completed"
+  },
+  "completed_at": "2026-09-01T22:41:41.525254+00:00",
+  "job_id": "build-next-ppe-commproxy-uso-revision-2",
+  "job_sha256": "ba92bb69cac66160040816ccda9d4a2b2a9f7b7bc8e429355fedd19a804dabf6",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "changed_paths": [
+        "config/assets.yaml",
+        "scripts/witness_asset_catalog.py",
+        "src/viz/embed_display_boundary.py",
+        "tests/test_assets_registry.py",
+        "tests/test_lab_asset_selection.py"
+      ],
+      "complete_patch": true,
+      "lane_id": "PPE-CommProxy-Core-Slice002-revision-1-revision-2",
+      "patch_file": "patches/PPE-CommProxy-Core-Slice002-revision-1-revision-2.patch",
+      "patch_sha256": "3c0e701296beb0c8224217b8f3077c91133f9d15cd450ffcf8965ceb7d77d0af",
+      "task_id": "PPE-CommProxy-Core-Slice002-revision-1-revision-2"
+    }
+  ],
+  "publication_enabled": false,
+  "relay": {
+    "canonical_patch_sha256_by_task": {
+      "PPE-CommProxy-Core-Slice002-revision-1-revision-2": "3c0e701296beb0c8224217b8f3077c91133f9d15cd450ffcf8965ceb7d77d0af"
+    },
+    "canonical_report_role": "relay-corrected-canonical-downstream-report",
+    "complete_patch_reconstruction": true,
+    "machine_id": "DESKTOP-GE39O15",
+    "publication_enabled": false,
+    "relayed_at": "2026-09-01T22:41:47.326224+00:00",
+    "source_report_role": "original-worker-report-noncanonical-for-patch-identity",
+    "source_report_sha256": "2a68c16dae06b150096c525734c79c2fc26c2cefaf7efb81f1407858e8c9175f",
+    "version": 1
+  },
+  "requested_by": "MSOS Autobuilder automatic revision loop",
+  "source": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\queue\\pending\\build-next-ppe-commproxy-uso-revision-2.yaml",
+  "version": 1
+}

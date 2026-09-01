@@ -1,0 +1,228 @@
+diff --git a/config/assets.yaml b/config/assets.yaml
+index a0a08bf..3b19a3f 100644
+--- a/config/assets.yaml
++++ b/config/assets.yaml
+@@ -96,6 +96,23 @@ assets:
+     trust_notes:
+       - "Russell 2000 ETF; can be thinner than SPY/QQQ."
+ 
++  USO:
++    label: "USO options (oil ETF)"
++    asset_class: commodity_proxy
++    tier: extended
++    venue: equity
++    equity_symbol: USO
++    price_unit: USD
++    contract_multiplier: 100
++    data_source: yfinance
++    enabled: true
++    spread_width: 2
++    catalog:
++      group: commodity_proxy
++    trust_notes:
++      - "ETF options - crude exposure via USO; roll/contango not modeled."
++      - "Imperfect oil hedge vs CL futures."
++
+   SOL:
+     label: "SOL options"
+     asset_class: crypto
+diff --git a/scripts/witness_asset_catalog.py b/scripts/witness_asset_catalog.py
+index 82576ad..bcc374a 100644
+--- a/scripts/witness_asset_catalog.py
++++ b/scripts/witness_asset_catalog.py
+@@ -4,6 +4,7 @@ Usage:
+   python -m scripts.witness_asset_catalog --asset BTC
+   python -m scripts.witness_asset_catalog --all-enabled
+   python -m scripts.witness_asset_catalog --group crypto --pre-enable
++  python -m scripts.witness_asset_catalog --manifest-slice ppe_commodity_proxy_tier1_v1
+ 
+ CI uses mocked display-boundary checks by default; ``--live`` hits vendor fetch paths.
+ """
+@@ -39,7 +40,10 @@ from src.viz.embed_display_boundary import (  # noqa: E402
+ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+     ap = argparse.ArgumentParser(description="Witness tradeable asset catalog + display boundary")
+     ap.add_argument("--asset", action="append", default=[], help="Asset id (repeatable)")
+-    ap.add_argument("--group", help="Witness all assets in catalog.group (e.g. crypto, equity_index)")
++    ap.add_argument(
++        "--group",
++        help="Witness all assets in catalog.group (e.g. crypto, equity_index, commodity_proxy)",
++    )
+     ap.add_argument(
+         "--manifest-slice",
+         help="Witness assets declared in tier1 manifest chapter id",
+@@ -138,7 +142,7 @@ def resolve_asset_ids(args: argparse.Namespace) -> list[str]:
+         return list_asset_ids_for_manifest_chapter(args.manifest_slice)
+     if args.all_enabled:
+         return list_enabled_asset_ids()
+-    return ["BTC", "ETH", "NVDA"]
++    return ["BTC", "ETH", "NVDA", "USO"]
+ 
+ 
+ def main(argv: list[str] | None = None) -> int:
+diff --git a/src/viz/embed_display_boundary.py b/src/viz/embed_display_boundary.py
+index f0baf26..2dd6135 100644
+--- a/src/viz/embed_display_boundary.py
++++ b/src/viz/embed_display_boundary.py
+@@ -54,6 +54,12 @@ DISPLAY_SUMMARY_MAX_EXPIRIES = 5
+ CATALOG_PAYLOAD_KIND = "asset_catalog"
+ CATALOG_PAYLOAD_SCHEMA_VERSION = 1
+ EMBED_ONLY_FALLBACK_MODE = "streamlit_embed_only"
++CATALOG_GROUP_LABEL_OVERRIDES: dict[str, str] = {
++    "commodity_proxy": "Commodities (ETF options)",
++}
++CATALOG_GROUP_DISCLOSURES: dict[str, str] = {
++    "commodity_proxy": "ETF options exposure; not CME/COMEX futures.",
++}
+ 
+ # MSOS Strategy Lab belief presets — illustrative lognormal shifts vs market reference (display only).
+ BELIEF_TUNING_BOUNDS: dict[str, dict[str, float]] = {
+@@ -336,30 +342,28 @@ def build_asset_catalog_response() -> dict[str, Any]:
+         gid = str(entry.get("catalog_group") or "other")
+         by_group.setdefault(gid, []).append(entry)
+ 
++    def _group_payload(gid: str, label: str) -> dict[str, Any]:
++        group: dict[str, Any] = {
++            "id": gid,
++            "label": CATALOG_GROUP_LABEL_OVERRIDES.get(gid, label),
++            "assets": by_group[gid],
++        }
++        if gid in CATALOG_GROUP_DISCLOSURES:
++            group["disclosure"] = CATALOG_GROUP_DISCLOSURES[gid]
++        return group
++
+     groups: list[dict[str, Any]] = []
+     seen: set[str] = set()
+     for row in catalog_group_order():
+         gid = str(row.get("id") or "").strip()
+         if not gid or gid not in by_group:
+             continue
+-        groups.append(
+-            {
+-                "id": gid,
+-                "label": str(row.get("label") or gid),
+-                "assets": by_group[gid],
+-            }
+-        )
++        groups.append(_group_payload(gid, str(row.get("label") or gid)))
+         seen.add(gid)
+     for gid in sorted(by_group):
+         if gid in seen:
+             continue
+-        groups.append(
+-            {
+-                "id": gid,
+-                "label": gid.replace("_", " ").title(),
+-                "assets": by_group[gid],
+-            }
+-        )
++        groups.append(_group_payload(gid, gid.replace("_", " ").title()))
+ 
+     return {
+         "schema_version": CATALOG_PAYLOAD_SCHEMA_VERSION,
+diff --git a/tests/test_assets_registry.py b/tests/test_assets_registry.py
+index 18537ff..dd2353c 100644
+--- a/tests/test_assets_registry.py
++++ b/tests/test_assets_registry.py
+@@ -34,7 +34,19 @@ def test_assets_registry_schema_v2() -> None:
+     assert default_asset_id() == "ETH"
+     assets = reg.get("assets")
+     assert isinstance(assets, dict)
+-    assert set(assets) >= {"BTC", "ETH", "NVDA", "SOL", "HYPE", "BNB", "XRP", "SPY", "QQQ", "IWM"}
++    assert set(assets) >= {
++        "BTC",
++        "ETH",
++        "NVDA",
++        "SOL",
++        "HYPE",
++        "BNB",
++        "XRP",
++        "SPY",
++        "QQQ",
++        "IWM",
++        "USO",
++    }
+     for asset_id in ("BTC", "ETH"):
+         entry = assets[asset_id]
+         assert entry.get("venue") == "deribit"
+@@ -58,12 +70,18 @@ def test_assets_registry_schema_v2() -> None:
+     assert hype.get("venue") == "hyperliquid"
+     assert hype.get("enabled") is True
+     assert hype.get("exposure_only") is True
++    uso = assets["USO"]
++    assert uso.get("venue") == "equity"
++    assert uso.get("asset_class") == "commodity_proxy"
++    assert uso.get("enabled") is True
++    assert uso.get("catalog", {}).get("group") == "commodity_proxy"
++    assert "ETF options" in " ".join(uso.get("trust_notes") or [])
+ 
+ 
+ def test_list_enabled_asset_ids() -> None:
+     load_assets_registry.cache_clear()
+-    assert list_enabled_asset_ids() == ["BTC", "ETH", "HYPE", "IWM", "NVDA", "QQQ", "SOL", "SPY"]
+-    assert set(list_asset_ids()) >= {"BTC", "ETH", "NVDA", "SOL", "HYPE", "BNB", "XRP"}
++    assert list_enabled_asset_ids() == ["BTC", "ETH", "HYPE", "IWM", "NVDA", "QQQ", "SOL", "SPY", "USO"]
++    assert set(list_asset_ids()) >= {"BTC", "ETH", "NVDA", "SOL", "HYPE", "BNB", "XRP", "USO"}
+ 
+ 
+ def test_catalog_entry_shape() -> None:
+@@ -81,7 +99,7 @@ def test_catalog_entry_shape() -> None:
+ def test_list_catalog_entries_enabled_only() -> None:
+     load_assets_registry.cache_clear()
+     entries = list_catalog_entries()
+-    assert [e["id"] for e in entries] == ["BTC", "ETH", "HYPE", "IWM", "NVDA", "QQQ", "SOL", "SPY"]
++    assert [e["id"] for e in entries] == ["BTC", "ETH", "HYPE", "IWM", "NVDA", "QQQ", "SOL", "SPY", "USO"]
+     assert all(e["venue"] == "deribit" for e in entries if e["id"] in ("BTC", "ETH"))
+     nvda = next(e for e in entries if e["id"] == "NVDA")
+     assert nvda["venue"] == "equity"
+@@ -89,6 +107,10 @@ def test_list_catalog_entries_enabled_only() -> None:
+     assert sol["venue"] == "bybit"
+     hype = next(e for e in entries if e["id"] == "HYPE")
+     assert hype["venue"] == "hyperliquid"
++    uso = next(e for e in entries if e["id"] == "USO")
++    assert uso["venue"] == "equity"
++    assert uso["asset_class"] == "commodity_proxy"
++    assert uso["catalog_group"] == "commodity_proxy"
+ 
+ 
+ def test_hyperliquid_exposure_only_registry_helpers() -> None:
+@@ -153,7 +175,11 @@ def test_asset_class_and_group_helpers() -> None:
+     assert asset_class("BTC") == "crypto"
+     assert asset_class("NVDA") == "equity_mega"
+     assert catalog_group("ETH") == "crypto"
++    assert catalog_group("USO") == "commodity_proxy"
+     assert asset_tier("BTC") == "core"
++    assert asset_tier("USO") == "extended"
+     assert asset_venue("NVDA") == "equity"
++    assert asset_venue("USO") == "equity"
+     assert is_asset_enabled("BTC") is True
+     assert is_asset_enabled("NVDA") is True
++    assert is_asset_enabled("USO") is True
+diff --git a/tests/test_lab_asset_selection.py b/tests/test_lab_asset_selection.py
+index 474a376..3839006 100644
+--- a/tests/test_lab_asset_selection.py
++++ b/tests/test_lab_asset_selection.py
+@@ -15,7 +15,7 @@ from src.viz.lab_asset_selection import (
+ def test_list_selectable_lab_asset_ids_uses_enabled_registry_only() -> None:
+     load_assets_registry.cache_clear()
+     ids = list_selectable_lab_asset_ids()
+-    assert ids == ["BTC", "ETH", "SOL", "IWM", "QQQ", "SPY", "NVDA"]
++    assert ids == ["BTC", "ETH", "SOL", "IWM", "QQQ", "SPY", "NVDA", "USO"]
+     assert "NVDA" in ids
+ 
+ 
+@@ -24,6 +24,7 @@ def test_normalize_lab_asset_id_rejects_disabled_and_unknown() -> None:
+     assert normalize_lab_asset_id("ETH") == "ETH"
+     assert normalize_lab_asset_id("NVDA") == "NVDA"
+     assert normalize_lab_asset_id("SOL") == "SOL"
++    assert normalize_lab_asset_id("USO") == "USO"
+     default = default_asset_id()
+     assert normalize_lab_asset_id("DOGE") == default
+     assert normalize_lab_asset_id(None) == default
+@@ -34,6 +35,7 @@ def test_lab_asset_id_from_environ_query_param() -> None:
+     environ = {"QUERY_STRING": f"{LAB_ASSET_QUERY_PARAM}=ETH"}
+     assert lab_asset_id_from_environ(environ) == "ETH"
+     assert lab_asset_id_from_environ({"QUERY_STRING": f"{LAB_ASSET_QUERY_PARAM}=NVDA"}) == "NVDA"
++    assert lab_asset_id_from_environ({"QUERY_STRING": f"{LAB_ASSET_QUERY_PARAM}=USO"}) == "USO"
+ 
+ 
+ def test_display_asset_meta_labels() -> None:

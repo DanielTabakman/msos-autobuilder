@@ -1,0 +1,9 @@
+{
+  "canonical_patch_sha256_by_task": {
+    "PPE-CommProxy-Core-Slice002": "7c3459a9f09aa219d8d33a12b93382c5ec88761c64316f3f384db42bd24c085a"
+  },
+  "corrected_report_sha256": "e25e132f8cebf76511f3d4b58737e5ca56aa8931a5eb6d43eeac858307bb242c",
+  "publication_enabled": false,
+  "source_report_sha256": "adefa218edd455a08f3c131913fcfcedc544fe954a6cc32e676e8a837f1a93ae",
+  "version": 1
+}

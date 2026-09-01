@@ -1,0 +1,103 @@
+diff --git a/config/assets.yaml b/config/assets.yaml
+index a0a08bf..3b19a3f 100644
+--- a/config/assets.yaml
++++ b/config/assets.yaml
+@@ -96,6 +96,23 @@ assets:
+     trust_notes:
+       - "Russell 2000 ETF; can be thinner than SPY/QQQ."
+ 
++  USO:
++    label: "USO options (oil ETF)"
++    asset_class: commodity_proxy
++    tier: extended
++    venue: equity
++    equity_symbol: USO
++    price_unit: USD
++    contract_multiplier: 100
++    data_source: yfinance
++    enabled: true
++    spread_width: 2
++    catalog:
++      group: commodity_proxy
++    trust_notes:
++      - "ETF options - crude exposure via USO; roll/contango not modeled."
++      - "Imperfect oil hedge vs CL futures."
++
+   SOL:
+     label: "SOL options"
+     asset_class: crypto
+diff --git a/scripts/witness_asset_catalog.py b/scripts/witness_asset_catalog.py
+index 82576ad..c422dc6 100644
+--- a/scripts/witness_asset_catalog.py
++++ b/scripts/witness_asset_catalog.py
+@@ -68,6 +68,13 @@ def run_witness(
+     pre_enable: bool = False,
+ ) -> dict[str, Any]:
+     catalog_ok, catalog_msg, catalog = witness_catalog_shape()
++    catalog_by_id = {
++        str(asset.get("id") or "").upper(): asset
++        for group in catalog.get("groups", [])
++        if isinstance(group, dict)
++        for asset in group.get("assets", [])
++        if isinstance(asset, dict)
++    }
+     results: list[dict[str, Any]] = []
+     all_ok = catalog_ok
+ 
+@@ -113,6 +120,7 @@ def run_witness(
+                 "ok": ok,
+                 "detail": detail,
+                 "venue": asset_venue(aid),
++                "catalog_entry": catalog_by_id.get(aid),
+                 "live": live,
+             }
+         )
+diff --git a/src/viz/embed_display_boundary.py b/src/viz/embed_display_boundary.py
+index f0baf26..a59cfa5 100644
+--- a/src/viz/embed_display_boundary.py
++++ b/src/viz/embed_display_boundary.py
+@@ -286,6 +286,7 @@ def build_distribution_display_payload(
+             aid = str(export_rows[0]["asset"]).strip().upper() or default_asset_id()
+     export_rows = annotate_export_rows_trust(export_rows)
+     asset_block = display_asset_meta(aid)
++    asset_block.update(_asset_display_labels(aid))
+     summary = summary_panel_contract(export_rows)
+     series = []
+     for row in export_rows:
+@@ -328,9 +329,35 @@ def serialize_distribution_display_payload(payload: dict[str, Any]) -> str:
+     return json.dumps(payload, separators=(",", ":"), sort_keys=True)
+ 
+ 
++def _asset_display_labels(asset_id: str) -> dict[str, str]:
++    aid = str(asset_id or default_asset_id()).strip().upper()
++    entry = get_asset(aid)
++    label = str(entry.get("label") or f"{aid} options")
++    if str(entry.get("asset_class") or "").strip().lower() == "commodity_proxy":
++        symbol = str(entry.get("equity_symbol") or aid).strip().upper() or aid
++        return {
++            "label": label,
++            "instrument_label": label,
++            "price_axis_label": f"{symbol} ETF price at expiry",
++        }
++    return {
++        "label": label,
++        "instrument_label": label,
++        "price_axis_label": f"{aid} price at expiry",
++    }
++
++
++def _catalog_display_entry(entry: dict[str, Any]) -> dict[str, Any]:
++    aid = str(entry.get("id") or "").strip().upper()
++    out = dict(entry)
++    if aid:
++        out.update(_asset_display_labels(aid))
++    return out
++
++
+ def build_asset_catalog_response() -> dict[str, Any]:
+     """Grouped enabled assets for MSOS / Streamlit pickers (metadata only — no prices)."""
+-    entries = list_catalog_entries(enabled_only=True)
++    entries = [_catalog_display_entry(entry) for entry in list_catalog_entries(enabled_only=True)]
+     by_group: dict[str, list[dict[str, Any]]] = {}
+     for entry in entries:
+         gid = str(entry.get("catalog_group") or "other")

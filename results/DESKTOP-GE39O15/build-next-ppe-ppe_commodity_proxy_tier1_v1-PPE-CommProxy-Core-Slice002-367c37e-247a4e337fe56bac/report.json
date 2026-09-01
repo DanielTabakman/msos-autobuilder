@@ -1,0 +1,63 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "config/assets.yaml",
+          "scripts/witness_asset_catalog.py",
+          "src/viz/embed_display_boundary.py"
+        ],
+        "metadata": {
+          "output_tail": "02` workspace changes only in the allowed paths.\n\n**Changed**\n- Added enabled USO registry row in [config/assets.yaml](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-CommProxy-Core-Slice002/config/assets.yaml:99): `asset_class: commodity_proxy`, `venue: equity`, `data_source: yfinance`, label `USO options (oil ETF)`.\n- Updated display payload/catalog copy in [src/viz/embed_display_boundary.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-CommProxy-Core-Slice002/src/viz/embed_display_boundary.py:289) so commodity proxies expose honest ETF labels, including `USO ETF price at expiry`.\n- Updated witness report rows in [scripts/witness_asset_catalog.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-CommProxy-Core-Slice002/scripts/witness_asset_catalog.py:71) to include the resolved catalog entry for relay evidence.\n\n**Validation**\n- PASS: `python -m py_compile src/viz/embed_display_boundary.py scripts/witness_asset_catalog.py`\n- PASS: `python -m ruff check src/viz/embed_display_boundary.py scripts/witness_asset_catalog.py`\n- PASS: `git diff --check -- config/assets.yaml src/viz/embed_display_boundary.py scripts/witness_asset_catalog.py`\n- PASS: isolated USO registry/catalog/display contract check with missing import side effects stubbed.\n- PASS: isolated `witness_asset_catalog.run_witness([\"USO\"], live=False)` check with missing import side effects stubbed.\n\n**Blocked Validation**\n- `python -m pytest ...` and `python -m scripts.witness_asset_catalog --asset USO --json` are blocked in this shell by missing dependencies: first `pandas`, then `requests`.\n- `python scripts/run_pushable_gate.py` is blocked before test execution: `failed to compute changed files` from `git diff --name-only origin/main...HEAD`.\n\nNo commit, push, smoke, closeout, selection, queue, or control-plane update was performed. Current dirty files are exactly the three allowed files.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\workspaces\\PPE-CommProxy-Core-Slice002"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 3 changed path(s)",
+        "task_id": "PPE-CommProxy-Core-Slice002"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+    "status": "completed"
+  },
+  "completed_at": "2026-09-01T18:33:40.078358+00:00",
+  "job_id": "build-next-ppe-ppe_commodity_proxy_tier1_v1-PPE-CommProxy-Core-Slice002-367c37e-247a4e337fe56bac",
+  "job_sha256": "4e43cbbca26d76f0f187bd480feca3a0e214bb82c440a5b6c357460498170b70",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "changed_paths": [
+        "config/assets.yaml",
+        "scripts/witness_asset_catalog.py",
+        "src/viz/embed_display_boundary.py"
+      ],
+      "complete_patch": true,
+      "lane_id": "PPE-CommProxy-Core-Slice002",
+      "patch_file": "patches/PPE-CommProxy-Core-Slice002.patch",
+      "patch_sha256": "7c3459a9f09aa219d8d33a12b93382c5ec88761c64316f3f384db42bd24c085a",
+      "task_id": "PPE-CommProxy-Core-Slice002"
+    }
+  ],
+  "publication_enabled": false,
+  "relay": {
+    "canonical_patch_sha256_by_task": {
+      "PPE-CommProxy-Core-Slice002": "7c3459a9f09aa219d8d33a12b93382c5ec88761c64316f3f384db42bd24c085a"
+    },
+    "canonical_report_role": "relay-corrected-canonical-downstream-report",
+    "complete_patch_reconstruction": true,
+    "machine_id": "DESKTOP-GE39O15",
+    "publication_enabled": false,
+    "relayed_at": "2026-09-01T18:33:59.758398+00:00",
+    "source_report_role": "original-worker-report-noncanonical-for-patch-identity",
+    "source_report_sha256": "adefa218edd455a08f3c131913fcfcedc544fe954a6cc32e676e8a837f1a93ae",
+    "version": 1
+  },
+  "requested_by": "capacity-one refill controller",
+  "source": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\queue\\pending\\build-next-ppe-ppe_commodity_proxy_tier1_v1-PPE-CommProxy-Core-Slice002-367c37e-247a4e337fe56bac.yaml",
+  "version": 1
+}

@@ -11,7 +11,9 @@
   "allowed_paths": [
     "config/assets.yaml",
     "src/viz/embed_display_boundary.py",
-    "scripts/witness_asset_catalog.py"
+    "scripts/witness_asset_catalog.py",
+    "tests/test_assets_registry.py",
+    "tests/test_lab_asset_selection.py"
   ],
   "native_slice": {
     "slice_id": "PPE-CommProxy-Core-Slice002",
@@ -22,7 +24,9 @@
     "touch_set": [
       "config/assets.yaml",
       "src/viz/embed_display_boundary.py",
-      "scripts/witness_asset_catalog.py"
+      "scripts/witness_asset_catalog.py",
+      "tests/test_assets_registry.py",
+      "tests/test_lab_asset_selection.py"
     ],
     "sequence_index": 1,
     "total_slices": 4,
@@ -49,7 +53,9 @@
       "touchSet": [
         "config/assets.yaml",
         "src/viz/embed_display_boundary.py",
-        "scripts/witness_asset_catalog.py"
+        "scripts/witness_asset_catalog.py",
+        "tests/test_assets_registry.py",
+        "tests/test_lab_asset_selection.py"
       ]
     }
   },
@@ -123,5 +129,5 @@
   "validation": {
     "profile_id": "ppe-ci-pytest-v1"
   },
-  "work_item_source_sha256_v1": "6d97a6bf3f4bf8126b9e14be231a03137ef8dd6c42e107ef9cb3cdc8f67720c3"
+  "work_item_source_sha256_v1": "8c59b3e9c0fcfdf6c26ea23e4bdf297626a1263433882bf0060788a321d95baa"
 }

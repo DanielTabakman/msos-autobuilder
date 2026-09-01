@@ -295,6 +295,25 @@ def _publisher_not_applicable_receipt_path(
     )
 
 
+def _publisher_drafted_receipt_path(
+    host_root: Path,
+    *,
+    machine_id: str,
+    job_id: str,
+    gate_sha: str,
+) -> Path:
+    safe_job_id = _safe_segment(job_id, fallback="job")
+    return (
+        host_root
+        / "state"
+        / "publisher-evidence"
+        / "sources"
+        / "drafted"
+        / machine_id
+        / f"{safe_job_id}.{gate_sha}.json"
+    )
+
+
 def _linked_issue_from_text(text: str) -> int | None:
     matches = re.findall(r"(?i)(?:fixes|closes|resolves|issue)\s+#(\d+)", text)
     if not matches:
@@ -1540,6 +1559,83 @@ class ControlledPublisher:
         results_commit = self.evidence.publish_completion_sidecars(job_dir, sidecars)
         return publication_report, results_commit
 
+    def _record_drafted_publication_review(
+        self,
+        *,
+        job_id: str,
+        job_dir: Path,
+        gate_sha: str,
+        publication: Mapping[str, Any],
+        results_commit: str,
+    ) -> None:
+        identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
+        if identity is None:
+            raise PublisherError("drafted publication_review lacks attempt identity")
+        product_commit = str(
+            publication.get("product_commit") or publication.get("commit_sha") or ""
+        ).lower()
+        results_commit = str(results_commit or "").lower()
+        product_branch = str(
+            publication.get("product_branch") or publication.get("branch") or ""
+        )
+        pr_url = str(publication.get("pr_url") or "")
+        published_at = str(publication.get("published_at") or "")
+        source_receipt = _publisher_drafted_receipt_path(
+            self.host_root,
+            machine_id=self.config.machine_id,
+            job_id=job_id,
+            gate_sha=gate_sha,
+        )
+        try:
+            _immutable_write_json(
+                source_receipt,
+                {
+                    "version": 1,
+                    "receipt_type": "publication_review.disposition.drafted.source",
+                    "machine_id": self.config.machine_id,
+                    "source_job_id": job_id,
+                    "gate_report_sha256": gate_sha,
+                    "pr_number": publication.get("pr_number"),
+                    "pr_url": pr_url,
+                    "product_branch": product_branch,
+                    "product_commit": product_commit,
+                    "results_commit": results_commit,
+                    "recorded_at": published_at,
+                },
+            )
+            emit_lifecycle_evidence(
+                self.host_root,
+                evidence_kind="publication_review.disposition",
+                identity=identity,
+                source_path=source_receipt,
+                payload={
+                    "publication_review_disposition": "drafted",
+                    "reason_code": "publication_review.drafted.v1",
+                    "draft_pr": pr_url,
+                    "product_branch": product_branch,
+                    "product_commit": product_commit,
+                    "results_commit": results_commit,
+                },
+                final=True,
+                closed_status="final",
+                observed_at=published_at,
+            )
+        except Exception as exc:
+            record_producer_evidence_error(
+                self.host_root,
+                producer="controlled_publisher",
+                evidence_kind="publication_review.disposition",
+                error=exc,
+                identity=identity,
+                primary_outcome={
+                    "job_id": job_id,
+                    "publication_review_disposition": "drafted",
+                },
+            )
+            if isinstance(exc, PublisherError):
+                raise
+            raise PublisherError("drafted publication_review evidence was not recorded") from exc
+
     def run_once(self) -> tuple[str, ...]:
         self._last_error_marker_written = False
         self.state.mkdir(parents=True, exist_ok=True)
@@ -1590,7 +1686,27 @@ class ControlledPublisher:
                             gate_sha=gate_sha,
                             entry=existing,
                         )
+                        report_path = job_dir / "publication-report.json"
+                        if not report_path.is_file():
+                            raise PublisherError(
+                                "verified publication is missing publication-report.json"
+                            )
+                        report = json.loads(report_path.read_text(encoding="utf-8"))
+                        if not isinstance(report, dict):
+                            raise PublisherError("publication-report.json must be a mapping")
+                        self._record_drafted_publication_review(
+                            job_id=job_id,
+                            job_dir=job_dir,
+                            gate_sha=gate_sha,
+                            publication=report,
+                            results_commit=str(
+                                existing.get("results_commit") or report.get("results_commit") or ""
+                            ),
+                        )
                     except PublisherError as exc:
+                        self._write_error_marker(exc, associated=associated)
+                        raise
+                    except (OSError, json.JSONDecodeError) as exc:
                         self._write_error_marker(exc, associated=associated)
                         raise
                     verified.add(job_id)
@@ -1671,6 +1787,13 @@ class ControlledPublisher:
                         "status": report["status"],
                     }
                     self._save_ledger(ledger)
+                    self._record_drafted_publication_review(
+                        job_id=job_id,
+                        job_dir=job_dir,
+                        gate_sha=gate_sha,
+                        publication=report,
+                        results_commit=results_commit,
+                    )
                     processed.append(job_id)
                     verified.add(job_id)
                 except (PublisherError, OSError, KeyError, TypeError, ValueError) as exc:

@@ -1,0 +1,35 @@
+diff --git a/tests/test_assets_registry.py b/tests/test_assets_registry.py
+index 18537ff..621c66b 100644
+--- a/tests/test_assets_registry.py
++++ b/tests/test_assets_registry.py
+@@ -62,7 +62,7 @@ def test_assets_registry_schema_v2() -> None:
+ 
+ def test_list_enabled_asset_ids() -> None:
+     load_assets_registry.cache_clear()
+-    assert list_enabled_asset_ids() == ["BTC", "ETH", "HYPE", "IWM", "NVDA", "QQQ", "SOL", "SPY"]
++    assert list_enabled_asset_ids() == ["BTC", "ETH", "HYPE", "IWM", "NVDA", "QQQ", "SOL", "SPY", "USO"]
+     assert set(list_asset_ids()) >= {"BTC", "ETH", "NVDA", "SOL", "HYPE", "BNB", "XRP"}
+ 
+ 
+@@ -81,7 +81,7 @@ def test_catalog_entry_shape() -> None:
+ def test_list_catalog_entries_enabled_only() -> None:
+     load_assets_registry.cache_clear()
+     entries = list_catalog_entries()
+-    assert [e["id"] for e in entries] == ["BTC", "ETH", "HYPE", "IWM", "NVDA", "QQQ", "SOL", "SPY"]
++    assert [e["id"] for e in entries] == ["BTC", "ETH", "HYPE", "IWM", "NVDA", "QQQ", "SOL", "SPY", "USO"]
+     assert all(e["venue"] == "deribit" for e in entries if e["id"] in ("BTC", "ETH"))
+     nvda = next(e for e in entries if e["id"] == "NVDA")
+     assert nvda["venue"] == "equity"
+diff --git a/tests/test_lab_asset_selection.py b/tests/test_lab_asset_selection.py
+index 474a376..1ed9578 100644
+--- a/tests/test_lab_asset_selection.py
++++ b/tests/test_lab_asset_selection.py
+@@ -15,7 +15,7 @@ from src.viz.lab_asset_selection import (
+ def test_list_selectable_lab_asset_ids_uses_enabled_registry_only() -> None:
+     load_assets_registry.cache_clear()
+     ids = list_selectable_lab_asset_ids()
+-    assert ids == ["BTC", "ETH", "SOL", "IWM", "QQQ", "SPY", "NVDA"]
++    assert ids == ["BTC", "ETH", "SOL", "IWM", "QQQ", "SPY", "NVDA", "USO"]
+     assert "NVDA" in ids
+ 
+ 

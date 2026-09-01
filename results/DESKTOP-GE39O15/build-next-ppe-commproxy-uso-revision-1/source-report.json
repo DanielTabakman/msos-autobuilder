@@ -1,0 +1,43 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "tests/test_assets_registry.py",
+          "tests/test_lab_asset_selection.py"
+        ],
+        "metadata": {
+          "output_tail": "t_catalog_entries_enabled_only() -> None:\n     load_assets_registry.cache_clear()\n     entries = list_catalog_entries()\n-    assert [e[\"id\"] for e in entries] == [\"BTC\", \"ETH\", \"HYPE\", \"IWM\", \"NVDA\", \"QQQ\", \"SOL\", \"SPY\"]\n+    assert [e[\"id\"] for e in entries] == [\"BTC\", \"ETH\", \"HYPE\", \"IWM\", \"NVDA\", \"QQQ\", \"SOL\", \"SPY\", \"USO\"]\n     assert all(e[\"venue\"] == \"deribit\" for e in entries if e[\"id\"] in (\"BTC\", \"ETH\"))\n     nvda = next(e for e in entries if e[\"id\"] == \"NVDA\")\n     assert nvda[\"venue\"] == \"equity\"\ndiff --git a/tests/test_lab_asset_selection.py b/tests/test_lab_asset_selection.py\nindex 474a376de3be1b501fd41eeee9d5ebeac8e524ae..1ed9578eec8914288b43468764b124fcb045b40a\n--- a/tests/test_lab_asset_selection.py\n+++ b/tests/test_lab_asset_selection.py\n@@ -15,7 +15,7 @@\n def test_list_selectable_lab_asset_ids_uses_enabled_registry_only() -> None:\n     load_assets_registry.cache_clear()\n     ids = list_selectable_lab_asset_ids()\n-    assert ids == [\"BTC\", \"ETH\", \"SOL\", \"IWM\", \"QQQ\", \"SPY\", \"NVDA\"]\n+    assert ids == [\"BTC\", \"ETH\", \"SOL\", \"IWM\", \"QQQ\", \"SPY\", \"NVDA\", \"USO\"]\n     assert \"NVDA\" in ids\n \n \n\ntokens used\n38,597\nUpdated the stale test expectations to include `USO`:\n\n- [tests/test_assets_registry.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-CommProxy-Core-Slice002-revision-1/tests/test_assets_registry.py:65): enabled asset list and catalog list now expect `USO`.\n- [tests/test_lab_asset_selection.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-CommProxy-Core-Slice002-revision-1/tests/test_lab_asset_selection.py:18): lab selectable list now expects `USO`.\n\nValidation:\n- `python -m py_compile tests/test_assets_registry.py tests/test_lab_asset_selection.py` passed.\n- `python -m pytest -q tests/test_assets_registry.py tests/test_lab_asset_selection.py` could not collect because this local Python environment is missing `pandas`.\n\nNo commit, push, publish, or PR was performed.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\workspaces\\PPE-CommProxy-Core-Slice002-revision-1"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 2 changed path(s)",
+        "task_id": "PPE-CommProxy-Core-Slice002-revision-1"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+    "status": "completed"
+  },
+  "completed_at": "2026-09-01T22:17:16.212070+00:00",
+  "job_id": "build-next-ppe-commproxy-uso-revision-1",
+  "job_sha256": "684975ca308b64f117d7f0f0e9453599f3d2c24aebb814228fa39e40f941a8d6",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "lane_id": "PPE-CommProxy-Core-Slice002-revision-1",
+      "patch_file": "patches/PPE-CommProxy-Core-Slice002-revision-1.patch",
+      "patch_sha256": "b2f827ec1d341c5f58f9b85b64ea71e9791fa86d9bccccbc1270976a40f7067f",
+      "task_id": "PPE-CommProxy-Core-Slice002-revision-1"
+    }
+  ],
+  "publication_enabled": false,
+  "requested_by": "MSOS Autobuilder automatic revision loop",
+  "source": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\queue\\pending\\build-next-ppe-commproxy-uso-revision-1.yaml",
+  "version": 1
+}

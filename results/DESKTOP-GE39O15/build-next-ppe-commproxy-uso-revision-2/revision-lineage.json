@@ -1,0 +1,12 @@
+{
+  "gate_report_sha256": "adb7730ad0ddd9aa01852223fa69aababfe46da905a04ca4333feecbaa58b4b8",
+  "job_id": "build-next-ppe-commproxy-uso-revision-2",
+  "not_applicable_evidence": true,
+  "producer": "controlled_publisher",
+  "product_commit": "f476b65291e7fc027282fc04dfcacd0740a42801",
+  "publication_report_sha256": "d52bcc00abf959197216996021f51543655bf35c964e59910264cae67b1c27dc",
+  "revision_disposition": "not_applicable",
+  "revision_evidence_id": "13cc6d01291b524868769c469deb412a",
+  "revision_evidence_sha256": "baa45bc3a400cb87a197d3d932f5ecd59e5d04b6b059f11f1a19b40e0426ee7c",
+  "version": 1
+}

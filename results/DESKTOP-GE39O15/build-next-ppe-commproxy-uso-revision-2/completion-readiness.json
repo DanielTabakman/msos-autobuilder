@@ -1,0 +1,14 @@
+{
+  "canon_conflict": false,
+  "claim_generation": 1,
+  "claim_writer_id": "build-next:build-next-ppe-ppe_commodity_proxy_tier1_v1-PPE-CommProxy-Core-Slice002-367c37e-247a4e337fe56bac",
+  "evidence_conflict": false,
+  "founder_decision_required": false,
+  "job_id": "build-next-ppe-commproxy-uso-revision-2",
+  "objective_sha256": "ef6817334a32c9b1277ad58b1bbf10f1ef092c1a5a43ee5074452869674461e0",
+  "ownership_conflict": false,
+  "pr_number": 5429,
+  "producer": "controlled_publisher",
+  "product_commit": "f476b65291e7fc027282fc04dfcacd0740a42801",
+  "version": 1
+}

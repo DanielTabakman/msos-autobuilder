@@ -25,6 +25,8 @@ manifest:
     - config/assets.yaml
     - src/viz/embed_display_boundary.py
     - scripts/witness_asset_catalog.py
+    - tests/test_assets_registry.py
+    - tests/test_lab_asset_selection.py
     forbidden_paths:
     - .git/**
     - .github/workflows/**
@@ -270,3 +272,324 @@ manifest:
       \ or priority policy.\n- Do not run continuous refill or dispatch additional\
       \ work.\n\nPreserve the original allowed/forbidden path boundaries. Add or update\
       \ focused tests. Do not commit, push, publish, or open a pull request."
+founder_build_next:
+  version: 1
+  pipeline_id: ppe
+  work_item_id: ppe_commodity_proxy_tier1_v1
+  repository: DanielTabakman/Probability-prediction-engine
+  registered_adapter: ppe_operator
+  source:
+    remote: origin
+    remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+    repository: DanielTabakman/Probability-prediction-engine
+    ref: HEAD
+    remote_ref: 367c37e7618183ac9f7640c7b1204aee66469fa7
+    commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+  work_item_source_sha256_v1: 6d97a6bf3f4bf8126b9e14be231a03137ef8dd6c42e107ef9cb3cdc8f67720c3
+  phase_plan: docs/SOP/PHASE_PLANS/ppe_commodity_proxy_tier1_v1_relay.json
+  native_slice:
+    slice_id: PPE-CommProxy-Core-Slice002
+    build_branch: build/auto/PPE-CommProxy-Core-Slice002-comm_proxy
+    layer_preset: PPE_CORE
+    worker_mode: local-agent
+    declared_plane: PRODUCT-PLANE
+    touch_set:
+    - config/assets.yaml
+    - src/viz/embed_display_boundary.py
+    - scripts/witness_asset_catalog.py
+    - tests/test_assets_registry.py
+    - tests/test_lab_asset_selection.py
+    sequence_index: 1
+    total_slices: 4
+    previous_slices:
+    - PPE-CommProxy-Control-Slice001
+    following_slices:
+    - PPE-CommProxy-Witness-Slice003
+    - PPE-CommProxy-Closeout-Slice004
+  prerequisites:
+    source: ppe_native_read_only
+    evidence: &id001
+      frozen_target_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+      target_remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      phase_plan: docs/SOP/PHASE_PLANS/ppe_commodity_proxy_tier1_v1_relay.json
+      phase_plan_blob_sha: 80c743445f203086365e679362567c2c5b28c41e
+      control_slice:
+        slice_id: PPE-CommProxy-Control-Slice001
+        implementationStatus: COMPLETE
+        nonBlocking: true
+      source_files:
+      - path: docs/SOP/PHASE_PLANS/ppe_commodity_proxy_tier1_v1_relay.json
+        exists: true
+        git_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+        blob_sha: 80c743445f203086365e679362567c2c5b28c41e
+        sha256: 79f33761c63c89d22991a5da367bea42319e170f7438de836a5f31590384cb91
+      - path: docs/SOP/SPRINT_PPE_COMMODITY_PROXY_TIER1_V1.md
+        exists: true
+        git_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+        blob_sha: a6b68de35fe8367210239240142b89d9ec8e186a
+        sha256: 626a56fd5b609c9fbee289d7b238e9a3fe6cea7d823e62c848f0dd685323cb06
+      - path: docs/SOP/POST_PPE_COMMODITY_PROXY_TIER1_V1_SELECTION.md
+        exists: true
+        git_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+        blob_sha: 47b53e3cde12ff7c2f2b55fff1c0d109f934ddfc
+        sha256: b76ce13b78b86a35179b1bc89c6e4cfa86127fa68f487cf8cae9b9df0f57e248
+      - path: docs/SOP/PPE_COMMODITY_PROXY_TIER1_V1_EVIDENCE_STATUS.md
+        exists: true
+        git_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+        blob_sha: b4b205f5b501044df99eb2bf3114a01d93a4d70b
+        sha256: 0fddcfbbc86417ea3c50b1019bdf237c6f120be64f299d9b390b756d3ef48ffc
+      - path: docs/SOP/ACTIVE_PHASE_MANIFEST.json
+        exists: true
+        git_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+        blob_sha: bef16bafa160f5240b85c69b119b6ba627e041bb
+        sha256: c1425fc9fda014c0379113ff849a0466e3c31e5c4f489975becfbb913bf067dc
+    required_slices: &id002
+    - PPE-CommProxy-Control-Slice001
+    satisfied_slices: &id003
+    - PPE-CommProxy-Control-Slice001
+    non_blocking_slices: &id004 []
+  portfolio_selection_evidence:
+    version: 1
+    source:
+      remote: origin
+      remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      repository: DanielTabakman/Probability-prediction-engine
+      ref: HEAD
+      remote_ref: 367c37e7618183ac9f7640c7b1204aee66469fa7
+      commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+    selected:
+      pipeline_id: ppe
+      work_item_id: ppe_commodity_proxy_tier1_v1
+      trace: docs/SOP/PHASE_PLANS/ppe_commodity_proxy_tier1_v1_relay.json
+      packet_sha256: e095f80f63af2e6ec2d50fca9a661fce008903bbb64595c7050811291dd495ea
+    native_slice:
+      slice_id: PPE-CommProxy-Core-Slice002
+      build_branch: build/auto/PPE-CommProxy-Core-Slice002-comm_proxy
+      layer_preset: PPE_CORE
+      worker_mode: local-agent
+      declared_plane: PRODUCT-PLANE
+      touch_set:
+      - config/assets.yaml
+      - src/viz/embed_display_boundary.py
+      - scripts/witness_asset_catalog.py
+      sequence_index: 1
+      total_slices: 4
+      previous_slices:
+      - PPE-CommProxy-Control-Slice001
+      following_slices:
+      - PPE-CommProxy-Witness-Slice003
+      - PPE-CommProxy-Closeout-Slice004
+    prerequisites:
+      source: ppe_native_read_only
+      evidence: *id001
+      required_slices: *id002
+      satisfied_slices: *id003
+      non_blocking_slices: *id004
+    packet_sha256: e095f80f63af2e6ec2d50fca9a661fce008903bbb64595c7050811291dd495ea
+    admitted_target:
+      target_repository: DanielTabakman/Probability-prediction-engine
+      target_source_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+      target_remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      work_item_id: ppe_commodity_proxy_tier1_v1
+      pipeline_id: ppe
+      allowed_paths:
+      - config/assets.yaml
+      - src/viz/embed_display_boundary.py
+      - scripts/witness_asset_catalog.py
+      - tests/test_assets_registry.py
+      - tests/test_lab_asset_selection.py
+      adapter: ppe_operator
+      dependency_source_sha256: 47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394
+      validation_identity: ab82e84cd610fb621516aa06ff0a59b2672174e7f148f55825ff0f10700d83f7
+      packet_sha256: e095f80f63af2e6ec2d50fca9a661fce008903bbb64595c7050811291dd495ea
+    requested_exclusions:
+    - options_expression_fit_ranking_v1
+    - options_horizon_comparison_v1
+    refill_attempt:
+      version: 1
+      generation_id: refill-superseded-b5b9ae6b7c855baf1ddd0e06
+      attempt_ordinal: 2
+      retry_ordinal: 0
+      reason: initial
+      selected_work_item_id: ppe_commodity_proxy_tier1_v1
+    identity_sha256: 4a7b96ff74a1e17642da62e44ec534c53bdfccee779dcb81e9fa315d18574b5b
+  refill_attempt:
+    version: 1
+    generation_id: refill-superseded-b5b9ae6b7c855baf1ddd0e06
+    attempt_ordinal: 2
+    retry_ordinal: 0
+    reason: initial
+    selected_work_item_id: ppe_commodity_proxy_tier1_v1
+  authority:
+    publication_enabled: false
+    merge_enabled: false
+    product_main_write_enabled: false
+  work_admission:
+    status: NEW_WORK_ADMITTED
+    objective_sha256: ef6817334a32c9b1277ad58b1bbf10f1ef092c1a5a43ee5074452869674461e0
+    claim_generation: 1
+    claim_writer_id: build-next:build-next-ppe-ppe_commodity_proxy_tier1_v1-PPE-CommProxy-Core-Slice002-367c37e-247a4e337fe56bac
+    authorized_paths:
+    - config/assets.yaml
+    - src/viz/embed_display_boundary.py
+    - scripts/witness_asset_catalog.py
+    - tests/test_assets_registry.py
+    - tests/test_lab_asset_selection.py
+    objective_identity:
+      repository: DanielTabakman/Probability-prediction-engine
+      linked_issue: null
+      work_item_id: ppe_commodity_proxy_tier1_v1
+      stable_key: 57f39d497c832a440813171acfa30de26c5df4ef84cdabb3108cbe533b8392de
+      acceptance_contract_sha256: 9a56f183c7c389bf0487539945d6773d68c4620a53aa3fabf5ba40618e123168
+      error_signature: null
+      release_identity: null
+    acceptance_contract:
+      version: 1
+      pipeline_id: ppe
+      work_item_id: ppe_commodity_proxy_tier1_v1
+      adapter: ppe_operator
+      target_repository: DanielTabakman/Probability-prediction-engine
+      native_slice_id: PPE-CommProxy-Core-Slice002
+      authorized_paths:
+      - config/assets.yaml
+      - src/viz/embed_display_boundary.py
+      - scripts/witness_asset_catalog.py
+      - tests/test_assets_registry.py
+      - tests/test_lab_asset_selection.py
+      forbidden_paths:
+      - .git/**
+      - .github/workflows/**
+      - artifacts/**
+      - runtime/**
+      - state/**
+      - queue/**
+      - config/founder_pipeline_registry.json
+      - docs/SOP/PHASE_QUEUE.json
+      - docs/SOP/ACTIVE_PHASE_MANIFEST.json
+      - docs/SOP/FOUNDER_PIPELINE_COMMANDS_V1.md
+      - docs/SOP/PIPELINE_CREATION_SOP_V1.md
+      - docs/SOP/SCHEDULED_AUTOBUILDER_LANE_POLICY_V1.md
+      - docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md
+      - docs/SOP/SPRINT_*.md
+      - docs/SOP/*SELECTION*.md
+      - docs/SOP/POST_*_SELECTION*.md
+      - docs/SOP/*PRIORITY*.md
+      - docs/SOP/*FRONTIER*.md
+      - docs/SOP/*MANIFEST*.json
+      - artifacts/orchestrator/**
+      - artifacts/control_plane/**
+      - artifacts/relay/**
+      - artifacts/leases/**
+      publication_enabled: false
+      merge_enabled: false
+      product_main_write_enabled: false
+      target_source_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+      packet_sha256: e095f80f63af2e6ec2d50fca9a661fce008903bbb64595c7050811291dd495ea
+      validation_identity: ab82e84cd610fb621516aa06ff0a59b2672174e7f148f55825ff0f10700d83f7
+    execution_validation_contract_sha256: 3a330b09c5e7af137987a017da6a390999db60ae5a773f78e8b355b148a37849
+    admitted_target:
+      target_repository: DanielTabakman/Probability-prediction-engine
+      target_source_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+      target_remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      work_item_id: ppe_commodity_proxy_tier1_v1
+      pipeline_id: ppe
+      allowed_paths:
+      - config/assets.yaml
+      - src/viz/embed_display_boundary.py
+      - scripts/witness_asset_catalog.py
+      - tests/test_assets_registry.py
+      - tests/test_lab_asset_selection.py
+      adapter: ppe_operator
+      dependency_source_sha256: 47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394
+      validation_identity: ab82e84cd610fb621516aa06ff0a59b2672174e7f148f55825ff0f10700d83f7
+      packet_sha256: e095f80f63af2e6ec2d50fca9a661fce008903bbb64595c7050811291dd495ea
+candidate_validation:
+  version: 1
+  pipeline_id: ppe
+  adapter: ppe_operator
+  target_repository: DanielTabakman/Probability-prediction-engine
+  source_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+  job_id: build-next-ppe-commproxy-uso-revision-1
+  work_item_id: ppe_commodity_proxy_tier1_v1
+  native_slice_id: PPE-CommProxy-Core-Slice002
+  allowed_changed_paths:
+  - config/assets.yaml
+  - scripts/witness_asset_catalog.py
+  - src/viz/embed_display_boundary.py
+  - tests/test_assets_registry.py
+  - tests/test_lab_asset_selection.py
+  dependency_policy:
+    version: 1
+    adapter: ppe_operator
+    profile_id: ppe-ci-pytest-v1
+    source: accepted_ppe_ci_bootstrap
+    source_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+    dependency_source_path: requirements.txt
+    dependency_source_sha256: 47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394
+    network_allowed: true
+    candidate_environment_required: true
+    strategy: candidate_local_venv_requirements_test_tooling_editable_install
+    test_tooling:
+    - pytest
+    - pytest-xdist
+    - ruff
+  bootstrap:
+  - name: upgrade-pip
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - --upgrade
+    - pip
+    cwd: .
+    timeout_seconds: 600
+    required: true
+  - name: install-requirements
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - -r
+    - requirements.txt
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  - name: install-test-tooling
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - pytest
+    - pytest-xdist
+    - ruff
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  - name: install-candidate-package
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - -e
+    - .
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  checks:
+  - name: repository-pytest
+    argv:
+    - python
+    - -m
+    - pytest
+    - -q
+    cwd: .
+    timeout_seconds: 1800
+    required: true
+  publication_enabled: false
+  merge_enabled: false
+  product_main_write_enabled: false
+  contract_sha256: 78c32bc750f485428dc789ad231d4f3cd8419041afba99193d044fec12b691ac

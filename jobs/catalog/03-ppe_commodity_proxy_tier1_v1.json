@@ -1,0 +1,127 @@
+{
+  "version": 1,
+  "pipeline_id": "ppe",
+  "work_item_id": "ppe_commodity_proxy_tier1_v1",
+  "order": 3,
+  "eligible": true,
+  "target_repository": "DanielTabakman/Probability-prediction-engine",
+  "target_source_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+  "target_remote_url": "https://github.com/DanielTabakman/Probability-prediction-engine.git",
+  "adapter": "ppe_operator",
+  "allowed_paths": [
+    "config/assets.yaml",
+    "src/viz/embed_display_boundary.py",
+    "scripts/witness_asset_catalog.py"
+  ],
+  "native_slice": {
+    "slice_id": "PPE-CommProxy-Core-Slice002",
+    "build_branch": "build/auto/PPE-CommProxy-Core-Slice002-comm_proxy",
+    "layer_preset": "PPE_CORE",
+    "worker_mode": "local-agent",
+    "declared_plane": "PRODUCT-PLANE",
+    "touch_set": [
+      "config/assets.yaml",
+      "src/viz/embed_display_boundary.py",
+      "scripts/witness_asset_catalog.py"
+    ],
+    "sequence_index": 1,
+    "total_slices": 4,
+    "previous_slices": [
+      "PPE-CommProxy-Control-Slice001"
+    ],
+    "following_slices": [
+      "PPE-CommProxy-Witness-Slice003",
+      "PPE-CommProxy-Closeout-Slice004"
+    ],
+    "sprint_spec_path": "docs/SOP/SPRINT_PPE_COMMODITY_PROXY_TIER1_V1.md",
+    "selection_record": "docs/SOP/POST_PPE_COMMODITY_PROXY_TIER1_V1_SELECTION.md",
+    "raw_slice": {
+      "sliceId": "PPE-CommProxy-Core-Slice002",
+      "layerPreset": "PPE_CORE",
+      "sprintSpecPath": "docs/SOP/SPRINT_PPE_COMMODITY_PROXY_TIER1_V1.md",
+      "buildBranch": "build/auto/PPE-CommProxy-Core-Slice002-comm_proxy",
+      "declaredPlane": "PRODUCT-PLANE",
+      "implementationStatus": "PENDING",
+      "workerMode": "local-agent",
+      "susMinutes": 90,
+      "hardMinutes": 240,
+      "maxAttempts": 2,
+      "touchSet": [
+        "config/assets.yaml",
+        "src/viz/embed_display_boundary.py",
+        "scripts/witness_asset_catalog.py"
+      ]
+    }
+  },
+  "phase_plan": "docs/SOP/PHASE_PLANS/ppe_commodity_proxy_tier1_v1_relay.json",
+  "prerequisites": {
+    "version": 1,
+    "read_only": true,
+    "source": "ppe_native_read_only",
+    "evidence": {
+      "frozen_target_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+      "target_remote_url": "https://github.com/DanielTabakman/Probability-prediction-engine.git",
+      "phase_plan": "docs/SOP/PHASE_PLANS/ppe_commodity_proxy_tier1_v1_relay.json",
+      "phase_plan_blob_sha": "80c743445f203086365e679362567c2c5b28c41e",
+      "control_slice": {
+        "slice_id": "PPE-CommProxy-Control-Slice001",
+        "implementationStatus": "COMPLETE",
+        "nonBlocking": true
+      },
+      "source_files": [
+        {
+          "path": "docs/SOP/PHASE_PLANS/ppe_commodity_proxy_tier1_v1_relay.json",
+          "exists": true,
+          "git_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+          "blob_sha": "80c743445f203086365e679362567c2c5b28c41e",
+          "sha256": "79f33761c63c89d22991a5da367bea42319e170f7438de836a5f31590384cb91"
+        },
+        {
+          "path": "docs/SOP/SPRINT_PPE_COMMODITY_PROXY_TIER1_V1.md",
+          "exists": true,
+          "git_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+          "blob_sha": "a6b68de35fe8367210239240142b89d9ec8e186a",
+          "sha256": "626a56fd5b609c9fbee289d7b238e9a3fe6cea7d823e62c848f0dd685323cb06"
+        },
+        {
+          "path": "docs/SOP/POST_PPE_COMMODITY_PROXY_TIER1_V1_SELECTION.md",
+          "exists": true,
+          "git_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+          "blob_sha": "47b53e3cde12ff7c2f2b55fff1c0d109f934ddfc",
+          "sha256": "b76ce13b78b86a35179b1bc89c6e4cfa86127fa68f487cf8cae9b9df0f57e248"
+        },
+        {
+          "path": "docs/SOP/PPE_COMMODITY_PROXY_TIER1_V1_EVIDENCE_STATUS.md",
+          "exists": true,
+          "git_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+          "blob_sha": "b4b205f5b501044df99eb2bf3114a01d93a4d70b",
+          "sha256": "0fddcfbbc86417ea3c50b1019bdf237c6f120be64f299d9b390b756d3ef48ffc"
+        },
+        {
+          "path": "docs/SOP/ACTIVE_PHASE_MANIFEST.json",
+          "exists": true,
+          "git_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+          "blob_sha": "bef16bafa160f5240b85c69b119b6ba627e041bb",
+          "sha256": "c1425fc9fda014c0379113ff849a0466e3c31e5c4f489975becfbb913bf067dc"
+        }
+      ]
+    },
+    "statuses": [
+      {
+        "slice_id": "PPE-CommProxy-Control-Slice001",
+        "status": "complete",
+        "non_blocking": true
+      }
+    ]
+  },
+  "dependency_source_sha256": "47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394",
+  "authority": {
+    "publication_enabled": false,
+    "merge_enabled": false,
+    "product_main_write_enabled": false
+  },
+  "validation": {
+    "profile_id": "ppe-ci-pytest-v1"
+  },
+  "work_item_source_sha256_v1": "6d97a6bf3f4bf8126b9e14be231a03137ef8dd6c42e107ef9cb3cdc8f67720c3"
+}

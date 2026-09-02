@@ -13,6 +13,8 @@ from msos_autobuilder.revision_loop import (
     RevisionLoopConfig,
     RevisionLoopError,
     RevisionPlan,
+    _derive_revision_plan,
+    _find_plan,
     build_revision_manifest,
 )
 
@@ -490,3 +492,76 @@ def test_revision_loop_rejects_default_branch_targets(tmp_path: Path) -> None:
             jobs_branch="main",
             plans={},
         )
+
+
+def _build_next_job_yaml() -> dict[str, object]:
+    job = _job_yaml()
+    job["founder_build_next"] = {
+        "pipeline_id": "ppe",
+        "work_item_id": "ppe_commodity_proxy_tier1_v1",
+        "repository": "DanielTabakman/Probability-prediction-engine",
+        "registered_adapter": "ppe_operator",
+        "native_slice": {
+            "slice_id": "PPE-CommProxy-Core-Slice002",
+            "touch_set": [
+                "config/assets.yaml",
+                "src/viz/embed_display_boundary.py",
+            ],
+        },
+    }
+    job["candidate_validation"] = {
+        "version": 1,
+        "job_id": ROOT_JOB_ID,
+        "allowed_changed_paths": [
+            "config/assets.yaml",
+            "src/viz/embed_display_boundary.py",
+        ],
+        "contract_sha256": "c" * 64,
+    }
+    job["manifest"]["lanes"][0]["allowed_paths"] = [
+        "config/assets.yaml",
+        "src/viz/embed_display_boundary.py",
+        "tests/test_assets_registry.py",
+    ]
+    job["manifest"]["lanes"][0]["task_id"] = "PPE-CommProxy-Core-Slice002"
+    return job
+
+
+def test_derive_revision_plan_from_founder_work_item() -> None:
+    job = _build_next_job_yaml()
+    plan = _derive_revision_plan(job)
+    assert plan is not None
+    assert plan.revision_job_prefix == "build-next-ppe-ppe_commodity_proxy_tier1_v1"
+    assert plan.target_task_ids == ("PPE-CommProxy-Core-Slice002",)
+    matched = _find_plan("unrelated-failed-job", {}, job)
+    assert matched is not None
+    assert matched[1].revision_job_prefix == plan.revision_job_prefix
+
+
+def test_build_revision_manifest_copies_aligned_build_next_contract() -> None:
+    job = _build_next_job_yaml()
+    plan = RevisionPlan(
+        revision_job_prefix="build-next-ppe-ppe_commodity_proxy_tier1_v1",
+        target_task_ids=("PPE-CommProxy-Core-Slice002",),
+        instruction_prefix="Re-implement the full slice, including tests.",
+    )
+    manifest = build_revision_manifest(
+        _gate_report(),
+        job,
+        plan,
+        max_revision_depth=3,
+    )
+    assert manifest["job_id"] == "build-next-ppe-ppe_commodity_proxy_tier1_v1-revision-1"
+    assert manifest["founder_build_next"]["native_slice"]["touch_set"] == [
+        "config/assets.yaml",
+        "src/viz/embed_display_boundary.py",
+        "tests/test_assets_registry.py",
+    ]
+    contract = manifest["candidate_validation"]
+    assert contract["job_id"] == manifest["job_id"]
+    assert contract["allowed_changed_paths"] == [
+        "config/assets.yaml",
+        "src/viz/embed_display_boundary.py",
+        "tests/test_assets_registry.py",
+    ]
+    assert contract["contract_sha256"] != "c" * 64

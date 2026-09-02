@@ -14,6 +14,7 @@ from msos_autobuilder.controlled_publisher import (
     ControlledPublisher,
     GitHubDraftClient,
     PublisherError,
+    _derive_publish_plan,
     load_publisher_config,
 )
 from msos_autobuilder.lifecycle_evidence import (
@@ -825,3 +826,39 @@ def test_publisher_related_work_uses_search_instead_of_listing_history() -> None
     assert any(path.startswith("/search/issues") for path in calls)
     assert not any("/issues?state=all" in path for path in calls)
     assert not any("/pulls?state=all" in path for path in calls)
+
+
+def test_derive_publish_plan_uses_packet_paths_not_gate_pytest() -> None:
+    plan = _derive_publish_plan(
+        "build-next-ppe-uso-revision-2",
+        {
+            "founder_build_next": {
+                "work_item_id": "ppe_commodity_proxy_tier1_v1",
+                "native_slice": {
+                    "touch_set": [
+                        "config/assets.yaml",
+                        "src/viz/embed_display_boundary.py",
+                    ]
+                },
+            },
+            "candidate_validation": {
+                "allowed_changed_paths": [
+                    "config/assets.yaml",
+                    "src/viz/embed_display_boundary.py",
+                    "tests/test_assets_registry.py",
+                ],
+                "checks": [
+                    {
+                        "name": "repository-pytest",
+                        "argv": ["python", "-m", "pytest", "-q"],
+                    }
+                ],
+            },
+        },
+    )
+    assert plan is not None
+    assert plan.branch == "autobuilder/build-next-ppe-uso-revision-2"
+    assert plan.title == "PPE: ppe_commodity_proxy_tier1_v1"
+    assert plan.checks[0].name == "patched-sources-parse"
+    assert "pytest" not in " ".join(plan.checks[0].argv)
+    assert "tests/test_assets_registry.py" in plan.checks[0].argv[-1]

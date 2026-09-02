@@ -990,8 +990,22 @@ def _build_job(
     work_item_source_sha256: str,
     target_repository: str,
     refill_attempt: Mapping[str, Any] | None = None,
+    merge_authority: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     lane_id = _safe_id(native_slice.slice_id, fallback="lane")
+    founder_authority = {
+        "publication_enabled": False,
+        "merge_enabled": False,
+        "product_main_write_enabled": False,
+    }
+    job_merge_authority = None
+    if isinstance(merge_authority, Mapping):
+        cls = str(merge_authority.get("class") or "").strip()
+        declared_at = str(merge_authority.get("declared_at") or "").strip()
+        if cls and declared_at:
+            job_merge_authority = {"class": cls, "declared_at": declared_at}
+            founder_authority["merge_authority_class"] = cls
+            founder_authority["merge_authority_declared_at"] = declared_at
     candidate_validation = build_ppe_validation_contract(
         pipeline_id=pipeline_id,
         job_id=job_id,
@@ -1003,10 +1017,11 @@ def _build_job(
         dependency_source_sha256=dependency_source_sha256,
         adapter=str(work.get("adapter") or "ppe_operator"),
     )
-    return {
+    job = {
         "version": 1,
         "job_id": job_id,
         "approved": True,
+        "approved_at": _utc_now(),
         "publication_enabled": False,
         "requested_by": requested_by,
         "expected_source_head": source_identity.commit,
@@ -1034,11 +1049,7 @@ def _build_job(
             "prerequisites": dict(prerequisite_evidence),
             "portfolio_selection_evidence": dict(evidence_identity),
             **({"refill_attempt": dict(refill_attempt)} if refill_attempt is not None else {}),
-            "authority": {
-                "publication_enabled": False,
-                "merge_enabled": False,
-                "product_main_write_enabled": False,
-            },
+            "authority": founder_authority,
         },
         "candidate_validation": candidate_validation,
         "manifest": {
@@ -1071,6 +1082,9 @@ def _build_job(
             ],
         },
     }
+    if job_merge_authority is not None:
+        job["merge_authority"] = job_merge_authority
+    return job
 
 
 def _job_state(config: BuildNextConfig, job_id: str) -> str | None:
@@ -1364,6 +1378,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             work_item_source_sha256=packet.work_item_source_sha256_v1,
             target_repository=admitted.target_repository,
             refill_attempt=refill_attempt,
+            merge_authority=packet.merge_authority,
         )
         if (
             job["founder_build_next"]["repository"] != admitted.target_repository

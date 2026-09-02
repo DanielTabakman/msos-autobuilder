@@ -433,6 +433,16 @@ class CompletionGitHubClient:
             "merge result",
         )
 
+    def mark_ready_for_review(self, number: int) -> dict[str, Any]:
+        return _mapping(
+            self._request(
+                "POST",
+                f"/repos/{self.repo_full_name}/pulls/{number}/ready_for_review",
+                accepted=(200, 202),
+            ),
+            "ready-for-review result",
+        )
+
     def delete_branch(self, branch: str) -> dict[str, Any]:
         encoded = urllib.parse.quote(f"heads/{branch}", safe="")
         return _mapping(
@@ -459,6 +469,8 @@ class EvidenceBranch:
                 None,
                 "-c",
                 "core.autocrlf=false",
+                "-c",
+                "core.longpaths=true",
                 "clone",
                 "--single-branch",
                 "--branch",
@@ -469,9 +481,12 @@ class EvidenceBranch:
             )
         else:
             _git(self.checkout, "config", "core.autocrlf", "false")
+            _git(self.checkout, "config", "core.longpaths", "true")
             _git(self.checkout, "fetch", "--no-tags", "origin", self.config.results_branch)
             _git(
                 self.checkout,
+                "-c",
+                "core.longpaths=true",
                 "checkout",
                 "-B",
                 self.config.results_branch,
@@ -480,6 +495,7 @@ class EvidenceBranch:
             _git(self.checkout, "reset", "--hard", f"origin/{self.config.results_branch}")
             _git(self.checkout, "clean", "-fd")
         _git(self.checkout, "config", "core.autocrlf", "false")
+        _git(self.checkout, "config", "core.longpaths", "true")
         _git(self.checkout, "config", "user.name", "MSOS Autobuilder Completion Controller")
         _git(self.checkout, "config", "user.email", "autobuilder-completion@localhost")
 
@@ -535,6 +551,8 @@ def _authority_from_job(job: Mapping[str, Any]) -> tuple[str, str]:
             or ""
         ).strip()
         declared_at = str(authority_map.get("merge_authority_declared_at") or "").strip()
+    if not authority:
+        return AUTHORITY_FOUNDER_REQUIRED, declared_at or "1970-01-01T00:00:00+00:00"
     if authority not in AUTHORITY_CLASSES:
         raise CompletionControllerError("merge authority class is missing or malformed")
     if not declared_at:
@@ -910,9 +928,13 @@ class CompletionController:
         if unresolved_threads != 0:
             raise CompletionControllerError("pull request has unresolved review threads")
         review_decision = str(review_evidence.get("review_decision") or "").upper()
-        if review_decision != "APPROVED":
+        if review_decision in {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}:
             raise CompletionControllerError(
-                "pull request lacks required APPROVED review decision"
+                f"pull request review decision blocks merge: {review_decision}"
+            )
+        if review_decision not in {"", "APPROVED"}:
+            raise CompletionControllerError(
+                f"pull request has unknown review decision: {review_decision}"
             )
         if readiness.get("canon_conflict") or readiness.get("evidence_conflict") or readiness.get(
             "ownership_conflict"
@@ -1143,8 +1165,10 @@ class CompletionController:
 
     def complete_job(self, job_dir: Path, plan: CompletionPlan) -> dict[str, Any]:
         job_id = job_dir.name
-        evidence = self._load_job_evidence(job_dir)
-        job = evidence["job"]
+        job = _mapping(
+            yaml.safe_load((job_dir / "job.yaml").read_text(encoding="utf-8")),
+            "job.yaml",
+        )
         authority, authority_declared_at = _authority_from_job(job)
         if plan.authority_class is not None and plan.authority_class != authority:
             raise CompletionControllerError(
@@ -1162,8 +1186,12 @@ class CompletionController:
                 authority=authority,
                 reason="NEVER_MERGE blocks automatic merge",
             )
+        evidence = self._load_job_evidence(job_dir)
         publication = evidence["publication"]
         pr_number = int(publication.get("pr_number"))
+        pr = self._client().get_pull_request(pr_number)
+        if pr.get("draft") is True:
+            self._client().mark_ready_for_review(pr_number)
         branch = _safe_branch(
             publication.get("product_branch"),
             base_branch=self.config.product_base_branch,
@@ -1427,6 +1455,10 @@ class CompletionController:
             for job_dir in self.evidence.job_dirs():
                 job_id = job_dir.name
                 if self.config.plans and job_id not in self.config.plans:
+                    continue
+                if not (job_dir / "publication-report.json").is_file():
+                    continue
+                if not (job_dir / "completion-readiness.json").is_file():
                     continue
                 plan = self.config.plans.get(job_id, CompletionPlan(
                     required_checks=self.config.required_checks,

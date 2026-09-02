@@ -712,6 +712,76 @@ def test_current_generation_associated_publisher_error_uses_same_generation_succ
     assert publisher["superseded_by"] == "later_same_generation_service_success"
 
 
+def test_prior_generation_timeout_after_draft_is_superseded_by_later_verified_success(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    current = _generation_id()
+    prior = _generation_id(started_at="2026-08-01T00:00:00+00:00", pid=99)
+    _write_error_marker(
+        config,
+        "controlled-publisher-error.json",
+        {
+            "service": "publisher",
+            "release_commit": EXACT_RELEASE,
+            "witness_started_at": "2026-08-01T00:00:00+00:00",
+            "witness_pid": 99,
+            "generation_id": prior,
+            "recorded_at": "2026-08-01T00:05:00+00:00",
+            "associated": {"job_id": "already-drafted-job"},
+            "error_type": "TimeoutError",
+            "message": "The read operation timed out",
+            "draft_pr_publication_enabled": True,
+            "merge_enabled": False,
+            "main_write_enabled": False,
+        },
+    )
+    _write_state_json(
+        config,
+        "controlled-publisher-seen.json",
+        {
+            "already-drafted-job": {
+                "gate_report_sha256": "1" * 64,
+                "source_report_sha256": "2" * 64,
+                "branch": "autobuilder/already-drafted-job",
+                "commit_sha": "3" * 40,
+                "pr_number": 12,
+                "pr_url": "https://example.invalid/pull/12",
+                "results_commit": "4" * 40,
+                "published_at": "2026-08-01T00:03:00+00:00",
+                "status": "published-draft",
+            }
+        },
+    )
+    _write_state_json(
+        config,
+        "publisher-service-success.json",
+        {
+            "version": 1,
+            "service": "publisher",
+            "release_commit": EXACT_RELEASE,
+            "witness_started_at": "2999-01-01T00:00:00+00:00",
+            "witness_pid": 123,
+            "generation_id": current,
+            "recorded_at": "2999-01-01T00:00:02+00:00",
+            "cycle_started_at": "2999-01-01T00:00:01.5+00:00",
+            "finished_at": "2999-01-01T00:00:02+00:00",
+            "result": "success",
+            "associated_jobs": ["already-drafted-job"],
+            "terminal_evidence": {"verified_jobs": ["already-drafted-job"]},
+        },
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "QUEUED"
+    publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
+    assert publisher["ok"] is True
+    assert publisher["superseded_by"] == "later_same_generation_service_success"
+
+
 def test_idle_revision_success_supersedes_unassociated_same_generation_marker(
     tmp_path: Path,
 ) -> None:

@@ -82,6 +82,8 @@ class FakeCompletionGitHubClient(CompletionGitHubClient):
         self.merge_result_ok = True
         self.merge_calls = 0
         self.delete_calls = 0
+        self.draft = False
+        self.ready_calls = 0
         self.reread_head: str | None = None
         self.review_evidence_error: Exception | None = None
 
@@ -92,6 +94,7 @@ class FakeCompletionGitHubClient(CompletionGitHubClient):
             "number": number,
             "state": "closed" if merged else "open",
             "merged": merged,
+            "draft": self.draft,
             "merge_commit_sha": (
                 git(self.product_bare, "rev-parse", "refs/heads/main") if merged else None
             ),
@@ -121,6 +124,11 @@ class FakeCompletionGitHubClient(CompletionGitHubClient):
             "review_threads_paginated": self.review_threads_paginated,
             "latest_opinionated_reviews": [],
         }
+
+    def mark_ready_for_review(self, number: int) -> dict[str, Any]:
+        self.ready_calls += 1
+        self.draft = False
+        return {"number": number, "draft": False}
 
     def merge_pull_request(
         self,
@@ -169,6 +177,7 @@ def make_fixture(
     post_hoc_authority: bool = False,
     omit_readiness: bool = False,
     omit_revision_lineage: bool = False,
+    omit_authority: bool = False,
 ) -> tuple[Path, Path, str, FakeCompletionGitHubClient, str]:
     product_work = tmp_path / "product-work"
     product_work.mkdir(parents=True)
@@ -282,6 +291,15 @@ def make_fixture(
     declared_at = "2026-07-19T00:00:00+00:00"
     if post_hoc_authority:
         declared_at = "2026-07-21T00:00:00+00:00"
+    authority_lines = (
+        []
+        if omit_authority
+        else [
+            "merge_authority:",
+            f"  class: {authority}",
+            f"  declared_at: '{declared_at}'",
+        ]
+    )
     (job_dir / "job.yaml").write_text(
         "\n".join(
             [
@@ -290,9 +308,7 @@ def make_fixture(
                 "approved: true",
                 "approved_at: '2026-07-20T00:00:00+00:00'",
                 "publication_enabled: false",
-                "merge_authority:",
-                f"  class: {authority}",
-                f"  declared_at: '{declared_at}'",
+                *authority_lines,
                 "founder_build_next:",
                 "  pipeline_id: ppe",
                 "  work_item_id: fixture-work",
@@ -521,6 +537,47 @@ def test_post_hoc_authority_blocks(tmp_path: Path) -> None:
         controller(config_path, client).run_once()
 
 
+def test_undeclared_merge_authority_escalates_without_merging(tmp_path: Path) -> None:
+    config_path, _, _, client, job_id = make_fixture(tmp_path, omit_authority=True)
+    assert controller(config_path, client).run_once() == ()
+    assert client.merge_calls == 0
+    state = load_completion_config(config_path).host_root / "state"
+    ledger = json.loads((state / "completion-controller-seen.json").read_text("utf-8"))
+    assert ledger[job_id]["status"] == "escalated"
+    assert "FOUNDER_DECISION_REQUIRED" in ledger[job_id]["reason"]
+
+
+def test_unpublished_results_jobs_are_skipped(tmp_path: Path) -> None:
+    config_path, _, _, client, job_id = make_fixture(tmp_path)
+    config = load_completion_config(config_path)
+    evidence_bare = Path(config.evidence_repo_url)
+    work = evidence_bare.parent / "unpublished-sibling"
+    git(None, "clone", str(evidence_bare), str(work))
+    git(work, "config", "user.name", "Fixture")
+    git(work, "config", "user.email", "fixture@example.invalid")
+    extra = work / "results" / "MACHINE" / "historical-unpublished"
+    extra.mkdir(parents=True)
+    (extra / "job.yaml").write_text(
+        "version: 1\njob_id: historical-unpublished\n",
+        encoding="utf-8",
+    )
+    git(work, "add", ".")
+    git(work, "commit", "-m", "add unpublished historical job")
+    git(work, "push", "origin", "HEAD:results")
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").split("plans:", 1)[0],
+        encoding="utf-8",
+    )
+
+    assert controller(config_path, client).run_once() == (job_id,)
+    assert client.merge_calls == 1
+    ledger = json.loads(
+        (config.host_root / "state" / "completion-controller-seen.json").read_text("utf-8")
+    )
+    assert "historical-unpublished" not in ledger
+    assert ledger[job_id]["status"] == "merged"
+
+
 def test_founder_and_never_merge_authorities_block(tmp_path: Path) -> None:
     for authority, message in (
         (AUTHORITY_FOUNDER_REQUIRED, "FOUNDER_DECISION_REQUIRED"),
@@ -680,11 +737,22 @@ def test_missing_review_thread_evidence_fails_closed(tmp_path: Path) -> None:
         controller(config_path, client).run_once()
 
 
-def test_absent_review_decision_fails_closed(tmp_path: Path) -> None:
-    config_path, _, _, client, _ = make_fixture(tmp_path)
+def test_absent_review_decision_is_allowed_when_no_review_is_required(
+    tmp_path: Path,
+) -> None:
+    config_path, _, _, client, job_id = make_fixture(tmp_path)
     client.review_decision = ""
-    with pytest.raises(CompletionControllerError, match="APPROVED review decision"):
-        controller(config_path, client).run_once()
+    assert controller(config_path, client).run_once() == (job_id,)
+    assert client.merge_calls == 1
+
+
+def test_draft_pr_is_marked_ready_before_merge(tmp_path: Path) -> None:
+    config_path, _, _, client, job_id = make_fixture(tmp_path)
+    client.draft = True
+    assert controller(config_path, client).run_once() == (job_id,)
+    assert client.ready_calls == 1
+    assert client.draft is False
+    assert client.merge_calls == 1
 
 
 def test_paginated_review_threads_fail_closed(tmp_path: Path) -> None:
@@ -699,7 +767,7 @@ def test_paginated_review_threads_fail_closed(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("review_decision", "unresolved_threads", "message"),
     [
-        ("CHANGES_REQUESTED", 0, "APPROVED review decision"),
+        ("CHANGES_REQUESTED", 0, "review decision blocks merge"),
         ("APPROVED", 1, "unresolved review threads"),
     ],
 )

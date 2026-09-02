@@ -1,0 +1,210 @@
+version: 1
+job_id: build-next-ppe-issue55_generic_gate_witness_v2-revision-1
+approved: true
+publication_enabled: false
+requested_by: MSOS Autobuilder automatic revision loop
+submitted_at: '2026-08-08T06:39:38.114827+00:00'
+approved_at: '2026-08-08T06:39:38.114827+00:00'
+expected_source_head: ec1789cd9540b1baf386c766e2b84feb6563257c
+revision:
+  version: 1
+  depth: 1
+  source_job_id: build-next-ppe-issue55_generic_gate_witness_v2-Issue55-GenericGate-WitnessV2-ec1789cd9540
+  source_report_sha256: ace67baf3f9beb2ca2e0a46646a64024765a6ac2c1fb926845e27f2f2193660b
+manifest:
+  version: 1
+  publication_enabled: false
+  lanes:
+  - task_id: Issue55-GenericGate-WitnessV2-revision-1
+    lane_id: Issue55-GenericGate-WitnessV2-revision-1
+    chapter_id: ISSUE55_GENERIC_GATE_WITNESS_V2-REVISION-1
+    branch: shadow/build-next-ppe-issue55_generic_gate_witness_v2-revision-1-Issue55-GenericGate-WitnessV2
+    layer: PPE_CORE
+    preferred_cost_class: standard
+    allowed_paths:
+    - docs/autobuilder_generic_gate_witness_issue55_v2.txt
+    forbidden_paths:
+    - .git/**
+    - .github/workflows/**
+    - artifacts/**
+    - runtime/**
+    - state/**
+    - queue/**
+    - config/founder_pipeline_registry.json
+    - docs/SOP/**
+    allow_changes: true
+    instruction: "Work from the clean source checkout. Re-implement the full slice,\
+      \ including product files and any tests the gate will break. Do not assume a\
+      \ prior patch is already applied.\n\nCorrect the failed candidate described\
+      \ below. Work from the clean source checkout; do not assume any prior patch\
+      \ has been applied.\n\nSource gate job: build-next-ppe-issue55_generic_gate_witness_v2-Issue55-GenericGate-WitnessV2-ec1789cd9540\n\
+      \nSource report SHA-256: ace67baf3f9beb2ca2e0a46646a64024765a6ac2c1fb926845e27f2f2193660b\n\
+      \nPatch evidence:\n[\n  {\n    \"changed_paths\": [\n      \"docs/autobuilder_generic_gate_witness_issue55_v2.txt\"\
+      \n    ],\n    \"patch_sha256\": \"d3e6fc6cb014b00b867e84350cd3266e27850a6e4676dbd3829e100a93cff45b\"\
+      ,\n    \"task_id\": \"Issue55-GenericGate-WitnessV2\"\n  }\n]\n\nExact gate\
+      \ failure evidence:\nFailed check: repository-pytest\nCommand: [\"C:\\\\Users\\\
+      \\USER\\\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\\\state\\\
+      \\candidate-gate-workspaces\\\\build-next-ppe-issue55_generic_gate_witness_v2-Issue55-GenericGate-WitnessV2-ec1789cd9540\\\
+      \\.msos-candidate-env\\\\Scripts\\\\python.exe\", \"-m\", \"pytest\", \"-q\"\
+      ]\nReturn code: 2\nTimed out: False\nstdout:\n\n===================================\
+      \ ERRORS ====================================\n_________ ERROR collecting tests/test_verify_msos_mirror_timestamp.py\
+      \ _________\nImportError while importing test module 'C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\\
+      state\\candidate-gate-workspaces\\build-next-ppe-issue55_generic_gate_witness_v2-Issue55-GenericGate-WitnessV2-ec1789cd9540\\\
+      tests\\test_verify_msos_mirror_timestamp.py'.\nHint: make sure your test modules/packages\
+      \ have valid Python names.\nTraceback:\n..\\..\\..\\..\\anaconda3\\Lib\\importlib\\\
+      __init__.py:90: in import_module\n    return _bootstrap._gcd_import(name[level:],\
+      \ package, level)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\
+      tests\\test_verify_msos_mirror_timestamp.py:8: in <module>\n    from scripts.verify_msos_mirror_timestamp\
+      \ import extract_generated_timestamp, verify_mirror_freshness\nscripts\\verify_msos_mirror_timestamp.py:18:\
+      \ in <module>\n    from google.auth.transport.requests import Request\n.msos-candidate-env\\\
+      Lib\\site-packages\\google\\auth\\transport\\requests.py:43: in <module>\n \
+      \   from google.oauth2 import service_account\n.msos-candidate-env\\Lib\\site-packages\\\
+      google\\oauth2\\service_account.py:81: in <module>\n    from google.auth import\
+      \ _service_account_info\n.msos-candidate-env\\Lib\\site-packages\\google\\auth\\\
+      _service_account_info.py:20: in <module>\n    from google.auth import crypt\n\
+      .msos-candidate-env\\Lib\\site-packages\\google\\auth\\crypt\\__init__.py:41:\
+      \ in <module>\n    from google.auth.crypt import es\n.msos-candidate-env\\Lib\\\
+      site-packages\\google\\auth\\crypt\\es.py:21: in <module>\n    import cryptography.exceptions\n\
+      .msos-candidate-env\\Lib\\site-packages\\cryptography\\exceptions.py:9: in <module>\n\
+      \    from cryptography.hazmat.bindings._rust import exceptions as rust_exceptions\n\
+      E   ImportError: DLL load failed while importing _cffi_backend: The filename\
+      \ or extension is too long.\n============================== warnings summary\
+      \ ===============================\n.msos-candidate-env\\Lib\\site-packages\\\
+      requests\\__init__.py:92\n  C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\\
+      state\\candidate-gate-workspaces\\build-next-ppe-issue55_generic_gate_witness_v2-Issue55-GenericGate-WitnessV2-ec1789cd9540\\\
+      .msos-candidate-env\\Lib\\site-packages\\requests\\__init__.py:92: RequestsDependencyWarning:\
+      \ Unable to find acceptable character detection dependency (chardet or charset_normalizer).\n\
+      \    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n\
+      =========================== short test summary info ===========================\n\
+      ERROR tests/test_verify_msos_mirror_timestamp.py\n!!!!!!!!!!!!!!!!!!! Interrupted:\
+      \ 1 error during collection !!!!!!!!!!!!!!!!!!!!\n1 warning, 1 error in 11.36s\n\
+      \nstderr:\n\n\nOriginal task instruction:\nImplementation thread. THREAD_ROLE:\
+      \ codex_build.\n\nCreate the installed issue #55 generic-gate passing witness\
+      \ v2 only.\n\nIn the PPE repository, add exactly one new text file at docs/autobuilder_generic_gate_witness_issue55_v2.txt.\
+      \ The file should contain one short line stating that issue #55 installed generic\
+      \ candidate validation v2 ran after msos-autobuilder commit 4d1ab2f27f05c9984b1b5902895312ee7805ac75.\n\
+      \nDo not modify any other file. Do not write product main. Do not commit, push,\
+      \ publish, open a pull request, mark anything ready, or begin issue #50. Return\
+      \ concise evidence of the changed path.\n\nPreserve the original allowed/forbidden\
+      \ path boundaries. Add or update focused tests. Do not commit, push, publish,\
+      \ or open a pull request."
+founder_build_next:
+  version: 1
+  pipeline_id: ppe
+  work_item_id: issue55_generic_gate_witness_v2
+  repository: DanielTabakman/Probability-prediction-engine
+  registered_adapter: ppe_operator
+  source:
+    remote: origin
+    remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+    repository: DanielTabakman/Probability-prediction-engine
+    ref: main
+    remote_ref: origin/main
+    commit: ec1789cd9540b1baf386c766e2b84feb6563257c
+  phase_plan: issue-55-installed-generic-gate-witness-v2
+  native_slice:
+    slice_id: Issue55-GenericGate-WitnessV2
+    build_branch: build/auto/issue55-generic-gate-witness-v2
+    layer_preset: PPE_CORE
+    worker_mode: local-agent
+    declared_plane: PRODUCT-PLANE
+    touch_set:
+    - docs/autobuilder_generic_gate_witness_issue55_v2.txt
+    sequence_index: 0
+    total_slices: 1
+    previous_slices: []
+    following_slices: []
+  prerequisites:
+    source: issue55_runtime_acceptance_witness
+  portfolio_selection_evidence:
+    source: issue55_runtime_acceptance_witness
+  authority:
+    publication_enabled: false
+    merge_enabled: false
+    product_main_write_enabled: false
+candidate_validation:
+  version: 1
+  pipeline_id: ppe
+  adapter: ppe_operator
+  target_repository: DanielTabakman/Probability-prediction-engine
+  source_commit: ec1789cd9540b1baf386c766e2b84feb6563257c
+  job_id: build-next-ppe-issue55_generic_gate_witness_v2-revision-1
+  work_item_id: issue55_generic_gate_witness_v2
+  native_slice_id: Issue55-GenericGate-WitnessV2
+  allowed_changed_paths:
+  - docs/autobuilder_generic_gate_witness_issue55_v2.txt
+  dependency_policy:
+    version: 1
+    adapter: ppe_operator
+    profile_id: ppe-ci-pytest-v1
+    source: accepted_ppe_ci_bootstrap
+    source_commit: ec1789cd9540b1baf386c766e2b84feb6563257c
+    dependency_source_path: requirements.txt
+    dependency_source_sha256: 47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394
+    network_allowed: true
+    candidate_environment_required: true
+    strategy: candidate_local_venv_requirements_test_tooling_editable_install
+    test_tooling:
+    - pytest
+    - pytest-xdist
+    - ruff
+  bootstrap:
+  - name: upgrade-pip
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - --upgrade
+    - pip
+    cwd: .
+    timeout_seconds: 600
+    required: true
+  - name: install-requirements
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - -r
+    - requirements.txt
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  - name: install-test-tooling
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - pytest
+    - pytest-xdist
+    - ruff
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  - name: install-candidate-package
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - -e
+    - .
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  checks:
+  - name: repository-pytest
+    argv:
+    - python
+    - -m
+    - pytest
+    - -q
+    cwd: .
+    timeout_seconds: 1800
+    required: true
+  publication_enabled: false
+  merge_enabled: false
+  product_main_write_enabled: false
+  contract_sha256: 3d4089773308b0d82386ffd60f12840c04551eb00bcc91e456d5c2edd89a1111

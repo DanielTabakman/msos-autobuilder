@@ -38,6 +38,7 @@ from .lifecycle_evidence import (
 )
 from .service_error_lifecycle import record_service_cycle_success, write_service_error_marker
 from .work_admission import (
+    AdmissionError,
     AdmissionRequest,
     AdmissionStatus,
     ObjectiveIdentity,
@@ -47,6 +48,7 @@ from .work_admission import (
     admit_work,
     candidate_from_pr,
     claim_release_handoff,
+    release_claim,
 )
 
 
@@ -1292,11 +1294,11 @@ class ControlledPublisher:
         job_id: str,
         gate_sha: str,
         entry: Mapping[str, Any],
-    ) -> None:
+    ) -> dict[str, Any] | None:
         if entry.get("gate_report_sha256") != gate_sha:
             raise PublisherError(f"passed gate report changed after publication: {job_id}")
         if entry.get("status") == "not_applicable":
-            return
+            return None
         branch = str(entry.get("branch") or "")
         commit_sha = str(entry.get("commit_sha") or "")
         if not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
@@ -1311,9 +1313,45 @@ class ControlledPublisher:
         if _pull_is_merged(pull):
             if remote_sha is not None and remote_sha != commit_sha:
                 raise PublisherError("published product branch drifted after publication")
-            return
+            return pull
         if remote_sha != commit_sha:
             raise PublisherError("published product branch drifted after publication")
+        return pull
+
+    def _release_claim_if_product_merged(
+        self,
+        *,
+        job_id: str,
+        publication: Mapping[str, Any],
+        pull: Mapping[str, Any] | None,
+    ) -> None:
+        if pull is None or not _pull_is_merged(pull):
+            return
+        handoff = publication.get("claim_release_handoff")
+        if not isinstance(handoff, Mapping):
+            return
+        objective = str(handoff.get("objective_sha256") or "").strip()
+        writer_id = str(handoff.get("writer_id") or "").strip()
+        generation = handoff.get("claim_generation")
+        if not objective or not writer_id or not isinstance(generation, int):
+            return
+        try:
+            release_claim(
+                self.state,
+                objective,
+                writer_id=writer_id,
+                terminal_state="merged",
+                expected_generation=generation,
+                evidence={
+                    "release_handoff_consumer": "controlled-publisher",
+                    "disposition": "verified_product_pr_merged",
+                    "job_id": job_id,
+                    "verified_pr": pull.get("number"),
+                    "merged_at": pull.get("merged_at"),
+                },
+            )
+        except AdmissionError:
+            return
 
     def _verify_published_pr(
         self,
@@ -1844,7 +1882,7 @@ class ControlledPublisher:
                 existing = ledger.get(job_id)
                 if existing:
                     try:
-                        self._verify_ledger_entry(
+                        pull = self._verify_ledger_entry(
                             job_id=job_id,
                             gate_sha=gate_sha,
                             entry=existing,
@@ -1857,6 +1895,11 @@ class ControlledPublisher:
                         report = json.loads(report_path.read_text(encoding="utf-8"))
                         if not isinstance(report, dict):
                             raise PublisherError("publication-report.json must be a mapping")
+                        self._release_claim_if_product_merged(
+                            job_id=job_id,
+                            publication=report,
+                            pull=pull,
+                        )
                         self._record_drafted_publication_review(
                             job_id=job_id,
                             job_dir=job_dir,

@@ -177,6 +177,7 @@ def make_fixture(
     post_hoc_authority: bool = False,
     omit_readiness: bool = False,
     omit_revision_lineage: bool = False,
+    omit_authority: bool = False,
 ) -> tuple[Path, Path, str, FakeCompletionGitHubClient, str]:
     product_work = tmp_path / "product-work"
     product_work.mkdir(parents=True)
@@ -290,6 +291,15 @@ def make_fixture(
     declared_at = "2026-07-19T00:00:00+00:00"
     if post_hoc_authority:
         declared_at = "2026-07-21T00:00:00+00:00"
+    authority_lines = (
+        []
+        if omit_authority
+        else [
+            "merge_authority:",
+            f"  class: {authority}",
+            f"  declared_at: '{declared_at}'",
+        ]
+    )
     (job_dir / "job.yaml").write_text(
         "\n".join(
             [
@@ -298,9 +308,7 @@ def make_fixture(
                 "approved: true",
                 "approved_at: '2026-07-20T00:00:00+00:00'",
                 "publication_enabled: false",
-                "merge_authority:",
-                f"  class: {authority}",
-                f"  declared_at: '{declared_at}'",
+                *authority_lines,
                 "founder_build_next:",
                 "  pipeline_id: ppe",
                 "  work_item_id: fixture-work",
@@ -527,6 +535,16 @@ def test_post_hoc_authority_blocks(tmp_path: Path) -> None:
     config_path, _, _, client, _ = make_fixture(tmp_path, post_hoc_authority=True)
     with pytest.raises(CompletionControllerError, match="after implementation approval"):
         controller(config_path, client).run_once()
+
+
+def test_undeclared_merge_authority_escalates_without_merging(tmp_path: Path) -> None:
+    config_path, _, _, client, job_id = make_fixture(tmp_path, omit_authority=True)
+    assert controller(config_path, client).run_once() == ()
+    assert client.merge_calls == 0
+    state = load_completion_config(config_path).host_root / "state"
+    ledger = json.loads((state / "completion-controller-seen.json").read_text("utf-8"))
+    assert ledger[job_id]["status"] == "escalated"
+    assert "FOUNDER_DECISION_REQUIRED" in ledger[job_id]["reason"]
 
 
 def test_founder_and_never_merge_authorities_block(tmp_path: Path) -> None:

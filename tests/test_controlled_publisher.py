@@ -686,6 +686,11 @@ def test_controlled_publisher_founder_merged_pr_stays_verified(
     success = publisher_success(config_path)
     assert job_id in success["terminal_evidence"]["verified_jobs"]
     assert not (config.host_root / "state" / "controlled-publisher-error.json").exists()
+    claims = list((config.host_root / "state" / "work-admission" / "claims").glob("*.json"))
+    assert claims
+    claim = json.loads(claims[0].read_text(encoding="utf-8"))
+    assert claim["state"] == "merged"
+    assert claim["evidence"]["disposition"] == "verified_product_pr_merged"
 
 
 def test_controlled_publisher_gate_hash_drift_prevents_verified_success(

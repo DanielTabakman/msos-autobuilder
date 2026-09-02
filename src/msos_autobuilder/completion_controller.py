@@ -545,6 +545,8 @@ def _authority_from_job(job: Mapping[str, Any]) -> tuple[str, str]:
             or ""
         ).strip()
         declared_at = str(authority_map.get("merge_authority_declared_at") or "").strip()
+    if not authority:
+        return AUTHORITY_FOUNDER_REQUIRED, declared_at or "1970-01-01T00:00:00+00:00"
     if authority not in AUTHORITY_CLASSES:
         raise CompletionControllerError("merge authority class is missing or malformed")
     if not declared_at:

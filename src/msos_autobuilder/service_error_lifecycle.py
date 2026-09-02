@@ -713,6 +713,16 @@ def evaluate_service_error_marker(
                 return evidence
             evidence["error"] = legacy_error or terminal_error
             return evidence
+        if recorded < witness_started and raw.get("generation_id") != current_generation:
+            evidence.update(
+                {
+                    "ok": True,
+                    "state": "superseded",
+                    "superseded_by": "later_healthy_exact_release_service_start",
+                    "preserved": True,
+                }
+            )
+            return evidence
         evidence["error"] = terminal_error or "associated job has no terminal evidence"
         return evidence
 

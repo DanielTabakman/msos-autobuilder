@@ -550,6 +550,37 @@ def test_historical_publisher_error_after_later_exact_release_start_does_not_blo
     assert publisher["superseded_by"] == "later_healthy_exact_release_service_start"
 
 
+def test_historical_associated_publisher_error_after_later_start_does_not_block(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    _write_error_marker(
+        config,
+        "controlled-publisher-error.json",
+        {
+            "recorded_at": "2026-07-16T23:46:31.078266+00:00",
+            "error_type": "PublisherError",
+            "message": "job founder_build_next.work_admission must be a mapping",
+            "associated": {
+                "job_id": "useful-ppe-5316-token-audit-readonly-8d6c7119ec7a",
+            },
+            "draft_pr_publication_enabled": True,
+            "merge_enabled": False,
+            "main_write_enabled": False,
+        },
+    )
+    keep_one_running(config)
+
+    report = reconcile_refill(config)
+
+    assert report.status == "QUEUED"
+    publisher = report.decision_evidence["health"]["checks"]["publisher_state"]
+    assert publisher["ok"] is True
+    assert publisher["state"] == "superseded"
+    assert publisher["superseded_by"] == "later_healthy_exact_release_service_start"
+
+
 def test_current_generation_publisher_error_after_current_start_blocks(tmp_path: Path) -> None:
     config = _refill_config(tmp_path)
     _write_host_status(config)

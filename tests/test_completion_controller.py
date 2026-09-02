@@ -547,6 +547,37 @@ def test_undeclared_merge_authority_escalates_without_merging(tmp_path: Path) ->
     assert "FOUNDER_DECISION_REQUIRED" in ledger[job_id]["reason"]
 
 
+def test_unpublished_results_jobs_are_skipped(tmp_path: Path) -> None:
+    config_path, _, _, client, job_id = make_fixture(tmp_path)
+    config = load_completion_config(config_path)
+    evidence_bare = Path(config.evidence_repo_url)
+    work = evidence_bare.parent / "unpublished-sibling"
+    git(None, "clone", str(evidence_bare), str(work))
+    git(work, "config", "user.name", "Fixture")
+    git(work, "config", "user.email", "fixture@example.invalid")
+    extra = work / "results" / "MACHINE" / "historical-unpublished"
+    extra.mkdir(parents=True)
+    (extra / "job.yaml").write_text(
+        "version: 1\njob_id: historical-unpublished\n",
+        encoding="utf-8",
+    )
+    git(work, "add", ".")
+    git(work, "commit", "-m", "add unpublished historical job")
+    git(work, "push", "origin", "HEAD:results")
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").split("plans:", 1)[0],
+        encoding="utf-8",
+    )
+
+    assert controller(config_path, client).run_once() == (job_id,)
+    assert client.merge_calls == 1
+    ledger = json.loads(
+        (config.host_root / "state" / "completion-controller-seen.json").read_text("utf-8")
+    )
+    assert "historical-unpublished" not in ledger
+    assert ledger[job_id]["status"] == "merged"
+
+
 def test_founder_and_never_merge_authorities_block(tmp_path: Path) -> None:
     for authority, message in (
         (AUTHORITY_FOUNDER_REQUIRED, "FOUNDER_DECISION_REQUIRED"),

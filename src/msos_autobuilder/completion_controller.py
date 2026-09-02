@@ -1453,6 +1453,10 @@ class CompletionController:
                 job_id = job_dir.name
                 if self.config.plans and job_id not in self.config.plans:
                     continue
+                if not (job_dir / "publication-report.json").is_file():
+                    continue
+                if not (job_dir / "completion-readiness.json").is_file():
+                    continue
                 plan = self.config.plans.get(job_id, CompletionPlan(
                     required_checks=self.config.required_checks,
                     merge_method=self.config.merge_method,

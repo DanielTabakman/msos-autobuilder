@@ -102,6 +102,12 @@ def _mapping(value: Any, label: str) -> dict[str, Any]:
     return value
 
 
+def _pull_is_merged(pull: Mapping[str, Any]) -> bool:
+    if pull.get("merged") is True:
+        return True
+    return bool(str(pull.get("merged_at") or "").strip())
+
+
 def _resolve_path(base: Path, value: Any, label: str) -> Path:
     text = str(value or "").strip()
     if not text:
@@ -662,6 +668,12 @@ class GitHubDraftClient:
         if not isinstance(result, list):
             raise PublisherError("GitHub pull-request query returned an invalid payload")
         return [item for item in result if isinstance(item, dict)]
+
+    def get_pull_request(self, number: int) -> dict[str, Any]:
+        result = self._request("GET", f"/repos/{self.repo_full_name}/pulls/{number}")
+        if not isinstance(result, dict):
+            raise PublisherError("GitHub pull-request fetch returned an invalid payload")
+        return result
 
     def _paged_list(self, path: str, label: str) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
@@ -1290,11 +1302,56 @@ class ControlledPublisher:
         if not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
             raise PublisherError("publisher ledger commit SHA is invalid")
         self._prepare_product()
-        if self._remote_branch_sha(branch) != commit_sha:
+        pull = self._verify_published_pr(
+            branch=branch,
+            expected_commit=commit_sha,
+            expected_number=entry.get("pr_number"),
+        )
+        remote_sha = self._remote_branch_sha(branch)
+        if _pull_is_merged(pull):
+            if remote_sha is not None and remote_sha != commit_sha:
+                raise PublisherError("published product branch drifted after publication")
+            return
+        if remote_sha != commit_sha:
             raise PublisherError("published product branch drifted after publication")
-        pull = self._validate_existing_pr(branch=branch, expected_commit=commit_sha)
-        if pull is None or pull.get("number") != entry.get("pr_number"):
+
+    def _verify_published_pr(
+        self,
+        *,
+        branch: str,
+        expected_commit: str,
+        expected_number: Any,
+    ) -> dict[str, Any]:
+        pulls = self._client().find_pull_requests(branch)
+        if not pulls:
             raise PublisherError("published product PR drifted after publication")
+        if len(pulls) != 1:
+            raise PublisherError(
+                f"expected at most one product PR for {branch}, found {len(pulls)}"
+            )
+        pull = pulls[0]
+        if pull.get("number") != expected_number:
+            raise PublisherError("published product PR drifted after publication")
+        head = _mapping(pull.get("head"), "pull request head")
+        base = _mapping(pull.get("base"), "pull request base")
+        if head.get("ref") != branch or head.get("sha") != expected_commit:
+            raise PublisherError("existing product PR head drifted")
+        if base.get("ref") != self.config.product_base_branch:
+            raise PublisherError("existing product PR base drifted")
+        if pull.get("state") != "open":
+            pull = self._client().get_pull_request(int(pull["number"]))
+            if pull.get("number") != expected_number:
+                raise PublisherError("published product PR drifted after publication")
+            head = _mapping(pull.get("head"), "pull request head")
+            base = _mapping(pull.get("base"), "pull request base")
+            if head.get("ref") != branch or head.get("sha") != expected_commit:
+                raise PublisherError("existing product PR head drifted")
+            if base.get("ref") != self.config.product_base_branch:
+                raise PublisherError("existing product PR base drifted")
+            if not _pull_is_merged(pull):
+                raise PublisherError("existing product PR is not open")
+            return pull
+        return pull
 
     def _load_revision_evidence(self, job_dir: Path, gate_sha: str) -> dict[str, Any]:
         identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")

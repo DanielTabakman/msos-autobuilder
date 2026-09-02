@@ -74,6 +74,12 @@ class FakeGitHubClient(GitHubDraftClient):
     def find_pull_requests(self, branch: str) -> list[dict[str, Any]]:
         return [pull for pull in self.pulls if pull["head"]["ref"] == branch]
 
+    def get_pull_request(self, number: int) -> dict[str, Any]:
+        for pull in self.pulls:
+            if pull.get("number") == number:
+                return pull
+        raise PublisherError(f"missing product PR {number}")
+
     def find_related_work(self, **_: Any) -> list[dict[str, Any]]:
         return []
 
@@ -605,7 +611,6 @@ def test_controlled_publisher_detects_branch_drift(tmp_path: Path) -> None:
     "mutate_pull,error",
     [
         (lambda pull: pull.update({"state": "closed"}), "not open"),
-        (lambda pull: pull.update({"draft": False}), "not draft"),
         (lambda pull: pull["head"].update({"sha": "0" * 40}), "head drifted"),
     ],
 )
@@ -625,6 +630,62 @@ def test_controlled_publisher_pr_drift_prevents_verified_success(
     with pytest.raises(PublisherError, match=error):
         publisher.run_once()
     assert not (config.host_root / "state" / "publisher-service-success.json").exists()
+
+
+def test_controlled_publisher_ready_for_review_stays_verified(
+    tmp_path: Path,
+) -> None:
+    config_path, product_bare, _, job_id = make_fixture(tmp_path)
+    config = load_publisher_config(config_path)
+    client = FakeGitHubClient(product_bare)
+    publisher = ControlledPublisher(config, github_client=client)
+    assert publisher.run_once() == (job_id,)
+    (config.host_root / "state" / "publisher-service-success.json").unlink()
+    client.pulls[0].update({"draft": False})
+
+    assert publisher.run_once() == ()
+    success = publisher_success(config_path)
+    assert job_id in success["terminal_evidence"]["verified_jobs"]
+
+
+def test_controlled_publisher_founder_merged_pr_stays_verified(
+    tmp_path: Path,
+) -> None:
+    config_path, product_bare, _, job_id = make_fixture(tmp_path)
+    config = load_publisher_config(config_path)
+    client = FakeGitHubClient(product_bare)
+    publisher = ControlledPublisher(config, github_client=client)
+    assert publisher.run_once() == (job_id,)
+    (config.host_root / "state" / "publisher-service-success.json").unlink()
+    client.pulls[0].update(
+        {
+            "state": "closed",
+            "draft": False,
+            "merged": True,
+            "merged_at": "2026-09-02T18:45:01Z",
+        }
+    )
+    proc = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(product_bare),
+            "update-ref",
+            "-d",
+            f"refs/heads/autobuilder/{job_id}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+
+    assert publisher.run_once() == ()
+    success = publisher_success(config_path)
+    assert job_id in success["terminal_evidence"]["verified_jobs"]
+    assert not (config.host_root / "state" / "controlled-publisher-error.json").exists()
 
 
 def test_controlled_publisher_gate_hash_drift_prevents_verified_success(

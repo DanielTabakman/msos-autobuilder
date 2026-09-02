@@ -828,12 +828,37 @@ def test_publisher_related_work_uses_search_instead_of_listing_history() -> None
     assert not any("/pulls?state=all" in path for path in calls)
 
 
+def test_derive_publish_plan_skips_historical_useful_jobs_without_work_admission() -> None:
+    plan = _derive_publish_plan(
+        "useful-ppe-5316-token-audit-readonly-8d6c7119ec7a",
+        {
+            "founder_build_next": {
+                "work_item_id": "ppe-issue-5316",
+                "native_slice": {
+                    "touch_set": [
+                        "scripts/ppe_token_audit.py",
+                        "tests/test_ppe_token_audit.py",
+                    ]
+                },
+            },
+            "candidate_validation": {
+                "allowed_changed_paths": ["scripts/ppe_token_audit.py"],
+            },
+        },
+    )
+    assert plan is None
+
+
 def test_derive_publish_plan_uses_packet_paths_not_gate_pytest() -> None:
     plan = _derive_publish_plan(
         "build-next-ppe-uso-revision-2",
         {
             "founder_build_next": {
                 "work_item_id": "ppe_commodity_proxy_tier1_v1",
+                "work_admission": {
+                    "status": "NEW_WORK_ADMITTED",
+                    "objective_sha256": "a" * 64,
+                },
                 "native_slice": {
                     "touch_set": [
                         "config/assets.yaml",

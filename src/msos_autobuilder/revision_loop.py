@@ -513,6 +513,12 @@ def _attach_build_next_contract(
     founder = job_yaml.get("founder_build_next")
     if isinstance(founder, Mapping):
         copied = dict(founder)
+        copied.pop("refill_attempt", None)
+        evidence = copied.get("portfolio_selection_evidence")
+        if isinstance(evidence, Mapping):
+            evidence = dict(evidence)
+            evidence.pop("refill_attempt", None)
+            copied["portfolio_selection_evidence"] = evidence
         native = copied.get("native_slice")
         if isinstance(native, Mapping) and exact_paths:
             native = dict(native)

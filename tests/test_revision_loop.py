@@ -501,6 +501,18 @@ def _build_next_job_yaml() -> dict[str, object]:
         "work_item_id": "ppe_commodity_proxy_tier1_v1",
         "repository": "DanielTabakman/Probability-prediction-engine",
         "registered_adapter": "ppe_operator",
+        "refill_attempt": {
+            "generation_id": "refill-12345678",
+            "attempt_ordinal": 2,
+            "retry_ordinal": 0,
+        },
+        "portfolio_selection_evidence": {
+            "refill_attempt": {
+                "generation_id": "refill-12345678",
+                "attempt_ordinal": 2,
+                "retry_ordinal": 0,
+            }
+        },
         "native_slice": {
             "slice_id": "PPE-CommProxy-Core-Slice002",
             "touch_set": [
@@ -552,6 +564,8 @@ def test_build_revision_manifest_copies_aligned_build_next_contract() -> None:
         max_revision_depth=3,
     )
     assert manifest["job_id"] == "build-next-ppe-ppe_commodity_proxy_tier1_v1-revision-1"
+    assert "refill_attempt" not in manifest["founder_build_next"]
+    assert "refill_attempt" not in manifest["founder_build_next"]["portfolio_selection_evidence"]
     assert manifest["founder_build_next"]["native_slice"]["touch_set"] == [
         "config/assets.yaml",
         "src/viz/embed_display_boundary.py",

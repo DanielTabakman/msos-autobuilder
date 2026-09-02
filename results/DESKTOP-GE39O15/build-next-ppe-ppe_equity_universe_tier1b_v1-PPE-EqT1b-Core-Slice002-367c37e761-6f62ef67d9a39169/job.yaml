@@ -1,0 +1,545 @@
+version: 1
+job_id: build-next-ppe-ppe_equity_universe_tier1b_v1-PPE-EqT1b-Core-Slice002-367c37e761-6f62ef67d9a39169
+approved: true
+approved_at: '2026-09-02T20:39:13Z'
+publication_enabled: false
+requested_by: capacity-one refill controller
+expected_source_head: 367c37e7618183ac9f7640c7b1204aee66469fa7
+founder_build_next:
+  version: 1
+  pipeline_id: ppe
+  work_item_id: ppe_equity_universe_tier1b_v1
+  repository: DanielTabakman/Probability-prediction-engine
+  registered_adapter: ppe_operator
+  source:
+    remote: origin
+    remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+    repository: DanielTabakman/Probability-prediction-engine
+    ref: HEAD
+    remote_ref: 367c37e7618183ac9f7640c7b1204aee66469fa7
+    commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+  work_item_source_sha256_v1: a540589e3f86cf0f0c1d6999905dae765b0fed2eb4bbdde6527d0de1cc6695c0
+  phase_plan: docs/SOP/PHASE_PLANS/ppe_equity_universe_tier1b_v1_relay.json
+  native_slice:
+    slice_id: PPE-EqT1b-Core-Slice002
+    build_branch: build/auto/PPE-EqT1b-Core-Slice002-eq_t1b
+    layer_preset: PPE_CORE
+    worker_mode: local-agent
+    declared_plane: PRODUCT-PLANE
+    touch_set:
+    - config/assets.yaml
+    - config/assets_tier1_manifest.yaml
+    - src/viz/embed_display_boundary.py
+    - scripts/witness_asset_catalog.py
+    - tests/test_assets_registry.py
+    - tests/test_lab_asset_selection.py
+    sequence_index: 1
+    total_slices: 4
+    previous_slices:
+    - PPE-EqT1b-Control-Slice001
+    following_slices:
+    - PPE-EqT1b-Witness-Slice003
+    - PPE-EqT1b-Closeout-Slice004
+  prerequisites:
+    source: ppe_native_read_only
+    evidence: &id001
+      frozen_target_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+      target_remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      phase_plan: docs/SOP/PHASE_PLANS/ppe_equity_universe_tier1b_v1_relay.json
+      phase_plan_blob_sha: abc6fba00a18e0cfe4c1fb085cf87b2300d0b5e2
+      control_slice:
+        slice_id: PPE-EqT1b-Control-Slice001
+        implementationStatus: PENDING
+        nonBlocking: true
+      source_files:
+      - path: docs/SOP/PHASE_PLANS/ppe_equity_universe_tier1b_v1_relay.json
+        exists: true
+        git_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+        blob_sha: abc6fba00a18e0cfe4c1fb085cf87b2300d0b5e2
+        sha256: a3126524a41c4cbf80da625270d5baf774be6066f68c081f20a03547e86cb86c
+      - path: docs/SOP/SPRINT_PPE_EQUITY_UNIVERSE_TIER1B_V1.md
+        exists: true
+        git_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+        blob_sha: 24f19f220a9f0385ed7da1fd8506e6f6590fa9fb
+        sha256: d6a008f100caf3511bbe2d5de14dbf04fbf773faef185d3d00b7b93419288eec
+      - path: docs/SOP/POST_PPE_EQUITY_UNIVERSE_TIER1B_V1_SELECTION.md
+        exists: true
+        git_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+        blob_sha: 8e3024d7e78d589f138f87a08b212ed095b25953
+        sha256: 787938509be9e02c6cbbc1accadb34b8d220ada2e780206d36f04a3c4b6507a3
+      - path: docs/SOP/PPE_EQUITY_UNIVERSE_TIER1B_V1_EVIDENCE_STATUS.md
+        exists: true
+        git_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+        blob_sha: 717b8e6c4bb0e2324fe156505c55eeb084ed7abb
+        sha256: 94a564e3a42599de7697a643dc7235f7fbbd4286ced3b5f46f87828a6e3fe8eb
+      - path: docs/SOP/ACTIVE_PHASE_MANIFEST.json
+        exists: true
+        git_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+        blob_sha: bef16bafa160f5240b85c69b119b6ba627e041bb
+        sha256: c1425fc9fda014c0379113ff849a0466e3c31e5c4f489975becfbb913bf067dc
+    required_slices: &id002
+    - PPE-EqT1b-Control-Slice001
+    satisfied_slices: &id003 []
+    non_blocking_slices: &id004
+    - PPE-EqT1b-Control-Slice001
+  portfolio_selection_evidence:
+    version: 1
+    source:
+      remote: origin
+      remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      repository: DanielTabakman/Probability-prediction-engine
+      ref: HEAD
+      remote_ref: 367c37e7618183ac9f7640c7b1204aee66469fa7
+      commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+    selected:
+      pipeline_id: ppe
+      work_item_id: ppe_equity_universe_tier1b_v1
+      trace: docs/SOP/PHASE_PLANS/ppe_equity_universe_tier1b_v1_relay.json
+      packet_sha256: bcfc9f02611ecdfd91700269264b386aef6fc7e625983d6b94222b5da8c7a533
+    native_slice:
+      slice_id: PPE-EqT1b-Core-Slice002
+      build_branch: build/auto/PPE-EqT1b-Core-Slice002-eq_t1b
+      layer_preset: PPE_CORE
+      worker_mode: local-agent
+      declared_plane: PRODUCT-PLANE
+      touch_set:
+      - config/assets.yaml
+      - config/assets_tier1_manifest.yaml
+      - src/viz/embed_display_boundary.py
+      - scripts/witness_asset_catalog.py
+      - tests/test_assets_registry.py
+      - tests/test_lab_asset_selection.py
+      sequence_index: 1
+      total_slices: 4
+      previous_slices:
+      - PPE-EqT1b-Control-Slice001
+      following_slices:
+      - PPE-EqT1b-Witness-Slice003
+      - PPE-EqT1b-Closeout-Slice004
+    prerequisites:
+      source: ppe_native_read_only
+      evidence: *id001
+      required_slices: *id002
+      satisfied_slices: *id003
+      non_blocking_slices: *id004
+    packet_sha256: bcfc9f02611ecdfd91700269264b386aef6fc7e625983d6b94222b5da8c7a533
+    admitted_target:
+      target_repository: DanielTabakman/Probability-prediction-engine
+      target_source_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+      target_remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      work_item_id: ppe_equity_universe_tier1b_v1
+      pipeline_id: ppe
+      allowed_paths:
+      - config/assets.yaml
+      - config/assets_tier1_manifest.yaml
+      - src/viz/embed_display_boundary.py
+      - scripts/witness_asset_catalog.py
+      - tests/test_assets_registry.py
+      - tests/test_lab_asset_selection.py
+      adapter: ppe_operator
+      dependency_source_sha256: 47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394
+      validation_identity: e7929e2cd73f8169d8126ead7350ca38b56cc404010b01c26c6221e6ca964b00
+      packet_sha256: bcfc9f02611ecdfd91700269264b386aef6fc7e625983d6b94222b5da8c7a533
+    requested_exclusions:
+    - options_expression_fit_ranking_v1
+    - options_horizon_comparison_v1
+    - ppe_commodity_proxy_tier1_v1
+    refill_attempt:
+      version: 1
+      generation_id: refill-superseded-b5b9ae6b7c855baf1ddd0e06
+      attempt_ordinal: 3
+      retry_ordinal: 0
+      reason: initial
+      selected_work_item_id: ppe_equity_universe_tier1b_v1
+    identity_sha256: fbee74ab95e84b936eb6ef81c20e3e405adbab42dec3f85d258f5e7d92c0eff8
+  refill_attempt:
+    version: 1
+    generation_id: refill-superseded-b5b9ae6b7c855baf1ddd0e06
+    attempt_ordinal: 3
+    retry_ordinal: 0
+    reason: initial
+    selected_work_item_id: ppe_equity_universe_tier1b_v1
+  authority:
+    publication_enabled: false
+    merge_enabled: false
+    product_main_write_enabled: false
+    merge_authority_class: AUTO_MERGE_WHEN_GREEN
+    merge_authority_declared_at: '2026-09-02T16:00:00+00:00'
+  work_admission:
+    status: NEW_WORK_ADMITTED
+    objective_sha256: b7f317ed1627eaca9b62f1d4214c905d31fb92a10b3a242784f52bb3a86f7c4e
+    claim_generation: 1
+    claim_writer_id: build-next:build-next-ppe-ppe_equity_universe_tier1b_v1-PPE-EqT1b-Core-Slice002-367c37e761-6f62ef67d9a39169
+    authorized_paths:
+    - config/assets.yaml
+    - config/assets_tier1_manifest.yaml
+    - src/viz/embed_display_boundary.py
+    - scripts/witness_asset_catalog.py
+    - tests/test_assets_registry.py
+    - tests/test_lab_asset_selection.py
+    objective_identity:
+      repository: DanielTabakman/Probability-prediction-engine
+      linked_issue: null
+      work_item_id: ppe_equity_universe_tier1b_v1
+      stable_key: 9468761b8576a5eba96ad8e98327076a83efd2b9be11f055218d2104a20589a7
+      acceptance_contract_sha256: f681f6c0bde3ab93c5dc463d6ded1764b9febcdfc83787d425aa85fd92fe86d1
+      error_signature: null
+      release_identity: null
+    acceptance_contract:
+      version: 1
+      pipeline_id: ppe
+      work_item_id: ppe_equity_universe_tier1b_v1
+      adapter: ppe_operator
+      target_repository: DanielTabakman/Probability-prediction-engine
+      native_slice_id: PPE-EqT1b-Core-Slice002
+      authorized_paths:
+      - config/assets.yaml
+      - config/assets_tier1_manifest.yaml
+      - src/viz/embed_display_boundary.py
+      - scripts/witness_asset_catalog.py
+      - tests/test_assets_registry.py
+      - tests/test_lab_asset_selection.py
+      forbidden_paths:
+      - .git/**
+      - .github/workflows/**
+      - artifacts/**
+      - runtime/**
+      - state/**
+      - queue/**
+      - config/founder_pipeline_registry.json
+      - docs/SOP/PHASE_QUEUE.json
+      - docs/SOP/ACTIVE_PHASE_MANIFEST.json
+      - docs/SOP/FOUNDER_PIPELINE_COMMANDS_V1.md
+      - docs/SOP/PIPELINE_CREATION_SOP_V1.md
+      - docs/SOP/SCHEDULED_AUTOBUILDER_LANE_POLICY_V1.md
+      - docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md
+      - docs/SOP/SPRINT_*.md
+      - docs/SOP/*SELECTION*.md
+      - docs/SOP/POST_*_SELECTION*.md
+      - docs/SOP/*PRIORITY*.md
+      - docs/SOP/*FRONTIER*.md
+      - docs/SOP/*MANIFEST*.json
+      - artifacts/orchestrator/**
+      - artifacts/control_plane/**
+      - artifacts/relay/**
+      - artifacts/leases/**
+      publication_enabled: false
+      merge_enabled: false
+      product_main_write_enabled: false
+      target_source_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+      packet_sha256: bcfc9f02611ecdfd91700269264b386aef6fc7e625983d6b94222b5da8c7a533
+      validation_identity: e7929e2cd73f8169d8126ead7350ca38b56cc404010b01c26c6221e6ca964b00
+    execution_validation_contract_sha256: b102804e9ef0e9996788931906ea2ceef3694a81fda22f6ced6f9cbe37b9b8b4
+    admitted_target:
+      target_repository: DanielTabakman/Probability-prediction-engine
+      target_source_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+      target_remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      work_item_id: ppe_equity_universe_tier1b_v1
+      pipeline_id: ppe
+      allowed_paths:
+      - config/assets.yaml
+      - config/assets_tier1_manifest.yaml
+      - src/viz/embed_display_boundary.py
+      - scripts/witness_asset_catalog.py
+      - tests/test_assets_registry.py
+      - tests/test_lab_asset_selection.py
+      adapter: ppe_operator
+      dependency_source_sha256: 47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394
+      validation_identity: e7929e2cd73f8169d8126ead7350ca38b56cc404010b01c26c6221e6ca964b00
+      packet_sha256: bcfc9f02611ecdfd91700269264b386aef6fc7e625983d6b94222b5da8c7a533
+candidate_validation:
+  version: 1
+  pipeline_id: ppe
+  adapter: ppe_operator
+  target_repository: DanielTabakman/Probability-prediction-engine
+  source_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+  job_id: build-next-ppe-ppe_equity_universe_tier1b_v1-PPE-EqT1b-Core-Slice002-367c37e761-6f62ef67d9a39169
+  work_item_id: ppe_equity_universe_tier1b_v1
+  native_slice_id: PPE-EqT1b-Core-Slice002
+  allowed_changed_paths:
+  - config/assets.yaml
+  - config/assets_tier1_manifest.yaml
+  - scripts/witness_asset_catalog.py
+  - src/viz/embed_display_boundary.py
+  - tests/test_assets_registry.py
+  - tests/test_lab_asset_selection.py
+  dependency_policy:
+    version: 1
+    adapter: ppe_operator
+    profile_id: ppe-ci-pytest-v1
+    source: accepted_ppe_ci_bootstrap
+    source_commit: 367c37e7618183ac9f7640c7b1204aee66469fa7
+    dependency_source_path: requirements.txt
+    dependency_source_sha256: 47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394
+    network_allowed: true
+    candidate_environment_required: true
+    strategy: candidate_local_venv_requirements_test_tooling_editable_install
+    test_tooling:
+    - pytest
+    - pytest-xdist
+    - ruff
+  bootstrap:
+  - name: upgrade-pip
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - --upgrade
+    - pip
+    cwd: .
+    timeout_seconds: 600
+    required: true
+  - name: install-requirements
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - -r
+    - requirements.txt
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  - name: install-test-tooling
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - pytest
+    - pytest-xdist
+    - ruff
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  - name: install-candidate-package
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - -e
+    - .
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  checks:
+  - name: repository-pytest
+    argv:
+    - python
+    - -m
+    - pytest
+    - -q
+    cwd: .
+    timeout_seconds: 1800
+    required: true
+  publication_enabled: false
+  merge_enabled: false
+  product_main_write_enabled: false
+  contract_sha256: b102804e9ef0e9996788931906ea2ceef3694a81fda22f6ced6f9cbe37b9b8b4
+manifest:
+  version: 1
+  publication_enabled: false
+  lanes:
+  - task_id: PPE-EqT1b-Core-Slice002
+    lane_id: PPE-EqT1b-Core-Slice002
+    chapter_id: PPE_EQUITY_UNIVERSE_TIER1B_V1
+    branch: build/auto/PPE-EqT1b-Core-Slice002-eq_t1b
+    layer: PPE_CORE
+    worker_mode: local-agent
+    preferred_cost_class: standard
+    allowed_paths:
+    - config/assets.yaml
+    - config/assets_tier1_manifest.yaml
+    - src/viz/embed_display_boundary.py
+    - scripts/witness_asset_catalog.py
+    - tests/test_assets_registry.py
+    - tests/test_lab_asset_selection.py
+    forbidden_paths:
+    - .git/**
+    - .github/workflows/**
+    - artifacts/**
+    - runtime/**
+    - state/**
+    - queue/**
+    - config/founder_pipeline_registry.json
+    - docs/SOP/PHASE_QUEUE.json
+    - docs/SOP/ACTIVE_PHASE_MANIFEST.json
+    - docs/SOP/FOUNDER_PIPELINE_COMMANDS_V1.md
+    - docs/SOP/PIPELINE_CREATION_SOP_V1.md
+    - docs/SOP/SCHEDULED_AUTOBUILDER_LANE_POLICY_V1.md
+    - docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md
+    - docs/SOP/SPRINT_*.md
+    - docs/SOP/*SELECTION*.md
+    - docs/SOP/POST_*_SELECTION*.md
+    - docs/SOP/*PRIORITY*.md
+    - docs/SOP/*FRONTIER*.md
+    - docs/SOP/*MANIFEST*.json
+    - artifacts/orchestrator/**
+    - artifacts/control_plane/**
+    - artifacts/relay/**
+    - artifacts/leases/**
+    allow_changes: true
+    instruction: "Implementation thread. THREAD_ROLE: codex_build.\n\nImplement only\
+      \ the bounded work item selected from Autobuilder-owned approved job packets.\n\
+      Pipeline ID: ppe\nWork-item ID: ppe_equity_universe_tier1b_v1\nSource repository:\
+      \ DanielTabakman/Probability-prediction-engine\nExact source commit: 367c37e7618183ac9f7640c7b1204aee66469fa7\n\
+      Canonical source ref: 367c37e7618183ac9f7640c7b1204aee66469fa7\nCanonical source\
+      \ remote: https://github.com/DanielTabakman/Probability-prediction-engine.git\n\
+      Registered phase plan: docs/SOP/PHASE_PLANS/ppe_equity_universe_tier1b_v1_relay.json\n\
+      Native sliceId: PPE-EqT1b-Core-Slice002\nNative buildBranch: build/auto/PPE-EqT1b-Core-Slice002-eq_t1b\n\
+      Native layerPreset: PPE_CORE\nNative workerMode: local-agent\nNative sequence:\
+      \ 2 of 4\n\nAuthority and publication boundary:\n- Do not write product main\
+      \ or merge.\n- Do not force-push, enable automerge, mark a PR ready, or publish\
+      \ directly.\n- Produce only workspace changes for the Autobuilder relay/gate/publisher\
+      \ path.\n- Preserve the controlled draft publisher as the only product publisher.\n\
+      - Treat sprint specs, selection records, queues, manifests, registries, leases,\
+      \ and operator state as read-only canon/evidence.\n- Do not perform smoke, closeout,\
+      \ selection, queue, or control-plane updates.\n\nAllowed paths:\n- config/assets.yaml\n\
+      - config/assets_tier1_manifest.yaml\n- src/viz/embed_display_boundary.py\n-\
+      \ scripts/witness_asset_catalog.py\n- tests/test_assets_registry.py\n- tests/test_lab_asset_selection.py\n\
+      \nForbidden paths:\n- .git/**\n- .github/workflows/**\n- artifacts/**\n- runtime/**\n\
+      - state/**\n- queue/**\n- config/founder_pipeline_registry.json\n- docs/SOP/PHASE_QUEUE.json\n\
+      - docs/SOP/ACTIVE_PHASE_MANIFEST.json\n- docs/SOP/FOUNDER_PIPELINE_COMMANDS_V1.md\n\
+      - docs/SOP/PIPELINE_CREATION_SOP_V1.md\n- docs/SOP/SCHEDULED_AUTOBUILDER_LANE_POLICY_V1.md\n\
+      - docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md\n- docs/SOP/SPRINT_*.md\n\
+      - docs/SOP/*SELECTION*.md\n- docs/SOP/POST_*_SELECTION*.md\n- docs/SOP/*PRIORITY*.md\n\
+      - docs/SOP/*FRONTIER*.md\n- docs/SOP/*MANIFEST*.json\n- artifacts/orchestrator/**\n\
+      - artifacts/control_plane/**\n- artifacts/relay/**\n- artifacts/leases/**\n\n\
+      Acceptance criteria and validation requirements:\n- Implement only the selected\
+      \ native PPE implementation slice.\n- Preserve native PPE sequencing; do not\
+      \ execute later smoke or closeout slices.\n- Read sprint spec as canon: docs/SOP/SPRINT_PPE_EQUITY_UNIVERSE_TIER1B_V1.md\n\
+      - Read selection record as canon: docs/SOP/POST_PPE_EQUITY_UNIVERSE_TIER1B_V1_SELECTION.md\n\
+      - Add or update focused tests for changed behavior.\n- Run the focused tests\
+      \ and relevant repository gates before closeout.\n- Return evidence suitable\
+      \ for the existing relay, candidate gate, revision loop, and controlled publisher.\n\
+      \nPortfolio-selection evidence identity:\n{\n  \"admitted_target\": {\n    \"\
+      adapter\": \"ppe_operator\",\n    \"allowed_paths\": [\n      \"config/assets.yaml\"\
+      ,\n      \"config/assets_tier1_manifest.yaml\",\n      \"src/viz/embed_display_boundary.py\"\
+      ,\n      \"scripts/witness_asset_catalog.py\",\n      \"tests/test_assets_registry.py\"\
+      ,\n      \"tests/test_lab_asset_selection.py\"\n    ],\n    \"dependency_source_sha256\"\
+      : \"47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394\",\n  \
+      \  \"packet_sha256\": \"bcfc9f02611ecdfd91700269264b386aef6fc7e625983d6b94222b5da8c7a533\"\
+      ,\n    \"pipeline_id\": \"ppe\",\n    \"target_remote_url\": \"https://github.com/DanielTabakman/Probability-prediction-engine.git\"\
+      ,\n    \"target_repository\": \"DanielTabakman/Probability-prediction-engine\"\
+      ,\n    \"target_source_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n    \"validation_identity\": \"e7929e2cd73f8169d8126ead7350ca38b56cc404010b01c26c6221e6ca964b00\"\
+      ,\n    \"work_item_id\": \"ppe_equity_universe_tier1b_v1\"\n  },\n  \"identity_sha256\"\
+      : \"fbee74ab95e84b936eb6ef81c20e3e405adbab42dec3f85d258f5e7d92c0eff8\",\n  \"\
+      native_slice\": {\n    \"build_branch\": \"build/auto/PPE-EqT1b-Core-Slice002-eq_t1b\"\
+      ,\n    \"declared_plane\": \"PRODUCT-PLANE\",\n    \"following_slices\": [\n\
+      \      \"PPE-EqT1b-Witness-Slice003\",\n      \"PPE-EqT1b-Closeout-Slice004\"\
+      \n    ],\n    \"layer_preset\": \"PPE_CORE\",\n    \"previous_slices\": [\n\
+      \      \"PPE-EqT1b-Control-Slice001\"\n    ],\n    \"sequence_index\": 1,\n\
+      \    \"slice_id\": \"PPE-EqT1b-Core-Slice002\",\n    \"total_slices\": 4,\n\
+      \    \"touch_set\": [\n      \"config/assets.yaml\",\n      \"config/assets_tier1_manifest.yaml\"\
+      ,\n      \"src/viz/embed_display_boundary.py\",\n      \"scripts/witness_asset_catalog.py\"\
+      ,\n      \"tests/test_assets_registry.py\",\n      \"tests/test_lab_asset_selection.py\"\
+      \n    ],\n    \"worker_mode\": \"local-agent\"\n  },\n  \"packet_sha256\": \"\
+      bcfc9f02611ecdfd91700269264b386aef6fc7e625983d6b94222b5da8c7a533\",\n  \"prerequisites\"\
+      : {\n    \"evidence\": {\n      \"control_slice\": {\n        \"implementationStatus\"\
+      : \"PENDING\",\n        \"nonBlocking\": true,\n        \"slice_id\": \"PPE-EqT1b-Control-Slice001\"\
+      \n      },\n      \"frozen_target_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n      \"phase_plan\": \"docs/SOP/PHASE_PLANS/ppe_equity_universe_tier1b_v1_relay.json\"\
+      ,\n      \"phase_plan_blob_sha\": \"abc6fba00a18e0cfe4c1fb085cf87b2300d0b5e2\"\
+      ,\n      \"source_files\": [\n        {\n          \"blob_sha\": \"abc6fba00a18e0cfe4c1fb085cf87b2300d0b5e2\"\
+      ,\n          \"exists\": true,\n          \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n          \"path\": \"docs/SOP/PHASE_PLANS/ppe_equity_universe_tier1b_v1_relay.json\"\
+      ,\n          \"sha256\": \"a3126524a41c4cbf80da625270d5baf774be6066f68c081f20a03547e86cb86c\"\
+      \n        },\n        {\n          \"blob_sha\": \"24f19f220a9f0385ed7da1fd8506e6f6590fa9fb\"\
+      ,\n          \"exists\": true,\n          \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n          \"path\": \"docs/SOP/SPRINT_PPE_EQUITY_UNIVERSE_TIER1B_V1.md\"\
+      ,\n          \"sha256\": \"d6a008f100caf3511bbe2d5de14dbf04fbf773faef185d3d00b7b93419288eec\"\
+      \n        },\n        {\n          \"blob_sha\": \"8e3024d7e78d589f138f87a08b212ed095b25953\"\
+      ,\n          \"exists\": true,\n          \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n          \"path\": \"docs/SOP/POST_PPE_EQUITY_UNIVERSE_TIER1B_V1_SELECTION.md\"\
+      ,\n          \"sha256\": \"787938509be9e02c6cbbc1accadb34b8d220ada2e780206d36f04a3c4b6507a3\"\
+      \n        },\n        {\n          \"blob_sha\": \"717b8e6c4bb0e2324fe156505c55eeb084ed7abb\"\
+      ,\n          \"exists\": true,\n          \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n          \"path\": \"docs/SOP/PPE_EQUITY_UNIVERSE_TIER1B_V1_EVIDENCE_STATUS.md\"\
+      ,\n          \"sha256\": \"94a564e3a42599de7697a643dc7235f7fbbd4286ced3b5f46f87828a6e3fe8eb\"\
+      \n        },\n        {\n          \"blob_sha\": \"bef16bafa160f5240b85c69b119b6ba627e041bb\"\
+      ,\n          \"exists\": true,\n          \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n          \"path\": \"docs/SOP/ACTIVE_PHASE_MANIFEST.json\",\n          \"\
+      sha256\": \"c1425fc9fda014c0379113ff849a0466e3c31e5c4f489975becfbb913bf067dc\"\
+      \n        }\n      ],\n      \"target_remote_url\": \"https://github.com/DanielTabakman/Probability-prediction-engine.git\"\
+      \n    },\n    \"non_blocking_slices\": [\n      \"PPE-EqT1b-Control-Slice001\"\
+      \n    ],\n    \"required_slices\": [\n      \"PPE-EqT1b-Control-Slice001\"\n\
+      \    ],\n    \"satisfied_slices\": [],\n    \"source\": \"ppe_native_read_only\"\
+      \n  },\n  \"refill_attempt\": {\n    \"attempt_ordinal\": 3,\n    \"generation_id\"\
+      : \"refill-superseded-b5b9ae6b7c855baf1ddd0e06\",\n    \"reason\": \"initial\"\
+      ,\n    \"retry_ordinal\": 0,\n    \"selected_work_item_id\": \"ppe_equity_universe_tier1b_v1\"\
+      ,\n    \"version\": 1\n  },\n  \"requested_exclusions\": [\n    \"options_expression_fit_ranking_v1\"\
+      ,\n    \"options_horizon_comparison_v1\",\n    \"ppe_commodity_proxy_tier1_v1\"\
+      \n  ],\n  \"selected\": {\n    \"packet_sha256\": \"bcfc9f02611ecdfd91700269264b386aef6fc7e625983d6b94222b5da8c7a533\"\
+      ,\n    \"pipeline_id\": \"ppe\",\n    \"trace\": \"docs/SOP/PHASE_PLANS/ppe_equity_universe_tier1b_v1_relay.json\"\
+      ,\n    \"work_item_id\": \"ppe_equity_universe_tier1b_v1\"\n  },\n  \"source\"\
+      : {\n    \"commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\",\n    \"ref\"\
+      : \"HEAD\",\n    \"remote\": \"origin\",\n    \"remote_ref\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n    \"remote_url\": \"https://github.com/DanielTabakman/Probability-prediction-engine.git\"\
+      ,\n    \"repository\": \"DanielTabakman/Probability-prediction-engine\"\n  },\n\
+      \  \"version\": 1\n}\n\nRefill attempt context:\n{\n  \"attempt_ordinal\": 3,\n\
+      \  \"generation_id\": \"refill-superseded-b5b9ae6b7c855baf1ddd0e06\",\n  \"\
+      reason\": \"initial\",\n  \"retry_ordinal\": 0,\n  \"selected_work_item_id\"\
+      : \"ppe_equity_universe_tier1b_v1\",\n  \"version\": 1\n}\n\nPipeline-native\
+      \ prerequisite evidence:\n{\n  \"evidence\": {\n    \"control_slice\": {\n \
+      \     \"implementationStatus\": \"PENDING\",\n      \"nonBlocking\": true,\n\
+      \      \"slice_id\": \"PPE-EqT1b-Control-Slice001\"\n    },\n    \"frozen_target_commit\"\
+      : \"367c37e7618183ac9f7640c7b1204aee66469fa7\",\n    \"phase_plan\": \"docs/SOP/PHASE_PLANS/ppe_equity_universe_tier1b_v1_relay.json\"\
+      ,\n    \"phase_plan_blob_sha\": \"abc6fba00a18e0cfe4c1fb085cf87b2300d0b5e2\"\
+      ,\n    \"source_files\": [\n      {\n        \"blob_sha\": \"abc6fba00a18e0cfe4c1fb085cf87b2300d0b5e2\"\
+      ,\n        \"exists\": true,\n        \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n        \"path\": \"docs/SOP/PHASE_PLANS/ppe_equity_universe_tier1b_v1_relay.json\"\
+      ,\n        \"sha256\": \"a3126524a41c4cbf80da625270d5baf774be6066f68c081f20a03547e86cb86c\"\
+      \n      },\n      {\n        \"blob_sha\": \"24f19f220a9f0385ed7da1fd8506e6f6590fa9fb\"\
+      ,\n        \"exists\": true,\n        \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n        \"path\": \"docs/SOP/SPRINT_PPE_EQUITY_UNIVERSE_TIER1B_V1.md\",\n\
+      \        \"sha256\": \"d6a008f100caf3511bbe2d5de14dbf04fbf773faef185d3d00b7b93419288eec\"\
+      \n      },\n      {\n        \"blob_sha\": \"8e3024d7e78d589f138f87a08b212ed095b25953\"\
+      ,\n        \"exists\": true,\n        \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n        \"path\": \"docs/SOP/POST_PPE_EQUITY_UNIVERSE_TIER1B_V1_SELECTION.md\"\
+      ,\n        \"sha256\": \"787938509be9e02c6cbbc1accadb34b8d220ada2e780206d36f04a3c4b6507a3\"\
+      \n      },\n      {\n        \"blob_sha\": \"717b8e6c4bb0e2324fe156505c55eeb084ed7abb\"\
+      ,\n        \"exists\": true,\n        \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n        \"path\": \"docs/SOP/PPE_EQUITY_UNIVERSE_TIER1B_V1_EVIDENCE_STATUS.md\"\
+      ,\n        \"sha256\": \"94a564e3a42599de7697a643dc7235f7fbbd4286ced3b5f46f87828a6e3fe8eb\"\
+      \n      },\n      {\n        \"blob_sha\": \"bef16bafa160f5240b85c69b119b6ba627e041bb\"\
+      ,\n        \"exists\": true,\n        \"git_commit\": \"367c37e7618183ac9f7640c7b1204aee66469fa7\"\
+      ,\n        \"path\": \"docs/SOP/ACTIVE_PHASE_MANIFEST.json\",\n        \"sha256\"\
+      : \"c1425fc9fda014c0379113ff849a0466e3c31e5c4f489975becfbb913bf067dc\"\n   \
+      \   }\n    ],\n    \"target_remote_url\": \"https://github.com/DanielTabakman/Probability-prediction-engine.git\"\
+      \n  },\n  \"non_blocking_slices\": [\n    \"PPE-EqT1b-Control-Slice001\"\n \
+      \ ],\n  \"required_slices\": [\n    \"PPE-EqT1b-Control-Slice001\"\n  ],\n \
+      \ \"satisfied_slices\": [],\n  \"source\": \"ppe_native_read_only\"\n}\n\nRelevant\
+      \ canon/task packet:\n{\n  \"following_slices\": [\n    \"PPE-EqT1b-Witness-Slice003\"\
+      ,\n    \"PPE-EqT1b-Closeout-Slice004\"\n  ],\n  \"phase_plan\": \"docs/SOP/PHASE_PLANS/ppe_equity_universe_tier1b_v1_relay.json\"\
+      ,\n  \"previous_slices\": [\n    \"PPE-EqT1b-Control-Slice001\"\n  ],\n  \"\
+      selected_slice\": {\n    \"build_branch\": \"build/auto/PPE-EqT1b-Core-Slice002-eq_t1b\"\
+      ,\n    \"declared_plane\": \"PRODUCT-PLANE\",\n    \"following_slices\": [\n\
+      \      \"PPE-EqT1b-Witness-Slice003\",\n      \"PPE-EqT1b-Closeout-Slice004\"\
+      \n    ],\n    \"layer_preset\": \"PPE_CORE\",\n    \"previous_slices\": [\n\
+      \      \"PPE-EqT1b-Control-Slice001\"\n    ],\n    \"raw_slice\": {\n      \"\
+      buildBranch\": \"build/auto/PPE-EqT1b-Core-Slice002-eq_t1b\",\n      \"declaredPlane\"\
+      : \"PRODUCT-PLANE\",\n      \"hardMinutes\": 360,\n      \"implementationStatus\"\
+      : \"PENDING\",\n      \"layerPreset\": \"PPE_CORE\",\n      \"maxAttempts\"\
+      : 2,\n      \"sliceId\": \"PPE-EqT1b-Core-Slice002\",\n      \"sprintSpecPath\"\
+      : \"docs/SOP/SPRINT_PPE_EQUITY_UNIVERSE_TIER1B_V1.md\",\n      \"susMinutes\"\
+      : 150,\n      \"touchSet\": [\n        \"config/assets.yaml\",\n        \"config/assets_tier1_manifest.yaml\"\
+      ,\n        \"src/viz/embed_display_boundary.py\",\n        \"scripts/witness_asset_catalog.py\"\
+      ,\n        \"tests/test_assets_registry.py\",\n        \"tests/test_lab_asset_selection.py\"\
+      \n      ],\n      \"workerMode\": \"local-agent\"\n    },\n    \"selection_record\"\
+      : \"docs/SOP/POST_PPE_EQUITY_UNIVERSE_TIER1B_V1_SELECTION.md\",\n    \"sequence_index\"\
+      : 1,\n    \"slice_id\": \"PPE-EqT1b-Core-Slice002\",\n    \"sprint_spec_path\"\
+      : \"docs/SOP/SPRINT_PPE_EQUITY_UNIVERSE_TIER1B_V1.md\",\n    \"total_slices\"\
+      : 4,\n    \"touch_set\": [\n      \"config/assets.yaml\",\n      \"config/assets_tier1_manifest.yaml\"\
+      ,\n      \"src/viz/embed_display_boundary.py\",\n      \"scripts/witness_asset_catalog.py\"\
+      ,\n      \"tests/test_assets_registry.py\",\n      \"tests/test_lab_asset_selection.py\"\
+      \n    ],\n    \"worker_mode\": \"local-agent\"\n  },\n  \"selection_record\"\
+      : \"docs/SOP/POST_PPE_EQUITY_UNIVERSE_TIER1B_V1_SELECTION.md\",\n  \"sprint_spec_path\"\
+      : \"docs/SOP/SPRINT_PPE_EQUITY_UNIVERSE_TIER1B_V1.md\"\n}\n\nNon-goals:\n- Do\
+      \ not charter new product scope.\n- Do not alter PPE registry or priority policy.\n\
+      - Do not run continuous refill or dispatch additional work."
+merge_authority:
+  class: AUTO_MERGE_WHEN_GREEN
+  declared_at: '2026-09-02T16:00:00+00:00'

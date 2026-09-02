@@ -1,0 +1,264 @@
+diff --git a/config/assets.yaml b/config/assets.yaml
+index a0a08bf..8d56c19 100644
+--- a/config/assets.yaml
++++ b/config/assets.yaml
+@@ -48,6 +48,86 @@ assets:
+       - "Dividends and corporate actions not modeled in v1."
+       - "LEAPS chain may be thin — BL trust state surfaced when OI/volume low."
+ 
++  AAPL:
++    label: "AAPL options"
++    asset_class: equity_mega
++    tier: core
++    venue: equity
++    equity_symbol: AAPL
++    price_unit: USD
++    contract_multiplier: 100
++    data_source: yfinance
++    enabled: true
++    spread_width: 10
++    catalog:
++      group: equity_mega
++    trust_notes:
++      - "Dividends and corporate actions not modeled in v1."
++
++  MSFT:
++    label: "MSFT options"
++    asset_class: equity_mega
++    tier: core
++    venue: equity
++    equity_symbol: MSFT
++    price_unit: USD
++    contract_multiplier: 100
++    data_source: yfinance
++    enabled: true
++    spread_width: 15
++    catalog:
++      group: equity_mega
++    trust_notes:
++      - "Dividends and corporate actions not modeled in v1."
++
++  AMZN:
++    label: "AMZN options"
++    asset_class: equity_mega
++    tier: core
++    venue: equity
++    equity_symbol: AMZN
++    price_unit: USD
++    contract_multiplier: 100
++    data_source: yfinance
++    enabled: true
++    spread_width: 15
++    catalog:
++      group: equity_mega
++    trust_notes:
++      - "Dividends and corporate actions not modeled in v1."
++
++  GOOGL:
++    label: "GOOGL options"
++    asset_class: equity_mega
++    tier: core
++    venue: equity
++    equity_symbol: GOOGL
++    price_unit: USD
++    contract_multiplier: 100
++    data_source: yfinance
++    enabled: true
++    spread_width: 15
++    catalog:
++      group: equity_mega
++    trust_notes:
++      - "Dividends and corporate actions not modeled in v1."
++
++  META:
++    label: "META options"
++    asset_class: equity_mega
++    tier: core
++    venue: equity
++    equity_symbol: META
++    price_unit: USD
++    contract_multiplier: 100
++    data_source: yfinance
++    enabled: true
++    spread_width: 15
++    catalog:
++      group: equity_mega
++    trust_notes:
++      - "Dividends and corporate actions not modeled in v1."
++
+   SPY:
+     label: "SPY options"
+     asset_class: equity_index
+diff --git a/config/assets_tier1_manifest.yaml b/config/assets_tier1_manifest.yaml
+index 09f2533..355c2fb 100644
+--- a/config/assets_tier1_manifest.yaml
++++ b/config/assets_tier1_manifest.yaml
+@@ -36,17 +36,17 @@ chapters:
+     volume_batch: 1
+     volume_rank_note: "OI ranks 1-3 among remaining tier-1 (2026-06-29)"
+   ppe_equity_universe_tier1b_v1:
+-    assets: [TSLA, AMD, AAPL, MSFT, AMZN]
++    assets: [AAPL, MSFT, AMZN, GOOGL, META]
+     status: queued
+     wave: ppe_asset_batch_wave1_v1
+     volume_batch: 2
+-    volume_rank_note: "OI ranks 4-10 singles; gated on batch 1 retrospect"
++    volume_rank_note: "Canon mega-cap batch 1 from Tier1B selection record"
+   ppe_equity_universe_tier1c_v1:
+-    assets: [COIN, SLV, GLD, GOOGL, META]
++    assets: [COIN, SLV, GLD]
+     status: queued
+     wave: ppe_asset_batch_wave1_v1
+     volume_batch: 3
+-    volume_rank_note: "OI ranks 6-13; SLV ahead of several mega caps"
++    volume_rank_note: "Remaining queued tier-1 rows after Tier1B canon split"
+   ppe_commodity_proxy_tier1_v1:
+     assets: [USO]
+     status: queued
+diff --git a/tests/test_assets_registry.py b/tests/test_assets_registry.py
+index 18537ff..2f2209d 100644
+--- a/tests/test_assets_registry.py
++++ b/tests/test_assets_registry.py
+@@ -18,6 +18,7 @@ from src.data.assets_registry import (
+     is_asset_enabled,
+     is_exposure_only,
+     list_asset_ids,
++    list_asset_ids_for_manifest_chapter,
+     list_catalog_entries,
+     list_enabled_asset_ids,
+     load_assets_registry,
+@@ -34,7 +35,23 @@ def test_assets_registry_schema_v2() -> None:
+     assert default_asset_id() == "ETH"
+     assets = reg.get("assets")
+     assert isinstance(assets, dict)
+-    assert set(assets) >= {"BTC", "ETH", "NVDA", "SOL", "HYPE", "BNB", "XRP", "SPY", "QQQ", "IWM"}
++    assert set(assets) >= {
++        "BTC",
++        "ETH",
++        "NVDA",
++        "SOL",
++        "HYPE",
++        "BNB",
++        "XRP",
++        "SPY",
++        "QQQ",
++        "IWM",
++        "AAPL",
++        "MSFT",
++        "AMZN",
++        "GOOGL",
++        "META",
++    }
+     for asset_id in ("BTC", "ETH"):
+         entry = assets[asset_id]
+         assert entry.get("venue") == "deribit"
+@@ -58,11 +75,33 @@ def test_assets_registry_schema_v2() -> None:
+     assert hype.get("venue") == "hyperliquid"
+     assert hype.get("enabled") is True
+     assert hype.get("exposure_only") is True
++    for aid in ("AAPL", "MSFT", "AMZN", "GOOGL", "META"):
++        mega = assets[aid]
++        assert mega.get("venue") == "equity"
++        assert mega.get("asset_class") == "equity_mega"
++        assert mega.get("enabled") is True
++        assert mega.get("catalog", {}).get("group") == "equity_mega"
++        assert mega.get("equity_symbol") == aid
++        assert mega.get("contract_multiplier") == 100
+ 
+ 
+ def test_list_enabled_asset_ids() -> None:
+     load_assets_registry.cache_clear()
+-    assert list_enabled_asset_ids() == ["BTC", "ETH", "HYPE", "IWM", "NVDA", "QQQ", "SOL", "SPY"]
++    assert list_enabled_asset_ids() == [
++        "AAPL",
++        "AMZN",
++        "BTC",
++        "ETH",
++        "GOOGL",
++        "HYPE",
++        "IWM",
++        "META",
++        "MSFT",
++        "NVDA",
++        "QQQ",
++        "SOL",
++        "SPY",
++    ]
+     assert set(list_asset_ids()) >= {"BTC", "ETH", "NVDA", "SOL", "HYPE", "BNB", "XRP"}
+ 
+ 
+@@ -81,7 +120,21 @@ def test_catalog_entry_shape() -> None:
+ def test_list_catalog_entries_enabled_only() -> None:
+     load_assets_registry.cache_clear()
+     entries = list_catalog_entries()
+-    assert [e["id"] for e in entries] == ["BTC", "ETH", "HYPE", "IWM", "NVDA", "QQQ", "SOL", "SPY"]
++    assert [e["id"] for e in entries] == [
++        "AAPL",
++        "AMZN",
++        "BTC",
++        "ETH",
++        "GOOGL",
++        "HYPE",
++        "IWM",
++        "META",
++        "MSFT",
++        "NVDA",
++        "QQQ",
++        "SOL",
++        "SPY",
++    ]
+     assert all(e["venue"] == "deribit" for e in entries if e["id"] in ("BTC", "ETH"))
+     nvda = next(e for e in entries if e["id"] == "NVDA")
+     assert nvda["venue"] == "equity"
+@@ -126,6 +179,15 @@ def test_disabled_crypto_tier1_staging_rows() -> None:
+         assert get_asset(aid).get("enabled") is False
+ 
+ 
++def test_tier1b_manifest_chapter_matches_enabled_mega_cap_batch() -> None:
++    load_assets_registry.cache_clear()
++    expected = ["AAPL", "AMZN", "GOOGL", "META", "MSFT"]
++    assert list_asset_ids_for_manifest_chapter("ppe_equity_universe_tier1b_v1") == expected
++    for aid in expected:
++        assert is_asset_enabled(aid) is True
++        assert catalog_group(aid) == "equity_mega"
++
++
+ def test_get_asset_unknown_raises() -> None:
+     with pytest.raises(KeyError, match="unknown asset_id"):
+         get_asset("DOGE")
+diff --git a/tests/test_lab_asset_selection.py b/tests/test_lab_asset_selection.py
+index 474a376..07edde9 100644
+--- a/tests/test_lab_asset_selection.py
++++ b/tests/test_lab_asset_selection.py
+@@ -15,8 +15,21 @@ from src.viz.lab_asset_selection import (
+ def test_list_selectable_lab_asset_ids_uses_enabled_registry_only() -> None:
+     load_assets_registry.cache_clear()
+     ids = list_selectable_lab_asset_ids()
+-    assert ids == ["BTC", "ETH", "SOL", "IWM", "QQQ", "SPY", "NVDA"]
+-    assert "NVDA" in ids
++    assert ids == [
++        "BTC",
++        "ETH",
++        "SOL",
++        "IWM",
++        "QQQ",
++        "SPY",
++        "AAPL",
++        "AMZN",
++        "GOOGL",
++        "META",
++        "MSFT",
++        "NVDA",
++    ]
++    assert {"AAPL", "MSFT", "AMZN", "GOOGL", "META", "NVDA"} <= set(ids)
+ 
+ 
+ def test_normalize_lab_asset_id_rejects_disabled_and_unknown() -> None:
+@@ -24,6 +37,7 @@ def test_normalize_lab_asset_id_rejects_disabled_and_unknown() -> None:
+     assert normalize_lab_asset_id("ETH") == "ETH"
+     assert normalize_lab_asset_id("NVDA") == "NVDA"
+     assert normalize_lab_asset_id("SOL") == "SOL"
++    assert normalize_lab_asset_id("GOOGL") == "GOOGL"
+     default = default_asset_id()
+     assert normalize_lab_asset_id("DOGE") == default
+     assert normalize_lab_asset_id(None) == default

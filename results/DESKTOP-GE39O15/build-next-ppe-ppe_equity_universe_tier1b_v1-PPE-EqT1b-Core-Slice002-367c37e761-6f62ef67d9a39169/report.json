@@ -1,0 +1,65 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "config/assets.yaml",
+          "config/assets_tier1_manifest.yaml",
+          "tests/test_assets_registry.py",
+          "tests/test_lab_asset_selection.py"
+        ],
+        "metadata": {
+          "output_tail": "ed_and_unknown() -> None:\n@@ -24,6 +37,7 @@\n     assert normalize_lab_asset_id(\"ETH\") == \"ETH\"\n     assert normalize_lab_asset_id(\"NVDA\") == \"NVDA\"\n     assert normalize_lab_asset_id(\"SOL\") == \"SOL\"\n+    assert normalize_lab_asset_id(\"GOOGL\") == \"GOOGL\"\n     default = default_asset_id()\n     assert normalize_lab_asset_id(\"DOGE\") == default\n     assert normalize_lab_asset_id(None) == default\n\ntokens used\n99,891\nImplemented the bounded Tier1B core slice.\n\nChanged:\n- Added enabled registry rows for `AAPL`, `MSFT`, `AMZN`, `GOOGL`, `META` in [config/assets.yaml](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-EqT1b-Core-Slice002/config/assets.yaml:51).\n- Aligned the Tier1B manifest chapter to those five assets in [config/assets_tier1_manifest.yaml](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-EqT1b-Core-Slice002/config/assets_tier1_manifest.yaml:38).\n- Updated focused registry and lab-selection tests in [tests/test_assets_registry.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-EqT1b-Core-Slice002/tests/test_assets_registry.py:88) and [tests/test_lab_asset_selection.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-EqT1b-Core-Slice002/tests/test_lab_asset_selection.py:15).\n\nValidation evidence:\n- `python -m ruff check tests/test_assets_registry.py tests/test_lab_asset_selection.py` passed.\n- YAML invariant check passed: Tier1B resolves to `AAPL, AMZN, GOOGL, META, MSFT`, all enabled equity rows.\n- `git diff --check -- ...` passed.\n- Focused pytest was attempted but blocked at collection because this environment is missing runtime deps, starting with `pandas`.\n- `python scripts/run_pushable_gate.py` was attempted but failed before tests: detached worktree cannot compute `origin/main...HEAD`.\n\nNo forbidden/control-plane paths were edited. No commit, push, PR, smoke, closeout, or publisher action was performed.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\workspaces\\PPE-EqT1b-Core-Slice002"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 4 changed path(s)",
+        "task_id": "PPE-EqT1b-Core-Slice002"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+    "status": "completed"
+  },
+  "completed_at": "2026-09-02T20:52:48.863909+00:00",
+  "job_id": "build-next-ppe-ppe_equity_universe_tier1b_v1-PPE-EqT1b-Core-Slice002-367c37e761-6f62ef67d9a39169",
+  "job_sha256": "1a0cac80fb7fca587d3ad6aef387cb09ce041864958d2cf18bdb2f6fcef98534",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "changed_paths": [
+        "config/assets.yaml",
+        "config/assets_tier1_manifest.yaml",
+        "tests/test_assets_registry.py",
+        "tests/test_lab_asset_selection.py"
+      ],
+      "complete_patch": true,
+      "lane_id": "PPE-EqT1b-Core-Slice002",
+      "patch_file": "patches/PPE-EqT1b-Core-Slice002.patch",
+      "patch_sha256": "e0f0e8813e1f74f8de3f3244fb8ebf0e82ff6df86f5816db7285f6f621367809",
+      "task_id": "PPE-EqT1b-Core-Slice002"
+    }
+  ],
+  "publication_enabled": false,
+  "relay": {
+    "canonical_patch_sha256_by_task": {
+      "PPE-EqT1b-Core-Slice002": "e0f0e8813e1f74f8de3f3244fb8ebf0e82ff6df86f5816db7285f6f621367809"
+    },
+    "canonical_report_role": "relay-corrected-canonical-downstream-report",
+    "complete_patch_reconstruction": true,
+    "machine_id": "DESKTOP-GE39O15",
+    "publication_enabled": false,
+    "relayed_at": "2026-09-02T20:53:04.747439+00:00",
+    "source_report_role": "original-worker-report-noncanonical-for-patch-identity",
+    "source_report_sha256": "02d1257132792e139642ffb3bee95583e2bed97966c351a4badd27a0d67f3b8b",
+    "version": 1
+  },
+  "requested_by": "capacity-one refill controller",
+  "source": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\queue\\pending\\build-next-ppe-ppe_equity_universe_tier1b_v1-PPE-EqT1b-Core-Slice002-367c37e761-6f62ef67d9a39169.yaml",
+  "version": 1
+}

@@ -636,24 +636,14 @@ def evaluate_service_error_marker(
     if job_id is not None:
         evidence["associated_job_id"] = job_id
 
-    success = False
-    success_error: str | None = None
-    publisher_associated = spec.service == "publisher" and job_id is not None
-    current_publisher_generation = (
-        publisher_associated
-        and current_generation is not None
-        and raw.get("release_commit") == current_release
-        and raw.get("generation_id") == current_generation
+    success, success_error = _success_supersedes(
+        path=success_path,
+        service=spec.service,
+        marker_recorded=recorded,
+        current_generation_id=current_generation,
+        current_release=current_release,
+        job_id=job_id,
     )
-    if not publisher_associated or current_publisher_generation:
-        success, success_error = _success_supersedes(
-            path=success_path,
-            service=spec.service,
-            marker_recorded=recorded,
-            current_generation_id=current_generation,
-            current_release=current_release,
-            job_id=job_id,
-        )
     if success:
         evidence.update(
             {

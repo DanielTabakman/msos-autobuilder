@@ -469,6 +469,8 @@ class EvidenceBranch:
                 None,
                 "-c",
                 "core.autocrlf=false",
+                "-c",
+                "core.longpaths=true",
                 "clone",
                 "--single-branch",
                 "--branch",
@@ -479,9 +481,12 @@ class EvidenceBranch:
             )
         else:
             _git(self.checkout, "config", "core.autocrlf", "false")
+            _git(self.checkout, "config", "core.longpaths", "true")
             _git(self.checkout, "fetch", "--no-tags", "origin", self.config.results_branch)
             _git(
                 self.checkout,
+                "-c",
+                "core.longpaths=true",
                 "checkout",
                 "-B",
                 self.config.results_branch,
@@ -490,6 +495,7 @@ class EvidenceBranch:
             _git(self.checkout, "reset", "--hard", f"origin/{self.config.results_branch}")
             _git(self.checkout, "clean", "-fd")
         _git(self.checkout, "config", "core.autocrlf", "false")
+        _git(self.checkout, "config", "core.longpaths", "true")
         _git(self.checkout, "config", "user.name", "MSOS Autobuilder Completion Controller")
         _git(self.checkout, "config", "user.email", "autobuilder-completion@localhost")
 

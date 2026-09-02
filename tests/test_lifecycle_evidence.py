@@ -1409,3 +1409,111 @@ def test_lifecycle_replay_rejects_transition_digest_mismatch(tmp_path: Path) -> 
             job_id=str(identity["job_id"]),
             generation_id=str(identity["generation_id"]),
         )
+
+
+def _emit_completed_failed_gate(tmp_path: Path, identity: dict[str, object]) -> None:
+    _emit_prepared_and_submitted(tmp_path, identity)
+    emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind="host.execution",
+        identity=identity,
+        source_path=_source(tmp_path, "host-complete\n"),
+        payload={
+            "execution_outcome": "completed",
+            "host_archive_path": "queue/completed/job",
+            "error_class": None,
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:02:00Z",
+    )
+    emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind="relay.result",
+        identity=identity,
+        source_path=_source(tmp_path, "relay\n"),
+        payload={
+            "relay_disposition": "relayed",
+            "relayed_commit": "a" * 40,
+            "canonical_report_sha256": "3" * 64,
+            "source_report_sha256": "4" * 64,
+            "complete_patch_reconstruction": True,
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:03:00Z",
+    )
+    emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind="gate.validation",
+        identity=identity,
+        source_path=_source(tmp_path, "gate\n"),
+        payload={
+            "validation_outcome": "failed",
+            "validation_state": "candidate_failed",
+            "validation_contract_sha256": "5" * 64,
+            "gate_report_sha256": "6" * 64,
+            "results_commit": "b" * 40,
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:04:00Z",
+    )
+
+
+def test_queued_revision_stays_in_flight_until_descendant_drafts(tmp_path: Path) -> None:
+    source = _identity()
+    _emit_completed_failed_gate(tmp_path, source)
+    emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind="revision.disposition",
+        identity=source,
+        source_path=_source(tmp_path, "revision-queued\n"),
+        payload={
+            "revision_disposition": "queued",
+            "descendant_job_id": "build-next-ppe-A-revision-1",
+            "gate_report_sha256": "8" * 64,
+            "jobs_commit": "d" * 40,
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:05:00Z",
+    )
+    first = lifecycle.reduce_attempt_lifecycle(tmp_path)
+    assert first["reduced"][0]["item_disposition"] == "in_flight"
+    assert first["reduced"][0]["refill_action"] == "block_fail_closed"
+
+    child = attempt_identity(
+        pipeline_id="ppe",
+        work_item_id="A",
+        work_item_digest=source["work_item_digest"],
+        generation_id="refill-12345678",
+        job_id="build-next-ppe-A-revision-1",
+        attempt_ordinal=2,
+        retry_ordinal=0,
+    )
+    emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind="publication_review.disposition",
+        identity=child,
+        source_path=_source(tmp_path, "drafted\n"),
+        payload={
+            "publication_review_disposition": "drafted",
+            "reason_code": "publication_review.drafted.v1",
+            "draft_pr": "https://github.example/pull/1",
+            "product_branch": "autobuilder/build-next-ppe-A-revision-1",
+            "product_commit": "e" * 40,
+            "results_commit": "f" * 40,
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:06:00Z",
+    )
+    second = lifecycle.reduce_attempt_lifecycle(tmp_path)
+    source_row = next(
+        row
+        for row in second["reduced"]
+        if row["identity_digest"] == identity_digest(source)
+    )
+    assert source_row["item_disposition"] == "item_terminal_success_drafted"
+    assert source_row["refill_action"] == "exclude_item_and_select_next"

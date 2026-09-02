@@ -1141,6 +1141,19 @@ def _reduce_identity_heads(host_root: Path, heads: Sequence[Mapping[str, Any]]) 
         base["lifecycle_phase"] = "revision_recorded"
         base["revision_disposition"] = disposition
         if disposition == "queued":
+            drafted_reason = _descendant_drafted_reason(
+                host_root,
+                identity,
+                revision.get("descendant_job_id"),
+            )
+            if drafted_reason is not None:
+                base["lifecycle_phase"] = "publication_review_recorded"
+                base["publication_review_disposition"] = "drafted"
+                return _terminal_item(
+                    base,
+                    "item_terminal_success_drafted",
+                    drafted_reason,
+                )
             return base
         if disposition == "exhausted":
             reason = str(revision.get("reason_code") or "")
@@ -1192,6 +1205,79 @@ def _reduce_identity_heads(host_root: Path, heads: Sequence[Mapping[str, Any]]) 
         "evidence_" + (disposition or "missing"),
         "operator_required_publication_blocked",
     )
+
+
+def _payload_for_job_kind(
+    host_root: Path,
+    *,
+    job_id: str,
+    generation_id: Any,
+    work_item_id: Any,
+    kind: str,
+) -> Mapping[str, Any] | None:
+    root = host_root.joinpath(*HEAD_PATH_PARTS[kind])
+    if not root.exists():
+        return None
+    matches: list[Mapping[str, Any]] = []
+    for path in sorted(root.glob("*.json")):
+        try:
+            head = _read_json_mapping(path)
+            identity = _mapping(head.get("attempt_identity"), "attempt_identity")
+        except LifecycleEvidenceError:
+            continue
+        if identity.get("job_id") != job_id:
+            continue
+        if generation_id is not None and identity.get("generation_id") != generation_id:
+            continue
+        if work_item_id is not None and identity.get("work_item_id") != work_item_id:
+            continue
+        matches.append(head)
+    if len(matches) != 1:
+        return None
+    try:
+        envelope = _load_envelope_for_head(host_root, matches[0])
+        return _mapping(envelope.get("payload"), "payload")
+    except LifecycleEvidenceError:
+        return None
+
+
+def _descendant_drafted_reason(
+    host_root: Path,
+    identity: Mapping[str, Any],
+    descendant_job_id: Any,
+) -> str | None:
+    current = str(descendant_job_id or "").strip()
+    generation_id = identity.get("generation_id")
+    work_item_id = identity.get("work_item_id")
+    seen: set[str] = set()
+    while current and current not in seen:
+        seen.add(current)
+        publication = _payload_for_job_kind(
+            host_root,
+            job_id=current,
+            generation_id=generation_id,
+            work_item_id=work_item_id,
+            kind="publication_review.disposition",
+        )
+        if publication is not None:
+            disposition = str(publication.get("publication_review_disposition") or "")
+            reason = str(publication.get("reason_code") or "")
+            if disposition == "drafted" and reason in TERMINAL_REASON_CODES_V1:
+                return reason
+        revision = _payload_for_job_kind(
+            host_root,
+            job_id=current,
+            generation_id=generation_id,
+            work_item_id=work_item_id,
+            kind="revision.disposition",
+        )
+        if revision is None or revision.get("revision_disposition") != "queued":
+            break
+        nxt = str(revision.get("descendant_job_id") or "").strip()
+        if not nxt:
+            break
+        current = nxt
+    return None
 
 
 def _blocked(snapshot: dict[str, Any], integrity: str, disposition: str) -> dict[str, Any]:

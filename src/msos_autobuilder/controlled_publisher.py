@@ -196,6 +196,64 @@ def load_publisher_config(path: str | Path) -> PublisherConfig:
     )
 
 
+def _derive_publish_plan(job_id: str, job: Mapping[str, Any]) -> PublishPlan | None:
+    founder = job.get("founder_build_next")
+    if not isinstance(founder, Mapping):
+        return None
+    work_item = str(founder.get("work_item_id") or job_id).strip()
+    if not work_item:
+        return None
+    paths: list[str] = []
+    native = founder.get("native_slice")
+    if isinstance(native, Mapping):
+        for path in native.get("touch_set") or []:
+            if isinstance(path, str):
+                paths.append(path)
+    contract = job.get("candidate_validation")
+    if isinstance(contract, Mapping):
+        for path in contract.get("allowed_changed_paths") or []:
+            if isinstance(path, str):
+                paths.append(path)
+    exact: list[str] = []
+    seen: set[str] = set()
+    for raw in paths:
+        path = raw.replace("\\", "/")
+        if not path or "*" in path or path.endswith("/") or path in seen:
+            continue
+        seen.add(path)
+        exact.append(path)
+    if not exact:
+        return None
+    py_paths = [path for path in exact if path.endswith(".py")]
+    other_paths = [path for path in exact if not path.endswith(".py")]
+    check_source = (
+        "import ast\n"
+        "import pathlib\n"
+        f"py_paths = {py_paths!r}\n"
+        f"other_paths = {other_paths!r}\n"
+        "for path in py_paths:\n"
+        "    ast.parse(pathlib.Path(path).read_text(encoding='utf-8'))\n"
+        "for path in other_paths:\n"
+        "    text = pathlib.Path(path).read_text(encoding='utf-8')\n"
+        "    if not text.strip():\n"
+        "        raise SystemExit('empty patched file: ' + path)\n"
+    )
+    safe_id = _safe_segment(job_id, fallback="job")
+    return PublishPlan(
+        branch=_safe_branch(f"autobuilder/{safe_id}", base_branch="main"),
+        title=f"PPE: {work_item}",
+        commit_message=f"PPE: {work_item}",
+        checks=(
+            GateCheck(
+                name="patched-sources-parse",
+                argv=("python", "-c", check_source),
+                cwd=".",
+                timeout_seconds=120,
+            ),
+        ),
+    )
+
+
 def _run(
     argv: Sequence[str],
     *,
@@ -889,6 +947,25 @@ class ControlledPublisher:
         self.lock_path = self.state / "controlled-publisher.lock"
         self.github_client = github_client
         self._last_error_marker_written = False
+
+    def _resolve_publish_plan(self, job_id: str, job_dir: Path) -> PublishPlan | None:
+        if job_id in self.config.plans:
+            return self.config.plans[job_id]
+        job_path = job_dir / "job.yaml"
+        if not job_path.is_file():
+            return None
+        try:
+            job = yaml.safe_load(job_path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            return None
+        if not isinstance(job, dict):
+            return None
+        founder = job.get("founder_build_next")
+        if isinstance(founder, Mapping):
+            work_item = str(founder.get("work_item_id") or "").strip()
+            if work_item and work_item in self.config.plans:
+                return self.config.plans[work_item]
+        return _derive_publish_plan(job_id, job)
 
     def _client(self) -> GitHubDraftClient:
         if self.github_client is None:
@@ -1662,7 +1739,13 @@ class ControlledPublisher:
             ledger = self._load_ledger()
             processed: list[str] = []
             verified: set[str] = set()
-            for job_id, plan in self.config.plans.items():
+            job_ids = list(self.config.plans)
+            results_root = self.evidence.checkout / "results" / self.config.machine_id
+            if results_root.is_dir():
+                for path in sorted(results_root.iterdir()):
+                    if path.is_dir() and path.name not in job_ids:
+                        job_ids.append(path.name)
+            for job_id in job_ids:
                 associated = {
                     "job_id": job_id,
                     "repository": self.config.product_repo_full_name,
@@ -1671,6 +1754,9 @@ class ControlledPublisher:
                 job_dir = self.evidence.job_dir(job_id)
                 gate_path = job_dir / "gate-report.json"
                 if not gate_path.exists():
+                    continue
+                plan = self._resolve_publish_plan(job_id, job_dir)
+                if plan is None:
                     continue
                 gate_sha = _sha256_file(gate_path)
                 try:

@@ -31,6 +31,7 @@ from .lifecycle_evidence import (
     record_producer_evidence_error,
 )
 from .service_error_lifecycle import record_service_cycle_success, write_service_error_marker
+from .validation_contract import stable_contract_sha256
 from .windows_git_checkout import git_environment, revision_results_checkout
 
 
@@ -257,13 +258,67 @@ def _revision_depth(job_id: str, plan: RevisionPlan) -> int:
 def _find_plan(
     job_id: str,
     plans: Mapping[str, RevisionPlan],
+    job_yaml: Mapping[str, Any] | None = None,
 ) -> tuple[str, RevisionPlan] | None:
     if job_id in plans:
         return job_id, plans[job_id]
+    founder = job_yaml.get("founder_build_next") if isinstance(job_yaml, Mapping) else None
+    work_item_id = ""
+    if isinstance(founder, Mapping):
+        work_item_id = str(founder.get("work_item_id") or "").strip()
+        if work_item_id and work_item_id in plans:
+            return work_item_id, plans[work_item_id]
     for root_id, plan in plans.items():
         if re.fullmatch(re.escape(plan.revision_job_prefix) + r"-revision-\d+", job_id):
             return root_id, plan
+        if job_id.startswith(f"{root_id}-") or job_id.startswith(f"{plan.revision_job_prefix}-"):
+            return root_id, plan
+    derived = _derive_revision_plan(job_yaml) if isinstance(job_yaml, Mapping) else None
+    if derived is not None:
+        return work_item_id or job_id, derived
     return None
+
+
+def _derive_revision_plan(job_yaml: Mapping[str, Any]) -> RevisionPlan | None:
+    founder = job_yaml.get("founder_build_next")
+    if not isinstance(founder, Mapping):
+        return None
+    work_item_id = str(founder.get("work_item_id") or "").strip()
+    pipeline_id = str(founder.get("pipeline_id") or "ppe").strip()
+    if not work_item_id:
+        return None
+    native = founder.get("native_slice")
+    contract = job_yaml.get("candidate_validation")
+    if not (
+        (isinstance(native, Mapping) and native.get("touch_set"))
+        or isinstance(contract, Mapping)
+    ):
+        return None
+    manifest = job_yaml.get("manifest")
+    if not isinstance(manifest, Mapping):
+        return None
+    lanes = manifest.get("lanes")
+    if not isinstance(lanes, list):
+        return None
+    task_ids: list[str] = []
+    for raw_lane in lanes:
+        if not isinstance(raw_lane, Mapping):
+            continue
+        task_id = str(raw_lane.get("task_id") or "").strip()
+        if task_id:
+            task_ids.append(task_id)
+    if not task_ids:
+        return None
+    prefix = _safe_segment(f"build-next-{pipeline_id}-{work_item_id}", fallback="revision")
+    return RevisionPlan(
+        revision_job_prefix=prefix,
+        target_task_ids=tuple(task_ids),
+        instruction_prefix=(
+            "Work from the clean source checkout. Re-implement the full slice, including "
+            "product files and any tests the gate will break. Do not assume a prior patch "
+            "is already applied."
+        ),
+    )
 
 
 def _failed_evidence(gate_report: Mapping[str, Any]) -> str:
@@ -310,10 +365,27 @@ def _select_lanes(job_yaml: Mapping[str, Any], plan: RevisionPlan) -> tuple[dict
         task_id = str(lane.get("task_id") or "").strip()
         if task_id:
             by_task[task_id] = lane
-    missing = [task_id for task_id in plan.target_task_ids if task_id not in by_task]
+    selected: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for task_id in plan.target_task_ids:
+        if task_id in by_task:
+            selected.append(by_task[task_id])
+            continue
+        prefixed = [
+            lane
+            for candidate, lane in by_task.items()
+            if candidate.startswith(f"{task_id}-") or task_id.startswith(f"{candidate}-")
+        ]
+        if len(prefixed) == 1:
+            selected.append(prefixed[0])
+            continue
+        if len(by_task) == 1:
+            selected.append(next(iter(by_task.values())))
+            continue
+        missing.append(task_id)
     if missing:
         raise RevisionLoopError(f"revision target task(s) missing from source job: {missing}")
-    return tuple(by_task[task_id] for task_id in plan.target_task_ids)
+    return tuple(selected)
 
 
 def build_revision_manifest(
@@ -395,7 +467,7 @@ def build_revision_manifest(
             }
         )
 
-    return {
+    manifest: dict[str, Any] = {
         "version": 1,
         "job_id": revision_job_id,
         "approved": True,
@@ -416,6 +488,47 @@ def build_revision_manifest(
             "lanes": revision_lanes,
         },
     }
+    _attach_build_next_contract(manifest, job_yaml, revision_job_id, revision_lanes)
+    return manifest
+
+
+def _exact_revision_paths(revision_lanes: Sequence[Mapping[str, Any]]) -> list[str]:
+    return sorted(
+        {
+            str(path).replace("\\", "/")
+            for lane in revision_lanes
+            for path in lane.get("allowed_paths") or []
+            if isinstance(path, str) and path and "*" not in path and not path.endswith("/")
+        }
+    )
+
+
+def _attach_build_next_contract(
+    manifest: dict[str, Any],
+    job_yaml: Mapping[str, Any],
+    revision_job_id: str,
+    revision_lanes: Sequence[Mapping[str, Any]],
+) -> None:
+    exact_paths = _exact_revision_paths(revision_lanes)
+    founder = job_yaml.get("founder_build_next")
+    if isinstance(founder, Mapping):
+        copied = dict(founder)
+        native = copied.get("native_slice")
+        if isinstance(native, Mapping) and exact_paths:
+            native = dict(native)
+            native["touch_set"] = list(exact_paths)
+            copied["native_slice"] = native
+        manifest["founder_build_next"] = copied
+    contract = job_yaml.get("candidate_validation")
+    if not isinstance(contract, Mapping):
+        return
+    rewritten = dict(contract)
+    rewritten["job_id"] = revision_job_id
+    if exact_paths:
+        rewritten["allowed_changed_paths"] = exact_paths
+    rewritten.pop("contract_sha256", None)
+    rewritten["contract_sha256"] = stable_contract_sha256(rewritten)
+    manifest["candidate_validation"] = rewritten
 
 
 class BranchCheckout:
@@ -587,7 +700,15 @@ class RevisionLoop:
                 continue
             if gate_report.get("status") != "failed":
                 continue
-            matched = _find_plan(job_id, plans)
+            try:
+                job_yaml = yaml.safe_load(job_path.read_text(encoding="utf-8"))
+            except (OSError, yaml.YAMLError):
+                job_yaml = None
+            matched = _find_plan(
+                job_id,
+                plans,
+                job_yaml if isinstance(job_yaml, dict) else None,
+            )
             if matched is None:
                 # Declining is legitimate, but staying silent is not: a failed gate
                 # with no plan emits no revision.disposition, and the reducer parks
@@ -621,7 +742,8 @@ class RevisionLoop:
                     raise exc
                 continue
             try:
-                job_yaml = yaml.safe_load(job_path.read_text(encoding="utf-8"))
+                if not isinstance(job_yaml, dict):
+                    job_yaml = yaml.safe_load(job_path.read_text(encoding="utf-8"))
                 manifest = build_revision_manifest(
                     gate_report,
                     _mapping(job_yaml, "job.yaml"),

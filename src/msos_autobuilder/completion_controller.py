@@ -1165,8 +1165,10 @@ class CompletionController:
 
     def complete_job(self, job_dir: Path, plan: CompletionPlan) -> dict[str, Any]:
         job_id = job_dir.name
-        evidence = self._load_job_evidence(job_dir)
-        job = evidence["job"]
+        job = _mapping(
+            yaml.safe_load((job_dir / "job.yaml").read_text(encoding="utf-8")),
+            "job.yaml",
+        )
         authority, authority_declared_at = _authority_from_job(job)
         if plan.authority_class is not None and plan.authority_class != authority:
             raise CompletionControllerError(
@@ -1184,6 +1186,7 @@ class CompletionController:
                 authority=authority,
                 reason="NEVER_MERGE blocks automatic merge",
             )
+        evidence = self._load_job_evidence(job_dir)
         publication = evidence["publication"]
         pr_number = int(publication.get("pr_number"))
         pr = self._client().get_pull_request(pr_number)

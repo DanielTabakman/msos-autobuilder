@@ -1271,6 +1271,15 @@ def _job_yaml_sources(
     return sources
 
 
+_REVISION_JOB_ID = re.compile(r"-revision-\d+$")
+
+
+def _is_revision_descendant_job(job: Mapping[str, Any], job_id: str) -> bool:
+    if isinstance(job.get("revision"), Mapping):
+        return True
+    return bool(_REVISION_JOB_ID.search(job_id))
+
+
 def _extract_refill_attempt_candidate(
     generation: Mapping[str, Any],
     *,
@@ -1279,8 +1288,10 @@ def _extract_refill_attempt_candidate(
     job: Mapping[str, Any],
 ) -> tuple[dict[str, Any] | None, str | None]:
     job_id = str(job.get("job_id") or "").strip()
+    if not job_id or _is_revision_descendant_job(job, job_id):
+        return None, None
     founder = job.get("founder_build_next")
-    if not job_id or not isinstance(founder, dict):
+    if not isinstance(founder, dict):
         return None, None
     attempt = founder.get("refill_attempt")
     if not isinstance(attempt, dict):
@@ -1386,6 +1397,9 @@ def _recover_unrecorded_generation_attempt(
         save_refill_generation(config, generation)
         return generation["recovery_error"]
     if not candidates:
+        if generation.get("recovery_error"):
+            generation.pop("recovery_error", None)
+            save_refill_generation(config, generation)
         return None
     candidate = sorted(
         candidates,

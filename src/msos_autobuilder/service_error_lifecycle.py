@@ -713,7 +713,12 @@ def evaluate_service_error_marker(
                 return evidence
             evidence["error"] = legacy_error or terminal_error
             return evidence
-        if recorded < witness_started and raw.get("generation_id") != current_generation:
+        if (
+            spec.service == "publisher"
+            and job_id not in ledger
+            and recorded < witness_started
+            and raw.get("generation_id") != current_generation
+        ):
             evidence.update(
                 {
                     "ok": True,

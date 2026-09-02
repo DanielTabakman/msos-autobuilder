@@ -3551,6 +3551,51 @@ def test_conflicting_recovery_evidence_blocks(tmp_path: Path) -> None:
     assert report.decision_evidence["reason"] == "ambiguous_refill_attempt_recovery"
 
 
+def test_revision_descendant_jobs_do_not_create_recovery_ambiguity(
+    tmp_path: Path,
+) -> None:
+    config = _refill_config(tmp_path)
+    _write_host_status(config)
+    source_job = _submit_tracked_attempt(config)
+    source_text = _feed_job_path(config, source_job).read_text(encoding="utf-8")
+    source_payload = yaml.safe_load(source_text)
+    assert isinstance(source_payload, dict)
+    assert config.build_next.checkout_root is not None
+    feed_root = config.build_next.checkout_root / config.build_next.jobs_path
+    for ordinal in (1, 2):
+        revision_id = f"{source_job}-revision-{ordinal}"
+        payload = yaml.safe_load(source_text)
+        assert isinstance(payload, dict)
+        payload["job_id"] = revision_id
+        payload["revision"] = {
+            "source_job_id": source_job,
+            "revision_ordinal": ordinal,
+        }
+        contract = payload.get("candidate_validation")
+        if isinstance(contract, dict):
+            contract["job_id"] = revision_id
+        (feed_root / f"{revision_id}.yaml").write_text(
+            yaml.safe_dump(payload, sort_keys=False),
+            encoding="utf-8",
+        )
+    generation = load_refill_generation(config)
+    assert generation is not None
+    generation["recovery_error"] = {
+        "reason": "ambiguous_refill_attempt_recovery",
+        "candidates": [{"job_id": f"{source_job}-revision-1"}],
+    }
+    save_refill_generation(config, generation)
+
+    report = reconcile_refill(config)
+    recovered = load_refill_generation(config)
+
+    assert report.decision_evidence["reason"] != "ambiguous_refill_attempt_recovery"
+    assert recovered is not None
+    assert recovered.get("recovery_error") is None
+    assert recovered["current_attempt"]["job_id"] == source_job
+    assert [item["job_id"] for item in recovered["attempt_sequence"]] == [source_job]
+
+
 def test_restart_recovery_is_idempotent(tmp_path: Path) -> None:
     config = _refill_config(tmp_path)
     _write_host_status(config)

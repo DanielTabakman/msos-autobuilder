@@ -433,6 +433,16 @@ class CompletionGitHubClient:
             "merge result",
         )
 
+    def mark_ready_for_review(self, number: int) -> dict[str, Any]:
+        return _mapping(
+            self._request(
+                "POST",
+                f"/repos/{self.repo_full_name}/pulls/{number}/ready_for_review",
+                accepted=(200, 202),
+            ),
+            "ready-for-review result",
+        )
+
     def delete_branch(self, branch: str) -> dict[str, Any]:
         encoded = urllib.parse.quote(f"heads/{branch}", safe="")
         return _mapping(
@@ -910,9 +920,13 @@ class CompletionController:
         if unresolved_threads != 0:
             raise CompletionControllerError("pull request has unresolved review threads")
         review_decision = str(review_evidence.get("review_decision") or "").upper()
-        if review_decision != "APPROVED":
+        if review_decision in {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}:
             raise CompletionControllerError(
-                "pull request lacks required APPROVED review decision"
+                f"pull request review decision blocks merge: {review_decision}"
+            )
+        if review_decision not in {"", "APPROVED"}:
+            raise CompletionControllerError(
+                f"pull request has unknown review decision: {review_decision}"
             )
         if readiness.get("canon_conflict") or readiness.get("evidence_conflict") or readiness.get(
             "ownership_conflict"
@@ -1164,6 +1178,9 @@ class CompletionController:
             )
         publication = evidence["publication"]
         pr_number = int(publication.get("pr_number"))
+        pr = self._client().get_pull_request(pr_number)
+        if pr.get("draft") is True:
+            self._client().mark_ready_for_review(pr_number)
         branch = _safe_branch(
             publication.get("product_branch"),
             base_branch=self.config.product_base_branch,

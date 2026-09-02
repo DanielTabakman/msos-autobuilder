@@ -282,6 +282,17 @@ def test_fetch_declared_target_uses_exact_commit_not_moving_main(tmp_path: Path)
     assert _symbolic_ref(dest) == ""
 
 
+def test_malformed_merge_authority_is_rejected(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    with pytest.raises(JobPacketError, match="merge_authority class"):
+        _parse_fixture_packet(ppe, merge_authority={"class": "SOMETIMES_MERGE"})
+    with pytest.raises(JobPacketError, match="declared_at"):
+        _parse_fixture_packet(
+            ppe,
+            merge_authority={"class": "AUTO_MERGE_WHEN_GREEN"},
+        )
+
+
 def test_authority_and_validation_remain_bound_to_immutable_job_identity(tmp_path: Path) -> None:
     ppe = _write_ppe(tmp_path / "ppe")
     feed = _feed_repo(tmp_path / "feed-work")

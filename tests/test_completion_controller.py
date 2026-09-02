@@ -82,6 +82,8 @@ class FakeCompletionGitHubClient(CompletionGitHubClient):
         self.merge_result_ok = True
         self.merge_calls = 0
         self.delete_calls = 0
+        self.draft = False
+        self.ready_calls = 0
         self.reread_head: str | None = None
         self.review_evidence_error: Exception | None = None
 
@@ -92,6 +94,7 @@ class FakeCompletionGitHubClient(CompletionGitHubClient):
             "number": number,
             "state": "closed" if merged else "open",
             "merged": merged,
+            "draft": self.draft,
             "merge_commit_sha": (
                 git(self.product_bare, "rev-parse", "refs/heads/main") if merged else None
             ),
@@ -121,6 +124,11 @@ class FakeCompletionGitHubClient(CompletionGitHubClient):
             "review_threads_paginated": self.review_threads_paginated,
             "latest_opinionated_reviews": [],
         }
+
+    def mark_ready_for_review(self, number: int) -> dict[str, Any]:
+        self.ready_calls += 1
+        self.draft = False
+        return {"number": number, "draft": False}
 
     def merge_pull_request(
         self,
@@ -680,11 +688,22 @@ def test_missing_review_thread_evidence_fails_closed(tmp_path: Path) -> None:
         controller(config_path, client).run_once()
 
 
-def test_absent_review_decision_fails_closed(tmp_path: Path) -> None:
-    config_path, _, _, client, _ = make_fixture(tmp_path)
+def test_absent_review_decision_is_allowed_when_no_review_is_required(
+    tmp_path: Path,
+) -> None:
+    config_path, _, _, client, job_id = make_fixture(tmp_path)
     client.review_decision = ""
-    with pytest.raises(CompletionControllerError, match="APPROVED review decision"):
-        controller(config_path, client).run_once()
+    assert controller(config_path, client).run_once() == (job_id,)
+    assert client.merge_calls == 1
+
+
+def test_draft_pr_is_marked_ready_before_merge(tmp_path: Path) -> None:
+    config_path, _, _, client, job_id = make_fixture(tmp_path)
+    client.draft = True
+    assert controller(config_path, client).run_once() == (job_id,)
+    assert client.ready_calls == 1
+    assert client.draft is False
+    assert client.merge_calls == 1
 
 
 def test_paginated_review_threads_fail_closed(tmp_path: Path) -> None:
@@ -699,7 +718,7 @@ def test_paginated_review_threads_fail_closed(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("review_decision", "unresolved_threads", "message"),
     [
-        ("CHANGES_REQUESTED", 0, "APPROVED review decision"),
+        ("CHANGES_REQUESTED", 0, "review decision blocks merge"),
         ("APPROVED", 1, "unresolved review threads"),
     ],
 )

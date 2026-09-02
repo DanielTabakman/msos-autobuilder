@@ -196,7 +196,19 @@ def load_publisher_config(path: str | Path) -> PublisherConfig:
     )
 
 
+def _publication_eligible_job(job: Mapping[str, Any] | None) -> bool:
+    """Capacity-one build-next jobs carry work_admission; historical useful-jobs do not."""
+    if not isinstance(job, Mapping):
+        return False
+    founder = job.get("founder_build_next")
+    if not isinstance(founder, Mapping):
+        return False
+    return isinstance(founder.get("work_admission"), Mapping)
+
+
 def _derive_publish_plan(job_id: str, job: Mapping[str, Any]) -> PublishPlan | None:
+    if not _publication_eligible_job(job):
+        return None
     founder = job.get("founder_build_next")
     if not isinstance(founder, Mapping):
         return None
@@ -949,16 +961,20 @@ class ControlledPublisher:
         self._last_error_marker_written = False
 
     def _resolve_publish_plan(self, job_id: str, job_dir: Path) -> PublishPlan | None:
+        job_path = job_dir / "job.yaml"
+        job: dict[str, Any] | None = None
+        if job_path.is_file():
+            try:
+                loaded = yaml.safe_load(job_path.read_text(encoding="utf-8"))
+            except (OSError, yaml.YAMLError):
+                loaded = None
+            if isinstance(loaded, dict):
+                job = loaded
+        if job is not None and not _publication_eligible_job(job):
+            return None
         if job_id in self.config.plans:
             return self.config.plans[job_id]
-        job_path = job_dir / "job.yaml"
-        if not job_path.is_file():
-            return None
-        try:
-            job = yaml.safe_load(job_path.read_text(encoding="utf-8"))
-        except (OSError, yaml.YAMLError):
-            return None
-        if not isinstance(job, dict):
+        if job is None:
             return None
         founder = job.get("founder_build_next")
         if isinstance(founder, Mapping):
@@ -1743,7 +1759,11 @@ class ControlledPublisher:
             results_root = self.evidence.checkout / "results" / self.config.machine_id
             if results_root.is_dir():
                 for path in sorted(results_root.iterdir()):
-                    if path.is_dir() and path.name not in job_ids:
+                    if (
+                        path.is_dir()
+                        and path.name.startswith("build-next-")
+                        and path.name not in job_ids
+                    ):
                         job_ids.append(path.name)
             for job_id in job_ids:
                 associated = {

@@ -1,0 +1,46 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "config/assets.yaml",
+          "config/assets_tier1_manifest.yaml",
+          "tests/test_assets_registry.py",
+          "tests/test_implied_lab_embed_display_boundary.py",
+          "tests/test_lab_asset_selection.py"
+        ],
+        "metadata": {
+          "output_tail": "     assert lab_asset_id_from_environ(environ) == \"ETH\"\n     assert lab_asset_id_from_environ({\"QUERY_STRING\": f\"{LAB_ASSET_QUERY_PARAM}=NVDA\"}) == \"NVDA\"\n+    assert lab_asset_id_from_environ({\"QUERY_STRING\": f\"{LAB_ASSET_QUERY_PARAM}=MSFT\"}) == \"MSFT\"\n     assert lab_asset_id_from_environ({\"QUERY_STRING\": f\"{LAB_ASSET_QUERY_PARAM}=USO\"}) == \"USO\"\n \n \n\ntokens used\n98,450\nImplemented the bounded core slice as workspace changes only.\n\nChanged:\n- Added enabled equity option registry rows for `AAPL`, `MSFT`, `AMZN`, `GOOGL`, `META` in [config/assets.yaml](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-EqT1b-Core-Slice002/config/assets.yaml).\n- Updated `ppe_equity_universe_tier1b_v1` manifest assets to exactly `[AAPL, MSFT, AMZN, GOOGL, META]` in [config/assets_tier1_manifest.yaml](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-EqT1b-Core-Slice002/config/assets_tier1_manifest.yaml).\n- Updated focused registry, lab selection, and embed catalog tests for the new enabled mega-cap set.\n\nValidation evidence:\n- Passed YAML registry sanity check: all five selected assets are enabled equity mega-cap rows with `yfinance`, `contract_multiplier: 100`, and `catalog.group: equity_mega`.\n- Passed `git diff --check` aside from Git CRLF normalization warnings.\n- Passed `python -m py_compile` for the three touched test files.\n- `python -m pytest tests/test_assets_registry.py tests/test_lab_asset_selection.py tests/test_implied_lab_embed_display_boundary.py -q` was blocked during collection because this Python environment is missing `pandas`.\n- `python scripts/run_pushable_gate.py` failed before running checks because this detached workspace cannot compute `origin/main...HEAD`.\n\nGit evidence:\n- `git status`: detached `HEAD`, modified only the five allowed files.\n- `git log -1 --oneline`: `92d7d14 Control-plane: dev changelog`.\n- No commit/push/PR performed, preserving the Autobuilder relay/publisher boundary.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\workspaces\\PPE-EqT1b-Core-Slice002"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 5 changed path(s)",
+        "task_id": "PPE-EqT1b-Core-Slice002"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "92d7d14a79e73d2274ab003de8bc2910b6c96706",
+    "status": "completed"
+  },
+  "completed_at": "2026-09-03T19:06:30.470891+00:00",
+  "job_id": "build-next-ppe-ppe_equity_universe_tier1b_v1-PPE-EqT1b-Core-Slice002-92d7d14a79e7",
+  "job_sha256": "ccafa9bd1aae7d05f037ac517e6f095ea434351695418d667864938d9d512ccd",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "lane_id": "PPE-EqT1b-Core-Slice002",
+      "patch_file": "patches/PPE-EqT1b-Core-Slice002.patch",
+      "patch_sha256": "fb0192091d0721deef936e119056980e839aabb008cde59c06727f2560f9defa",
+      "task_id": "PPE-EqT1b-Core-Slice002"
+    }
+  ],
+  "publication_enabled": false,
+  "requested_by": "operator rebuild equity after USO main merge",
+  "source": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\queue\\pending\\build-next-ppe-ppe_equity_universe_tier1b_v1-PPE-EqT1b-Core-Slice002-92d7d14a79e7.yaml",
+  "version": 1
+}

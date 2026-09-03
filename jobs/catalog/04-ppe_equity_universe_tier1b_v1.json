@@ -5,7 +5,7 @@
   "order": 4,
   "eligible": true,
   "target_repository": "DanielTabakman/Probability-prediction-engine",
-  "target_source_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+  "target_source_commit": "92d7d14a79e73d2274ab003de8bc2910b6c96706",
   "target_remote_url": "https://github.com/DanielTabakman/Probability-prediction-engine.git",
   "adapter": "ppe_operator",
   "allowed_paths": [
@@ -14,7 +14,8 @@
     "src/viz/embed_display_boundary.py",
     "scripts/witness_asset_catalog.py",
     "tests/test_assets_registry.py",
-    "tests/test_lab_asset_selection.py"
+    "tests/test_lab_asset_selection.py",
+    "tests/test_implied_lab_embed_display_boundary.py"
   ],
   "native_slice": {
     "slice_id": "PPE-EqT1b-Core-Slice002",
@@ -28,7 +29,8 @@
       "src/viz/embed_display_boundary.py",
       "scripts/witness_asset_catalog.py",
       "tests/test_assets_registry.py",
-      "tests/test_lab_asset_selection.py"
+      "tests/test_lab_asset_selection.py",
+      "tests/test_implied_lab_embed_display_boundary.py"
     ],
     "sequence_index": 1,
     "total_slices": 4,
@@ -58,7 +60,8 @@
         "src/viz/embed_display_boundary.py",
         "scripts/witness_asset_catalog.py",
         "tests/test_assets_registry.py",
-        "tests/test_lab_asset_selection.py"
+        "tests/test_lab_asset_selection.py",
+        "tests/test_implied_lab_embed_display_boundary.py"
       ]
     }
   },
@@ -68,7 +71,7 @@
     "read_only": true,
     "source": "ppe_native_read_only",
     "evidence": {
-      "frozen_target_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+      "frozen_target_commit": "92d7d14a79e73d2274ab003de8bc2910b6c96706",
       "target_remote_url": "https://github.com/DanielTabakman/Probability-prediction-engine.git",
       "phase_plan": "docs/SOP/PHASE_PLANS/ppe_equity_universe_tier1b_v1_relay.json",
       "phase_plan_blob_sha": "abc6fba00a18e0cfe4c1fb085cf87b2300d0b5e2",
@@ -81,35 +84,35 @@
         {
           "path": "docs/SOP/PHASE_PLANS/ppe_equity_universe_tier1b_v1_relay.json",
           "exists": true,
-          "git_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+          "git_commit": "92d7d14a79e73d2274ab003de8bc2910b6c96706",
           "blob_sha": "abc6fba00a18e0cfe4c1fb085cf87b2300d0b5e2",
           "sha256": "a3126524a41c4cbf80da625270d5baf774be6066f68c081f20a03547e86cb86c"
         },
         {
           "path": "docs/SOP/SPRINT_PPE_EQUITY_UNIVERSE_TIER1B_V1.md",
           "exists": true,
-          "git_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+          "git_commit": "92d7d14a79e73d2274ab003de8bc2910b6c96706",
           "blob_sha": "24f19f220a9f0385ed7da1fd8506e6f6590fa9fb",
-          "sha256": "d6a008f100caf3511bbe2d5de14dbf04fbf773faef185d3d00b7b93419288eec"
+          "sha256": "9e50eff28338d25da5c2fdd8dc85a7cb5d5be0d444bbeed656223071d42c1bc0"
         },
         {
           "path": "docs/SOP/POST_PPE_EQUITY_UNIVERSE_TIER1B_V1_SELECTION.md",
           "exists": true,
-          "git_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+          "git_commit": "92d7d14a79e73d2274ab003de8bc2910b6c96706",
           "blob_sha": "8e3024d7e78d589f138f87a08b212ed095b25953",
-          "sha256": "787938509be9e02c6cbbc1accadb34b8d220ada2e780206d36f04a3c4b6507a3"
+          "sha256": "71fd23f79957abe16243b076b72302bdc5583d666f4946d69ee17423fcc7c347"
         },
         {
           "path": "docs/SOP/PPE_EQUITY_UNIVERSE_TIER1B_V1_EVIDENCE_STATUS.md",
           "exists": true,
-          "git_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+          "git_commit": "92d7d14a79e73d2274ab003de8bc2910b6c96706",
           "blob_sha": "717b8e6c4bb0e2324fe156505c55eeb084ed7abb",
           "sha256": "94a564e3a42599de7697a643dc7235f7fbbd4286ced3b5f46f87828a6e3fe8eb"
         },
         {
           "path": "docs/SOP/ACTIVE_PHASE_MANIFEST.json",
           "exists": true,
-          "git_commit": "367c37e7618183ac9f7640c7b1204aee66469fa7",
+          "git_commit": "92d7d14a79e73d2274ab003de8bc2910b6c96706",
           "blob_sha": "bef16bafa160f5240b85c69b119b6ba627e041bb",
           "sha256": "c1425fc9fda014c0379113ff849a0466e3c31e5c4f489975becfbb913bf067dc"
         }
@@ -136,5 +139,5 @@
   "validation": {
     "profile_id": "ppe-ci-pytest-v1"
   },
-  "work_item_source_sha256_v1": "a540589e3f86cf0f0c1d6999905dae765b0fed2eb4bbdde6527d0de1cc6695c0"
+  "work_item_source_sha256_v1": "db7607be646d933a970824e38fbbac15b0fe13a5c524ffe10660e5fe6ac30143"
 }

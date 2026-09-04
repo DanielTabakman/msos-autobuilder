@@ -1,0 +1,304 @@
+diff --git a/config/assets.yaml b/config/assets.yaml
+index 3b19a3f..cf0fb3d 100644
+--- a/config/assets.yaml
++++ b/config/assets.yaml
+@@ -48,6 +48,86 @@ assets:
+       - "Dividends and corporate actions not modeled in v1."
+       - "LEAPS chain may be thin — BL trust state surfaced when OI/volume low."
+ 
++  AAPL:
++    label: "AAPL options"
++    asset_class: equity_mega
++    tier: core
++    venue: equity
++    equity_symbol: AAPL
++    price_unit: USD
++    contract_multiplier: 100
++    data_source: yfinance
++    enabled: true
++    spread_width: 10
++    catalog:
++      group: equity_mega
++    trust_notes:
++      - "Dividends and corporate actions not modeled in v1."
++
++  MSFT:
++    label: "MSFT options"
++    asset_class: equity_mega
++    tier: core
++    venue: equity
++    equity_symbol: MSFT
++    price_unit: USD
++    contract_multiplier: 100
++    data_source: yfinance
++    enabled: true
++    spread_width: 15
++    catalog:
++      group: equity_mega
++    trust_notes:
++      - "Dividends and corporate actions not modeled in v1."
++
++  AMZN:
++    label: "AMZN options"
++    asset_class: equity_mega
++    tier: core
++    venue: equity
++    equity_symbol: AMZN
++    price_unit: USD
++    contract_multiplier: 100
++    data_source: yfinance
++    enabled: true
++    spread_width: 15
++    catalog:
++      group: equity_mega
++    trust_notes:
++      - "Dividends and corporate actions not modeled in v1."
++
++  GOOGL:
++    label: "GOOGL options"
++    asset_class: equity_mega
++    tier: core
++    venue: equity
++    equity_symbol: GOOGL
++    price_unit: USD
++    contract_multiplier: 100
++    data_source: yfinance
++    enabled: true
++    spread_width: 15
++    catalog:
++      group: equity_mega
++    trust_notes:
++      - "Dividends and corporate actions not modeled in v1."
++
++  META:
++    label: "META options"
++    asset_class: equity_mega
++    tier: core
++    venue: equity
++    equity_symbol: META
++    price_unit: USD
++    contract_multiplier: 100
++    data_source: yfinance
++    enabled: true
++    spread_width: 15
++    catalog:
++      group: equity_mega
++    trust_notes:
++      - "Dividends and corporate actions not modeled in v1."
++
+   SPY:
+     label: "SPY options"
+     asset_class: equity_index
+diff --git a/config/assets_tier1_manifest.yaml b/config/assets_tier1_manifest.yaml
+index 09f2533..ae00e53 100644
+--- a/config/assets_tier1_manifest.yaml
++++ b/config/assets_tier1_manifest.yaml
+@@ -36,7 +36,7 @@ chapters:
+     volume_batch: 1
+     volume_rank_note: "OI ranks 1-3 among remaining tier-1 (2026-06-29)"
+   ppe_equity_universe_tier1b_v1:
+-    assets: [TSLA, AMD, AAPL, MSFT, AMZN]
++    assets: [AAPL, MSFT, AMZN, GOOGL, META]
+     status: queued
+     wave: ppe_asset_batch_wave1_v1
+     volume_batch: 2
+diff --git a/tests/test_assets_registry.py b/tests/test_assets_registry.py
+index dd2353c..1b49a84 100644
+--- a/tests/test_assets_registry.py
++++ b/tests/test_assets_registry.py
+@@ -20,6 +20,7 @@ from src.data.assets_registry import (
+     list_asset_ids,
+     list_catalog_entries,
+     list_enabled_asset_ids,
++    list_asset_ids_for_manifest_chapter,
+     load_assets_registry,
+     registry_version,
+     spread_width_for_asset,
+@@ -37,6 +38,11 @@ def test_assets_registry_schema_v2() -> None:
+     assert set(assets) >= {
+         "BTC",
+         "ETH",
++        "AAPL",
++        "AMZN",
++        "GOOGL",
++        "META",
++        "MSFT",
+         "NVDA",
+         "SOL",
+         "HYPE",
+@@ -76,12 +82,58 @@ def test_assets_registry_schema_v2() -> None:
+     assert uso.get("enabled") is True
+     assert uso.get("catalog", {}).get("group") == "commodity_proxy"
+     assert "ETF options" in " ".join(uso.get("trust_notes") or [])
++    for asset_id in ("AAPL", "MSFT", "AMZN", "GOOGL", "META"):
++        mega = assets[asset_id]
++        assert mega.get("venue") == "equity"
++        assert mega.get("asset_class") == "equity_mega"
++        assert mega.get("enabled") is True
++        assert mega.get("catalog", {}).get("group") == "equity_mega"
+ 
+ 
+ def test_list_enabled_asset_ids() -> None:
+     load_assets_registry.cache_clear()
+-    assert list_enabled_asset_ids() == ["BTC", "ETH", "HYPE", "IWM", "NVDA", "QQQ", "SOL", "SPY", "USO"]
+-    assert set(list_asset_ids()) >= {"BTC", "ETH", "NVDA", "SOL", "HYPE", "BNB", "XRP", "USO"}
++    assert list_enabled_asset_ids() == [
++        "AAPL",
++        "AMZN",
++        "BTC",
++        "ETH",
++        "GOOGL",
++        "HYPE",
++        "IWM",
++        "META",
++        "MSFT",
++        "NVDA",
++        "QQQ",
++        "SOL",
++        "SPY",
++        "USO",
++    ]
++    assert set(list_asset_ids()) >= {
++        "AAPL",
++        "AMZN",
++        "BTC",
++        "ETH",
++        "GOOGL",
++        "HYPE",
++        "META",
++        "MSFT",
++        "NVDA",
++        "SOL",
++        "BNB",
++        "XRP",
++        "USO",
++    }
++
++
++def test_tier1b_manifest_assets_are_exact_mega_cap_slice() -> None:
++    load_assets_registry.cache_clear()
++    assert list_asset_ids_for_manifest_chapter("ppe_equity_universe_tier1b_v1") == [
++        "AAPL",
++        "AMZN",
++        "GOOGL",
++        "META",
++        "MSFT",
++    ]
+ 
+ 
+ def test_catalog_entry_shape() -> None:
+@@ -99,10 +151,30 @@ def test_catalog_entry_shape() -> None:
+ def test_list_catalog_entries_enabled_only() -> None:
+     load_assets_registry.cache_clear()
+     entries = list_catalog_entries()
+-    assert [e["id"] for e in entries] == ["BTC", "ETH", "HYPE", "IWM", "NVDA", "QQQ", "SOL", "SPY", "USO"]
++    assert [e["id"] for e in entries] == [
++        "AAPL",
++        "AMZN",
++        "BTC",
++        "ETH",
++        "GOOGL",
++        "HYPE",
++        "IWM",
++        "META",
++        "MSFT",
++        "NVDA",
++        "QQQ",
++        "SOL",
++        "SPY",
++        "USO",
++    ]
+     assert all(e["venue"] == "deribit" for e in entries if e["id"] in ("BTC", "ETH"))
+     nvda = next(e for e in entries if e["id"] == "NVDA")
+     assert nvda["venue"] == "equity"
++    for asset_id in ("AAPL", "MSFT", "AMZN", "GOOGL", "META"):
++        mega = next(e for e in entries if e["id"] == asset_id)
++        assert mega["venue"] == "equity"
++        assert mega["asset_class"] == "equity_mega"
++        assert mega["catalog_group"] == "equity_mega"
+     sol = next(e for e in entries if e["id"] == "SOL")
+     assert sol["venue"] == "bybit"
+     hype = next(e for e in entries if e["id"] == "HYPE")
+@@ -182,4 +254,9 @@ def test_asset_class_and_group_helpers() -> None:
+     assert asset_venue("USO") == "equity"
+     assert is_asset_enabled("BTC") is True
+     assert is_asset_enabled("NVDA") is True
++    assert is_asset_enabled("AAPL") is True
++    assert is_asset_enabled("MSFT") is True
++    assert is_asset_enabled("AMZN") is True
++    assert is_asset_enabled("GOOGL") is True
++    assert is_asset_enabled("META") is True
+     assert is_asset_enabled("USO") is True
+diff --git a/tests/test_implied_lab_embed_display_boundary.py b/tests/test_implied_lab_embed_display_boundary.py
+index f2c8d30..d44adad 100644
+--- a/tests/test_implied_lab_embed_display_boundary.py
++++ b/tests/test_implied_lab_embed_display_boundary.py
+@@ -156,9 +156,9 @@ def test_asset_catalog_response_grouped_enabled_assets() -> None:
+     ids = [a["id"] for a in crypto["assets"]]
+     assert ids == ["BTC", "ETH", "HYPE", "SOL"]
+     mega = next(g for g in catalog["groups"] if g["id"] == "equity_mega")
+-    assert [a["id"] for a in mega["assets"]] == ["NVDA"]
++    assert [a["id"] for a in mega["assets"]] == ["AAPL", "AMZN", "GOOGL", "META", "MSFT", "NVDA"]
+     assert all("venue" in a and "asset_class" in a for a in crypto["assets"])
+-    nvda = mega["assets"][0]
++    nvda = next(a for a in mega["assets"] if a["id"] == "NVDA")
+     assert isinstance(nvda.get("trust_notes"), list)
+     assert nvda["trust_notes"]
+ 
+@@ -643,4 +643,3 @@ def test_exposure_menu_wsgi_route() -> None:
+     assert payload["kind"] == "exposure_paths"
+     assert payload["asset_id"] == "NVDA"
+     assert build_exposure_menu_response({"QUERY_STRING": "asset=NVDA&direction=long&offline=1"})["asset_id"] == "NVDA"
+-
+diff --git a/tests/test_lab_asset_selection.py b/tests/test_lab_asset_selection.py
+index 3839006..a5b05d7 100644
+--- a/tests/test_lab_asset_selection.py
++++ b/tests/test_lab_asset_selection.py
+@@ -15,14 +15,34 @@ from src.viz.lab_asset_selection import (
+ def test_list_selectable_lab_asset_ids_uses_enabled_registry_only() -> None:
+     load_assets_registry.cache_clear()
+     ids = list_selectable_lab_asset_ids()
+-    assert ids == ["BTC", "ETH", "SOL", "IWM", "QQQ", "SPY", "NVDA", "USO"]
++    assert ids == [
++        "BTC",
++        "ETH",
++        "SOL",
++        "IWM",
++        "QQQ",
++        "SPY",
++        "AAPL",
++        "AMZN",
++        "GOOGL",
++        "META",
++        "MSFT",
++        "NVDA",
++        "USO",
++    ]
+     assert "NVDA" in ids
++    assert all(asset_id in ids for asset_id in ("AAPL", "MSFT", "AMZN", "GOOGL", "META"))
+ 
+ 
+ def test_normalize_lab_asset_id_rejects_disabled_and_unknown() -> None:
+     load_assets_registry.cache_clear()
+     assert normalize_lab_asset_id("ETH") == "ETH"
+     assert normalize_lab_asset_id("NVDA") == "NVDA"
++    assert normalize_lab_asset_id("AAPL") == "AAPL"
++    assert normalize_lab_asset_id("MSFT") == "MSFT"
++    assert normalize_lab_asset_id("AMZN") == "AMZN"
++    assert normalize_lab_asset_id("GOOGL") == "GOOGL"
++    assert normalize_lab_asset_id("META") == "META"
+     assert normalize_lab_asset_id("SOL") == "SOL"
+     assert normalize_lab_asset_id("USO") == "USO"
+     default = default_asset_id()
+@@ -35,6 +55,11 @@ def test_lab_asset_id_from_environ_query_param() -> None:
+     environ = {"QUERY_STRING": f"{LAB_ASSET_QUERY_PARAM}=ETH"}
+     assert lab_asset_id_from_environ(environ) == "ETH"
+     assert lab_asset_id_from_environ({"QUERY_STRING": f"{LAB_ASSET_QUERY_PARAM}=NVDA"}) == "NVDA"
++    assert lab_asset_id_from_environ({"QUERY_STRING": f"{LAB_ASSET_QUERY_PARAM}=AAPL"}) == "AAPL"
++    assert lab_asset_id_from_environ({"QUERY_STRING": f"{LAB_ASSET_QUERY_PARAM}=MSFT"}) == "MSFT"
++    assert lab_asset_id_from_environ({"QUERY_STRING": f"{LAB_ASSET_QUERY_PARAM}=AMZN"}) == "AMZN"
++    assert lab_asset_id_from_environ({"QUERY_STRING": f"{LAB_ASSET_QUERY_PARAM}=GOOGL"}) == "GOOGL"
++    assert lab_asset_id_from_environ({"QUERY_STRING": f"{LAB_ASSET_QUERY_PARAM}=META"}) == "META"
+     assert lab_asset_id_from_environ({"QUERY_STRING": f"{LAB_ASSET_QUERY_PARAM}=USO"}) == "USO"
+ 
+ 

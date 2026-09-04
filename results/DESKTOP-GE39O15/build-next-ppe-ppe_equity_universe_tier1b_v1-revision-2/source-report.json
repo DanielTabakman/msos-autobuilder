@@ -1,0 +1,46 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "config/assets.yaml",
+          "config/assets_tier1_manifest.yaml",
+          "tests/test_assets_registry.py",
+          "tests/test_implied_lab_embed_display_boundary.py",
+          "tests/test_lab_asset_selection.py"
+        ],
+        "metadata": {
+          "output_tail": "assert lab_asset_id_from_environ({\"QUERY_STRING\": f\"{LAB_ASSET_QUERY_PARAM}=META\"}) == \"META\"\n     assert lab_asset_id_from_environ({\"QUERY_STRING\": f\"{LAB_ASSET_QUERY_PARAM}=USO\"}) == \"USO\"\n \n \n\ntokens used\n87,463\nImplemented the full tier-1b core slice in the allowed files only.\n\nChanged:\n- Added enabled `AAPL`, `MSFT`, `AMZN`, `GOOGL`, `META` entries in [config/assets.yaml](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-EqT1b-Core-Slice002-revision-2/config/assets.yaml:51)\n- Set `ppe_equity_universe_tier1b_v1` manifest assets to exactly `[AAPL, MSFT, AMZN, GOOGL, META]` in [config/assets_tier1_manifest.yaml](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-EqT1b-Core-Slice002-revision-2/config/assets_tier1_manifest.yaml:38)\n- Updated enabled/catalog/selectable assertions, including `test_list_catalog_entries_enabled_only`, in:\n  - [tests/test_assets_registry.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-EqT1b-Core-Slice002-revision-2/tests/test_assets_registry.py:93)\n  - [tests/test_lab_asset_selection.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-EqT1b-Core-Slice002-revision-2/tests/test_lab_asset_selection.py:15)\n  - [tests/test_implied_lab_embed_display_boundary.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-EqT1b-Core-Slice002-revision-2/tests/test_implied_lab_embed_display_boundary.py:159)\n\nValidation:\n- `git diff --check` passed.\n- Lightweight YAML validation confirmed enabled list and tier-1b manifest list.\n- Focused pytest could not collect locally: system Python is missing `pandas`.\n- The source gate candidate env from the failure report is not present in this checkout.\n- `python scripts/run_pushable_gate.py` failed before tests because `origin/main...HEAD` cannot be resolved in this local checkout.\n\nI did not commit, push, publish, or open a PR.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\workspaces\\PPE-EqT1b-Core-Slice002-revision-2"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 5 changed path(s)",
+        "task_id": "PPE-EqT1b-Core-Slice002-revision-2"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "92d7d14a79e73d2274ab003de8bc2910b6c96706",
+    "status": "completed"
+  },
+  "completed_at": "2026-09-04T04:40:42.058193+00:00",
+  "job_id": "build-next-ppe-ppe_equity_universe_tier1b_v1-revision-2",
+  "job_sha256": "1c1beb65a94325a861790b6738ef959bab9819ba9714db58a48e7516e74a6f44",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "lane_id": "PPE-EqT1b-Core-Slice002-revision-2",
+      "patch_file": "patches/PPE-EqT1b-Core-Slice002-revision-2.patch",
+      "patch_sha256": "2821f1a732d3311a174c36c253479cc788ce422d9a7fb83716509218a5332322",
+      "task_id": "PPE-EqT1b-Core-Slice002-revision-2"
+    }
+  ],
+  "publication_enabled": false,
+  "requested_by": "operator revision-2 after 92d7d14 rebuild gate miss (rev-1 id collision)",
+  "source": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\queue\\pending\\build-next-ppe-ppe_equity_universe_tier1b_v1-revision-2.yaml",
+  "version": 1
+}

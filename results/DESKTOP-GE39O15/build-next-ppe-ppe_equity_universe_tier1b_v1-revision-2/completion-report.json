@@ -1,0 +1,113 @@
+{
+  "authority_class": "AUTO_MERGE_WHEN_GREEN",
+  "authority_declared_at": "2026-09-02T16:00:00+00:00",
+  "changed_paths": [
+    "config/assets.yaml",
+    "config/assets_tier1_manifest.yaml",
+    "tests/test_assets_registry.py",
+    "tests/test_implied_lab_embed_display_boundary.py",
+    "tests/test_lab_asset_selection.py"
+  ],
+  "checks": {
+    "changes": {
+      "name": "changes",
+      "source": "check_run",
+      "state": "success"
+    },
+    "ci_success": {
+      "name": "ci_success",
+      "source": "check_run",
+      "state": "success"
+    },
+    "docker_entrypoint": {
+      "name": "docker_entrypoint",
+      "source": "check_run",
+      "state": "success"
+    },
+    "msos_web_build": {
+      "name": "msos_web_build",
+      "source": "check_run",
+      "state": "success"
+    },
+    "pytest": {
+      "name": "pytest",
+      "source": "check_run",
+      "state": "success"
+    }
+  },
+  "claim_release_handoff": {
+    "allowed_terminal_states": [
+      "abandoned",
+      "failed",
+      "merged",
+      "released",
+      "superseded"
+    ],
+    "authorized_paths": [
+      "config/assets.yaml",
+      "config/assets_tier1_manifest.yaml",
+      "scripts/witness_asset_catalog.py",
+      "src/viz/embed_display_boundary.py",
+      "tests/test_assets_registry.py",
+      "tests/test_implied_lab_embed_display_boundary.py",
+      "tests/test_lab_asset_selection.py"
+    ],
+    "bounded_failure_behavior": {
+      "accepted_abandonment": "release as abandoned with founder/owner disposition evidence",
+      "submission_or_publication_failure": "release as failed with bounded failure evidence",
+      "superseded_duplicate": "release as superseded with canonical successor evidence"
+    },
+    "claim_generation": 3,
+    "consumer": "completion-controller",
+    "handoff": "msos-autobuilder.work_admission.claim_release.v1",
+    "immutability": "consumer must match objective_sha256, writer_id and claim_generation before release",
+    "linked_issue": null,
+    "objective_sha256": "a51b25f9213051a960d8c70d4a2c985e0a588337091bdfa9ad82b9c1d0ed5bd3",
+    "release_api": "msos_autobuilder.work_admission.release_claim",
+    "repository": "DanielTabakman/Probability-prediction-engine",
+    "verified_completion_terminal_state": "merged",
+    "version": 1,
+    "writer_id": "build-next:build-next-ppe-ppe_equity_universe_tier1b_v1-PPE-EqT1b-Core-Slice002-92d7d14a79e7"
+  },
+  "cleanup": [
+    {
+      "action": "delete_branch",
+      "branch": "autobuilder/build-next-ppe-ppe_equity_universe_tier1b_v1-revision-2",
+      "status": "completed"
+    }
+  ],
+  "completed_at": "2026-09-06T13:44:40.446124+00:00",
+  "default_branch": "main",
+  "default_branch_head": "f3c9ef57370e43f436576968d3e1ed30e974e70e",
+  "founder_digest": "Merged automatically\nWork: ppe_equity_universe_tier1b_v1\nPR: 5433\nMerge commit: 58f6566ab57ed96d655fdc797410917e4a8dc07e\nValidation: candidate gate + publication + required checks passed\nCleanup: completed\nDecision required: none",
+  "gate_report_sha256": "78afcd2559f9f94a818423383c8410ef5705e8fdad6b83702e06e65296951d68",
+  "job_id": "build-next-ppe-ppe_equity_universe_tier1b_v1-revision-2",
+  "merge_commit": "58f6566ab57ed96d655fdc797410917e4a8dc07e",
+  "merge_method": "merge",
+  "pr_number": 5433,
+  "product_branch": "autobuilder/build-next-ppe-ppe_equity_universe_tier1b_v1-revision-2",
+  "publication_report_sha256": "913aff3315a9a154367442a35e2d6be4e20d9a08ba586fe4b45ed4d870222e7f",
+  "review_evidence": {
+    "latest_opinionated_reviews": [],
+    "review_decision": "",
+    "source": "github_graphql",
+    "unresolved_review_threads": 0
+  },
+  "revision_lineage": {
+    "gate_report_sha256": "78afcd2559f9f94a818423383c8410ef5705e8fdad6b83702e06e65296951d68",
+    "job_id": "build-next-ppe-ppe_equity_universe_tier1b_v1-revision-2",
+    "not_applicable_evidence": true,
+    "producer": "controlled_publisher",
+    "product_commit": "1c9e166068f230cf70e5b9d597656eff4cef805e",
+    "publication_report_sha256": "913aff3315a9a154367442a35e2d6be4e20d9a08ba586fe4b45ed4d870222e7f",
+    "revision_disposition": "not_applicable",
+    "revision_evidence_id": "90fc2f6bcf1f20b727cacb4108c49a67",
+    "revision_evidence_sha256": "90fc2f6bcf1f20b727cacb4108c49a67c7248ae42a7fd7cdca0ea361b459247d",
+    "version": 1
+  },
+  "status": "merged",
+  "terminal_path": "C:\\Users\\USER\\.msos-autobuilder-merge-witness-20260902\\state\\completion-terminal-work-items\\build-next-ppe-ppe_equity_universe_tier1b_v1-revision-2.json",
+  "validated_head": "1c9e166068f230cf70e5b9d597656eff4cef805e",
+  "version": 1,
+  "work_item_id": "ppe_equity_universe_tier1b_v1"
+}

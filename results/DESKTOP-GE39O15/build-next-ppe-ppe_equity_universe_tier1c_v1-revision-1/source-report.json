@@ -1,0 +1,46 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "config/assets.yaml",
+          "config/assets_tier1_manifest.yaml",
+          "tests/test_assets_registry.py",
+          "tests/test_implied_lab_embed_display_boundary.py",
+          "tests/test_lab_asset_selection.py"
+        ],
+        "metadata": {
+          "output_tail": "RAM}=META\"}) == \"META\"\n+    assert lab_asset_id_from_environ({\"QUERY_STRING\": f\"{LAB_ASSET_QUERY_PARAM}=TSLA\"}) == \"TSLA\"\n+    assert lab_asset_id_from_environ({\"QUERY_STRING\": f\"{LAB_ASSET_QUERY_PARAM}=AMD\"}) == \"AMD\"\n+    assert lab_asset_id_from_environ({\"QUERY_STRING\": f\"{LAB_ASSET_QUERY_PARAM}=COIN\"}) == \"COIN\"\n     assert lab_asset_id_from_environ({\"QUERY_STRING\": f\"{LAB_ASSET_QUERY_PARAM}=USO\"}) == \"USO\"\n \n \n\ntokens used\n118,096\nImplemented the tier1c core slice from clean source checkout.\n\nChanges:\n- Added enabled equity registry rows for `TSLA`, `AMD`, and `COIN` in [config/assets.yaml](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-EqT1c-Core-Slice002-revision-1/config/assets.yaml:131).\n- Corrected `ppe_equity_universe_tier1c_v1` manifest assets to `[TSLA, AMD, COIN]` in [config/assets_tier1_manifest.yaml](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-EqT1c-Core-Slice002-revision-1/config/assets_tier1_manifest.yaml:44).\n- Updated focused registry, lab selection, catalog, and mocked display-boundary tests to include the three enabled tier1c assets.\n\nValidation run:\n- `python -c ... yaml.safe_load(...)`: passed; TSLA/AMD/COIN enabled and manifest resolves correctly.\n- `python scripts/check_repository_boundaries.py`: passed.\n- `python -m py_compile ...`: passed.\n- `ruff check tests/test_assets_registry.py tests/test_lab_asset_selection.py tests/test_implied_lab_embed_display_boundary.py`: passed.\n- `git diff --check`: passed.\n- `python scripts/run_pushable_gate.py`: blocked before checks because this detached checkout cannot compute `origin/main...HEAD`.\n- Path-based gate entrypoint: `ruff` passed, pytest failed during collection because the local shell is missing repo dependencies (`pandas`, `numpy`, `streamlit`, `plotly`, `yfinance`; unrelated collection also hit `google.auth`).\n\nNo commit, push, publish, or PR was performed. Current dirty files are only the five allowed paths.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\workspaces\\PPE-EqT1c-Core-Slice002-revision-1"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 5 changed path(s)",
+        "task_id": "PPE-EqT1c-Core-Slice002-revision-1"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "0e52f5d9e3de78847b23de2f4b11b00cc4e4425e",
+    "status": "completed"
+  },
+  "completed_at": "2026-09-07T01:07:19.408838+00:00",
+  "job_id": "build-next-ppe-ppe_equity_universe_tier1c_v1-revision-1",
+  "job_sha256": "c8bb9d1143acd6fafa9e77ff2b4bc2f5ae25f7456aa888e00b0d9af1c9e9b421",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "lane_id": "PPE-EqT1c-Core-Slice002-revision-1",
+      "patch_file": "patches/PPE-EqT1c-Core-Slice002-revision-1.patch",
+      "patch_sha256": "41cf2ba6b47be7684ac77ec85796ff138a196038555761d53b7ba6c2698b987e",
+      "task_id": "PPE-EqT1c-Core-Slice002-revision-1"
+    }
+  ],
+  "publication_enabled": false,
+  "requested_by": "MSOS Autobuilder automatic revision loop",
+  "source": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\queue\\pending\\build-next-ppe-ppe_equity_universe_tier1c_v1-revision-1.yaml",
+  "version": 1
+}

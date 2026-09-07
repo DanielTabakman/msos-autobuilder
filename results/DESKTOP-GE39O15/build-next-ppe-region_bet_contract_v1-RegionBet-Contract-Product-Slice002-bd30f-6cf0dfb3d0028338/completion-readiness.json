@@ -1,0 +1,14 @@
+{
+  "canon_conflict": false,
+  "claim_generation": 2,
+  "claim_writer_id": "build-next:build-next-ppe-region_bet_contract_v1-RegionBet-Contract-Product-Slice002-bd30f-6cf0dfb3d0028338",
+  "evidence_conflict": false,
+  "founder_decision_required": false,
+  "job_id": "build-next-ppe-region_bet_contract_v1-RegionBet-Contract-Product-Slice002-bd30f-6cf0dfb3d0028338",
+  "objective_sha256": "5ce79ec417002ab0eeddd4699cff36abce694d460b51444fff4bdaaa7ab1f62c",
+  "ownership_conflict": false,
+  "pr_number": 5436,
+  "producer": "controlled_publisher",
+  "product_commit": "3e8e04b601f3a23d21cafa72bd3099294aeed0fa",
+  "version": 1
+}

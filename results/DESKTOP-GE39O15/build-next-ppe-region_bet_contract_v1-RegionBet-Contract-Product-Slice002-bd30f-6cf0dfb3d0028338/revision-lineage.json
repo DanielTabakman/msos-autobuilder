@@ -1,0 +1,12 @@
+{
+  "gate_report_sha256": "faef3c3c0362a31af2d07ca81caec97efa5392bb4909d657ba0e3397aca9c9d0",
+  "job_id": "build-next-ppe-region_bet_contract_v1-RegionBet-Contract-Product-Slice002-bd30f-6cf0dfb3d0028338",
+  "not_applicable_evidence": true,
+  "producer": "controlled_publisher",
+  "product_commit": "3e8e04b601f3a23d21cafa72bd3099294aeed0fa",
+  "publication_report_sha256": "805c452fdc8578412cdfe420392a6b2b2cd7a36bb332a6116f0f8074edcc4f76",
+  "revision_disposition": "not_applicable",
+  "revision_evidence_id": "7e5955be953ffcacff382c60edb14bd1",
+  "revision_evidence_sha256": "47b41657d8c6ca9986e6b6153bc2466e56a22f78cca65b7c97f35661198c5fd3",
+  "version": 1
+}

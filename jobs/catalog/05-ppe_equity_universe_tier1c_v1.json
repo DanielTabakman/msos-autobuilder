@@ -126,7 +126,7 @@
       }
     ]
   },
-  "dependency_source_sha256": "8cdd71a962f9aa601782c598d6be4a748900118d93155c86fb6d0808902bc99a",
+  "dependency_source_sha256": "47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394",
   "authority": {
     "publication_enabled": false,
     "merge_enabled": false,
@@ -139,5 +139,5 @@
   "validation": {
     "profile_id": "ppe-ci-pytest-v1"
   },
-  "work_item_source_sha256_v1": "6a76d12649a68ce7452c5610ec01ff0103081e54c3901f86f5326ebb0b925705"
+  "work_item_source_sha256_v1": "1cb6a50ede607482906315d0829efb266def3518d2b9809d402314677abca529"
 }

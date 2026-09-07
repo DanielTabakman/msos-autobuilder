@@ -1,0 +1,67 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "config/assets.yaml",
+          "config/assets_tier1_manifest.yaml",
+          "tests/test_assets_registry.py",
+          "tests/test_implied_lab_embed_display_boundary.py",
+          "tests/test_lab_asset_selection.py"
+        ],
+        "metadata": {
+          "output_tail": "}) == \"GOOGL\"\n     assert lab_asset_id_from_environ({\"QUERY_STRING\": f\"{LAB_ASSET_QUERY_PARAM}=META\"}) == \"META\"\n+    assert lab_asset_id_from_environ({\"QUERY_STRING\": f\"{LAB_ASSET_QUERY_PARAM}=TSLA\"}) == \"TSLA\"\n+    assert lab_asset_id_from_environ({\"QUERY_STRING\": f\"{LAB_ASSET_QUERY_PARAM}=AMD\"}) == \"AMD\"\n+    assert lab_asset_id_from_environ({\"QUERY_STRING\": f\"{LAB_ASSET_QUERY_PARAM}=COIN\"}) == \"COIN\"\n     assert lab_asset_id_from_environ({\"QUERY_STRING\": f\"{LAB_ASSET_QUERY_PARAM}=USO\"}) == \"USO\"\n \n \n\ntokens used\n124,751\nImplemented the bounded Core Slice002 registry merge.\n\nChanged:\n- [config/assets.yaml](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-EqT1c-Core-Slice002/config/assets.yaml): enabled `TSLA`, `AMD`, `COIN` as equity options.\n- [config/assets_tier1_manifest.yaml](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/PPE-EqT1c-Core-Slice002/config/assets_tier1_manifest.yaml): corrected `ppe_equity_universe_tier1c_v1` to `[TSLA, AMD, COIN]`.\n- Updated focused tests for registry, lab selection, catalog grouping, and mocked display-boundary witness.\n\nValidation evidence:\n- `python -m ruff check tests/test_assets_registry.py tests/test_lab_asset_selection.py tests/test_implied_lab_embed_display_boundary.py` passed.\n- YAML parse check passed.\n- `python scripts/check_repository_boundaries.py` passed.\n- Direct registry verification passed: tier1c resolves to `['AMD', 'COIN', 'TSLA']`; all three are enabled; equity mega catalog includes them.\n\nBlocked validation:\n- Focused pytest and explicit path gate could not complete because this shell lacks repo dependencies: `pandas`, `yfinance`, `pytest-xdist`, and `google-auth`.\n- Canonical `python scripts/run_pushable_gate.py` also fails before checks because the workspace is detached and cannot compute `origin/main...HEAD`.\n\nNo commit/push/PR was performed because the work-item authority forbids writing `.git` and asks for workspace changes only.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\workspaces\\PPE-EqT1c-Core-Slice002"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 5 changed path(s)",
+        "task_id": "PPE-EqT1c-Core-Slice002"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "0e52f5d9e3de78847b23de2f4b11b00cc4e4425e",
+    "status": "completed"
+  },
+  "completed_at": "2026-09-07T07:47:45.807427+00:00",
+  "job_id": "build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568",
+  "job_sha256": "5240273f61d32732b1a72f6f1f3ba25ee24dcab8438b4490d7bc66dc614ffdd3",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "changed_paths": [
+        "config/assets.yaml",
+        "config/assets_tier1_manifest.yaml",
+        "tests/test_assets_registry.py",
+        "tests/test_implied_lab_embed_display_boundary.py",
+        "tests/test_lab_asset_selection.py"
+      ],
+      "complete_patch": true,
+      "lane_id": "PPE-EqT1c-Core-Slice002",
+      "patch_file": "patches/PPE-EqT1c-Core-Slice002.patch",
+      "patch_sha256": "d3cc7f31e289d6251cc6dcca963ef9d60cd2d23cd0e26b5a857fe5acaea5839b",
+      "task_id": "PPE-EqT1c-Core-Slice002"
+    }
+  ],
+  "publication_enabled": false,
+  "relay": {
+    "canonical_patch_sha256_by_task": {
+      "PPE-EqT1c-Core-Slice002": "d3cc7f31e289d6251cc6dcca963ef9d60cd2d23cd0e26b5a857fe5acaea5839b"
+    },
+    "canonical_report_role": "relay-corrected-canonical-downstream-report",
+    "complete_patch_reconstruction": true,
+    "machine_id": "DESKTOP-GE39O15",
+    "publication_enabled": false,
+    "relayed_at": "2026-09-07T07:47:52.540926+00:00",
+    "source_report_role": "original-worker-report-noncanonical-for-patch-identity",
+    "source_report_sha256": "482e685e40e7ed906b3d92943f83d82759e7ff6513bcf3a61fa35e7774995611",
+    "version": 1
+  },
+  "requested_by": "capacity-one refill controller",
+  "source": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\queue\\pending\\build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568.yaml",
+  "version": 1
+}

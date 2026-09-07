@@ -1,0 +1,45 @@
+{
+  "bootstrap": [],
+  "changed_paths": [
+    "config/assets.yaml",
+    "config/assets_tier1_manifest.yaml",
+    "tests/test_assets_registry.py",
+    "tests/test_implied_lab_embed_display_boundary.py",
+    "tests/test_lab_asset_selection.py"
+  ],
+  "checks": [],
+  "errors": [
+    {
+      "message": "dependency source SHA-256 does not match contract",
+      "type": "CandidateGateError"
+    }
+  ],
+  "finished_at": "2026-09-07T00:59:48.026497+00:00",
+  "job_id": "build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-55389d77c71b248a",
+  "patches": [
+    {
+      "changed_paths": [
+        "config/assets.yaml",
+        "config/assets_tier1_manifest.yaml",
+        "tests/test_assets_registry.py",
+        "tests/test_implied_lab_embed_display_boundary.py",
+        "tests/test_lab_asset_selection.py"
+      ],
+      "patch_file": "patches/PPE-EqT1c-Core-Slice002.patch",
+      "patch_sha256": "3a438171ff3621c8ee85f390dbb7b6b9983182407910aee1c58976f78a900dec",
+      "task_id": "PPE-EqT1c-Core-Slice002"
+    }
+  ],
+  "plan_source": "candidate_validation",
+  "policy_blocks": [],
+  "product_write_performed": false,
+  "publication_enabled": false,
+  "source_head": "0e52f5d9e3de78847b23de2f4b11b00cc4e4425e",
+  "source_report_sha256": "4a133b7d6d0255c8fb5c778a8e4169dc441399fa4f8fb90222ab0d5c39145c7d",
+  "started_at": "2026-09-07T00:59:39.849279+00:00",
+  "state": "candidate_failed",
+  "status": "failed",
+  "validation_contract_sha256": "ef78f75a2f00c35a47aa726bda7a26ce1fcfc2a444b670cb86cf2ba1093efcb9",
+  "version": 1,
+  "workspace_removed": true
+}

@@ -1,0 +1,134 @@
+{
+  "version": 1,
+  "pipeline_id": "ppe",
+  "work_item_id": "region_bet_contract_v1",
+  "order": 6,
+  "eligible": true,
+  "target_repository": "DanielTabakman/Probability-prediction-engine",
+  "target_source_commit": "bd30f26ba5fb5edd146b19ad8ed63156f641c6d1",
+  "target_remote_url": "https://github.com/DanielTabakman/Probability-prediction-engine.git",
+  "adapter": "ppe_operator",
+  "allowed_paths": [
+    "apps/msos-web/src/lib/regionBet.ts",
+    "apps/msos-web/src/lib/msosWorkflowStore.ts",
+    "apps/msos-web/src/app/api/theses/region-bet/route.ts",
+    "tests/test_msos_web_region_bet_contract.py"
+  ],
+  "native_slice": {
+    "slice_id": "RegionBet-Contract-Product-Slice002",
+    "build_branch": "build/auto/RegionBet-Contract-Product-Slice002",
+    "layer_preset": "MSOS_UI",
+    "worker_mode": "local-agent",
+    "declared_plane": "PRODUCT-PLANE",
+    "touch_set": [
+      "apps/msos-web/src/lib/regionBet.ts",
+      "apps/msos-web/src/lib/msosWorkflowStore.ts",
+      "apps/msos-web/src/app/api/theses/region-bet/route.ts",
+      "tests/test_msos_web_region_bet_contract.py"
+    ],
+    "sequence_index": 1,
+    "total_slices": 4,
+    "previous_slices": [
+      "RegionBet-Contract-Control-Slice001"
+    ],
+    "following_slices": [
+      "RegionBet-Contract-Witness-Slice003",
+      "RegionBet-Contract-Closeout-Slice004"
+    ],
+    "sprint_spec_path": "docs/SOP/SPRINT_REGION_BET_CONTRACT_V1.md",
+    "selection_record": "docs/SOP/POST_REGION_BET_CONTRACT_V1_SELECTION.md",
+    "raw_slice": {
+      "sliceId": "RegionBet-Contract-Product-Slice002",
+      "layerPreset": "MSOS_UI",
+      "sprintSpecPath": "docs/SOP/SPRINT_REGION_BET_CONTRACT_V1.md",
+      "buildBranch": "build/auto/RegionBet-Contract-Product-Slice002",
+      "declaredPlane": "PRODUCT-PLANE",
+      "implementationStatus": "PENDING",
+      "workerMode": "local-agent",
+      "susMinutes": 90,
+      "hardMinutes": 240,
+      "maxAttempts": 2,
+      "touchSet": [
+        "apps/msos-web/src/lib/regionBet.ts",
+        "apps/msos-web/src/lib/msosWorkflowStore.ts",
+        "apps/msos-web/src/app/api/theses/region-bet/route.ts",
+        "tests/test_msos_web_region_bet_contract.py"
+      ]
+    }
+  },
+  "phase_plan": "docs/SOP/PHASE_PLANS/region_bet_contract_v1_relay.json",
+  "prerequisites": {
+    "version": 1,
+    "read_only": true,
+    "source": "ppe_native_read_only",
+    "evidence": {
+      "frozen_target_commit": "bd30f26ba5fb5edd146b19ad8ed63156f641c6d1",
+      "target_remote_url": "https://github.com/DanielTabakman/Probability-prediction-engine.git",
+      "phase_plan": "docs/SOP/PHASE_PLANS/region_bet_contract_v1_relay.json",
+      "phase_plan_blob_sha": "6031607c903f481cb2bb7213093d8ccc71ea3486",
+      "control_slice": {
+        "slice_id": "RegionBet-Contract-Control-Slice001",
+        "implementationStatus": "COMPLETE",
+        "nonBlocking": true
+      },
+      "source_files": [
+        {
+          "path": "docs/SOP/PHASE_PLANS/region_bet_contract_v1_relay.json",
+          "exists": true,
+          "git_commit": "bd30f26ba5fb5edd146b19ad8ed63156f641c6d1",
+          "blob_sha": "6031607c903f481cb2bb7213093d8ccc71ea3486",
+          "sha256": "e9dc29678eaf65c55060a0755d9686fc76aa43bb20bcd14283816bcb483a81ed"
+        },
+        {
+          "path": "docs/SOP/SPRINT_REGION_BET_CONTRACT_V1.md",
+          "exists": true,
+          "git_commit": "bd30f26ba5fb5edd146b19ad8ed63156f641c6d1",
+          "blob_sha": "788daa2ea99d2537187876022f94a176781e9158",
+          "sha256": "f55def086ceac10483a69e1d88cea3cc4745d9774096cd2daf3735296f18245a"
+        },
+        {
+          "path": "docs/SOP/POST_REGION_BET_CONTRACT_V1_SELECTION.md",
+          "exists": true,
+          "git_commit": "bd30f26ba5fb5edd146b19ad8ed63156f641c6d1",
+          "blob_sha": "ee4c92c8736d2b047442852075e02038f8f7d6e2",
+          "sha256": "142a6977d1302d7c8f5b109f1baeadc224769ffe00e46451d8e44165dcba940e"
+        },
+        {
+          "path": "docs/SOP/REGION_BET_CONTRACT_V1_EVIDENCE_STATUS.md",
+          "exists": true,
+          "git_commit": "bd30f26ba5fb5edd146b19ad8ed63156f641c6d1",
+          "blob_sha": "5bee7ef9c8cb6a6fca7e3fd9c4abda37b4bcc0d5",
+          "sha256": "f4ff11cd736d8ed66f16cda13d9e6ee293dc682d0e775bed799babbca1a00944"
+        },
+        {
+          "path": "docs/SOP/ACTIVE_PHASE_MANIFEST.json",
+          "exists": true,
+          "git_commit": "bd30f26ba5fb5edd146b19ad8ed63156f641c6d1",
+          "blob_sha": "bef16bafa160f5240b85c69b119b6ba627e041bb",
+          "sha256": "c1425fc9fda014c0379113ff849a0466e3c31e5c4f489975becfbb913bf067dc"
+        }
+      ]
+    },
+    "statuses": [
+      {
+        "slice_id": "RegionBet-Contract-Control-Slice001",
+        "status": "complete",
+        "non_blocking": true
+      }
+    ]
+  },
+  "dependency_source_sha256": "47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394",
+  "authority": {
+    "publication_enabled": false,
+    "merge_enabled": false,
+    "product_main_write_enabled": false
+  },
+  "merge_authority": {
+    "class": "AUTO_MERGE_WHEN_GREEN",
+    "declared_at": "2026-09-07T19:40:00+00:00"
+  },
+  "validation": {
+    "profile_id": "ppe-ci-pytest-v1"
+  },
+  "work_item_source_sha256_v1": "6556c7c7f62e6cab6743172e53c00ca4ca6a0ddb490ccea9505589351a8e3c09"
+}

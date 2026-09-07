@@ -19,6 +19,7 @@ from msos_autobuilder.completion_controller import (
     CompletionController,
     CompletionControllerError,
     CompletionGitHubClient,
+    _validate_required_checks,
     load_completion_config,
 )
 from msos_autobuilder.controlled_publisher import build_completion_sidecar_evidence
@@ -1150,3 +1151,24 @@ def test_cli_parser_loads_completion_config(tmp_path: Path) -> None:
     assert config.required_checks == ("linux-ci",)
     assert config.merge_method == "merge"
     assert config.product_repo_full_name == "owner/product"
+
+
+def test_required_checks_prefer_success_over_stale_cancelled_twin() -> None:
+    evidence = _validate_required_checks(
+        (
+            {"name": "msos_web_build", "state": "cancelled", "source": "check_run"},
+            {"name": "msos_web_build", "state": "success", "source": "check_run"},
+            {"name": "pytest", "state": "success", "source": "check_run"},
+        ),
+        ("msos_web_build", "pytest"),
+    )
+    assert evidence["msos_web_build"]["state"] == "success"
+    assert evidence["pytest"]["state"] == "success"
+
+
+def test_required_checks_still_fail_when_only_cancelled_exists() -> None:
+    with pytest.raises(CompletionControllerError, match="required check is cancelled"):
+        _validate_required_checks(
+            ({"name": "msos_web_build", "state": "cancelled", "source": "check_run"},),
+            ("msos_web_build",),
+        )

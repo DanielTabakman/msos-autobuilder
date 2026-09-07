@@ -14,9 +14,11 @@ from msos_autobuilder.controlled_publisher import (
     ControlledPublisher,
     GitHubDraftClient,
     PublisherError,
+    _authorized_paths_cover_expected,
     _derive_publish_plan,
     load_publisher_config,
 )
+from msos_autobuilder.revision_loop import _revision_not_applicable_receipt_path
 from msos_autobuilder.lifecycle_evidence import (
     SourceRef,
     attempt_identity_from_job_yaml,
@@ -257,6 +259,7 @@ def make_fixture(tmp_path: Path, *, overlap: bool = False) -> tuple[Path, Path, 
                 f"    claim_writer_id: build-next:{job_id}",
                 "    authorized_paths:",
                 "      - src/viz/value.py",
+                "      - scripts/witness_unused.py",
                 "    objective_identity:",
                 "      repository: owner/product",
                 "      linked_issue:",
@@ -336,6 +339,68 @@ plans:
         encoding="utf-8",
     )
     return config, product_bare, evidence_bare, job_id
+
+
+def test_publisher_publishes_revision_job_from_not_applicable_receipt(
+    tmp_path: Path,
+) -> None:
+    config_path, product_bare, evidence_bare, job_id = make_fixture(tmp_path)
+    edit = tmp_path / "revision-identity-edit"
+    git(None, "clone", "--branch", "results", str(evidence_bare), str(edit))
+    git(edit, "config", "user.name", "Fixture")
+    git(edit, "config", "user.email", "fixture@example.invalid")
+    job_path = edit / "results" / "MACHINE" / job_id / "job.yaml"
+    raw = job_path.read_text(encoding="utf-8")
+    stripped = raw.replace(
+        "  refill_attempt:\n    generation_id: refill-12345678\n"
+        "    attempt_ordinal: 1\n    retry_ordinal: 0\n",
+        "",
+    )
+    assert stripped != raw
+    job_path.write_text(stripped, encoding="utf-8")
+    git(edit, "add", ".")
+    git(edit, "commit", "-m", "strip refill identity from revision job")
+    git(edit, "push", "origin", "HEAD:results")
+
+    config = load_publisher_config(config_path)
+    gate_sha = sha256(edit / "results" / "MACHINE" / job_id / "gate-report.json")
+    receipt_path = _revision_not_applicable_receipt_path(
+        config.host_root,
+        machine_id="MACHINE",
+        job_id=job_id,
+        gate_sha=gate_sha,
+    )
+    write_json(
+        receipt_path,
+        {
+            "version": 1,
+            "receipt_type": "revision.disposition.not_applicable.source",
+            "machine_id": "MACHINE",
+            "source_job_id": job_id,
+            "gate_report_sha256": gate_sha,
+            "recorded_at": "2026-07-13T00:00:01+00:00",
+        },
+    )
+
+    publisher = ControlledPublisher(config, github_client=FakeGitHubClient(product_bare))
+    assert publisher.run_once() == (job_id,)
+    success = publisher_success(config_path)
+    assert success["terminal_evidence"]["processed_jobs"] == [job_id]
+
+
+def test_authorized_paths_may_be_a_superset_of_gate_changed_paths() -> None:
+    assert _authorized_paths_cover_expected(
+        (
+            "config/assets.yaml",
+            "scripts/witness_asset_catalog.py",
+            "tests/test_assets_registry.py",
+        ),
+        ("config/assets.yaml", "tests/test_assets_registry.py"),
+    )
+    assert not _authorized_paths_cover_expected(
+        ("config/assets.yaml",),
+        ("config/assets.yaml", "tests/test_assets_registry.py"),
+    )
 
 
 def test_controlled_publisher_creates_one_draft_pr_and_is_repeat_safe(tmp_path: Path) -> None:
@@ -559,16 +624,19 @@ def test_controlled_publisher_rejects_overlapping_product_main_change(tmp_path: 
     config = load_publisher_config(config_path)
     publisher = ControlledPublisher(config, github_client=FakeGitHubClient(product_bare))
 
-    with pytest.raises(PublisherError, match="changed candidate paths"):
-        publisher.run_once()
-    marker = json.loads(
-        (config.host_root / "state" / "controlled-publisher-error.json").read_text(
+    assert publisher.run_once() == ()
+    assert not (config.host_root / "state" / "controlled-publisher-error.json").exists()
+    ledger = json.loads(
+        (config.host_root / "state" / "controlled-publisher-seen.json").read_text(
             encoding="utf-8"
         )
     )
-    assert marker["service"] == "publisher"
-    assert marker["associated"]["job_id"] == job_id
-    assert marker["associated"]["repository"] == "owner/product"
+    assert ledger[job_id]["status"] == "blocked_main_path_drift"
+    assert "changed candidate paths" in ledger[job_id]["message"]
+    success = publisher_success(config_path)
+    assert job_id in success["associated_jobs"]
+    assert job_id in success["terminal_evidence"]["verified_jobs"]
+    assert job_id not in success["terminal_evidence"]["processed_jobs"]
     proc = subprocess.run(
         [
             "git",

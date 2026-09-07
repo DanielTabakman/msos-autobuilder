@@ -619,6 +619,25 @@ def _validate_paths(job: Mapping[str, Any], changed_paths: Sequence[str]) -> Non
         raise CompletionControllerError(f"changed paths include forbidden paths: {blocked}")
 
 
+def _check_state_preference(state: str) -> int:
+    """Higher is better when duplicate check-runs exist for one required name.
+
+    GitHub keeps cancelled/failed rows from superseded workflow attempts alongside
+    the later successful rerun. Prefer success, then pending, then failure, then
+    cancelled so a green rerun is not blocked by a stale cancelled twin.
+    """
+    normalized = state.strip().lower()
+    if normalized in CHECK_SUCCESS_STATES:
+        return 4
+    if normalized in CHECK_PENDING_STATES:
+        return 3
+    if normalized in CHECK_FAILED_STATES:
+        return 2
+    if normalized in CHECK_CANCELLED_STATES:
+        return 1
+    return 0
+
+
 def _validate_required_checks(
     checks: Sequence[Mapping[str, Any]],
     required: Sequence[str],
@@ -627,8 +646,14 @@ def _validate_required_checks(
     for raw in checks:
         name = str(raw.get("name") or "").strip()
         state = str(raw.get("state") or "").strip().lower()
-        if name:
-            by_name[name] = {"name": name, "state": state, "source": str(raw.get("source") or "")}
+        if not name:
+            continue
+        candidate = {"name": name, "state": state, "source": str(raw.get("source") or "")}
+        existing = by_name.get(name)
+        if existing is None or _check_state_preference(state) > _check_state_preference(
+            existing["state"]
+        ):
+            by_name[name] = candidate
     evidence: dict[str, dict[str, str]] = {}
     for name in required:
         item = by_name.get(name)

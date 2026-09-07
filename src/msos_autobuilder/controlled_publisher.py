@@ -36,6 +36,7 @@ from .lifecycle_evidence import (
     record_producer_evidence_error,
     validate_producer_head,
 )
+from .revision_loop import _revision_not_applicable_receipt_path
 from .service_error_lifecycle import record_service_cycle_success, write_service_error_marker
 from .work_admission import (
     AdmissionError,
@@ -399,6 +400,15 @@ def _linked_issue_from_text(text: str) -> int | None:
     return int(matches[0])
 
 
+def _authorized_paths_cover_expected(
+    authorized_paths: Sequence[str] | None,
+    expected_paths: Sequence[str],
+) -> bool:
+    """Return True when every gate-changed path is inside the admitted allow-list."""
+    authorized = {str(item).replace("\\", "/") for item in authorized_paths or ()}
+    return set(expected_paths).issubset(authorized)
+
+
 def _as_writer_claim(raw: Mapping[str, Any]) -> WriterClaim:
     return WriterClaim(
         version=1,
@@ -649,14 +659,22 @@ class GitHubDraftClient:
                 "User-Agent": "msos-autobuilder-controlled-publisher",
             },
         )
-        try:
-            with urllib.request.urlopen(request, timeout=60) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            raise PublisherError(f"GitHub API {method} {path} failed: {exc.code} {body}") from exc
-        except urllib.error.URLError as exc:
-            raise PublisherError(f"GitHub API {method} {path} failed: {exc}") from exc
+        last_exc: BaseException | None = None
+        for attempt in range(4):
+            try:
+                with urllib.request.urlopen(request, timeout=90) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")
+                raise PublisherError(
+                    f"GitHub API {method} {path} failed: {exc.code} {body}"
+                ) from exc
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
+                last_exc = exc
+                if attempt >= 3:
+                    break
+                time.sleep(2 * (attempt + 1))
+        raise PublisherError(f"GitHub API {method} {path} failed: {last_exc}") from last_exc
 
     def find_pull_requests(self, branch: str) -> list[dict[str, Any]]:
         query = urllib.parse.urlencode(
@@ -879,6 +897,8 @@ class EvidenceBranch:
                 None,
                 "-c",
                 "core.autocrlf=false",
+                "-c",
+                "core.longpaths=true",
                 "clone",
                 "--single-branch",
                 "--branch",
@@ -889,6 +909,7 @@ class EvidenceBranch:
             )
         else:
             _git(self.checkout, "config", "core.autocrlf", "false")
+            _git(self.checkout, "config", "core.longpaths", "true")
             _git(self.checkout, "fetch", "--no-tags", "origin", self.config.results_branch)
             _git(
                 self.checkout,
@@ -900,6 +921,7 @@ class EvidenceBranch:
             _git(self.checkout, "reset", "--hard", f"origin/{self.config.results_branch}")
             _git(self.checkout, "clean", "-fd")
         _git(self.checkout, "config", "core.autocrlf", "false")
+        _git(self.checkout, "config", "core.longpaths", "true")
         _git(self.checkout, "config", "user.name", "MSOS Autobuilder Controlled Publisher")
         _git(self.checkout, "config", "user.email", "autobuilder-publisher@localhost")
 
@@ -1393,33 +1415,83 @@ class ControlledPublisher:
 
     def _load_revision_evidence(self, job_dir: Path, gate_sha: str) -> dict[str, Any]:
         identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
-        if identity is None:
-            raise PublisherError("publisher cannot bind revision evidence without job identity")
-        head_path = producer_head_path(
-            self.host_root,
-            evidence_kind="revision.disposition",
-            identity=identity,
+        if identity is not None:
+            head_path = producer_head_path(
+                self.host_root,
+                evidence_kind="revision.disposition",
+                identity=identity,
+            )
+            if not head_path.exists():
+                raise PublisherError("missing canonical revision.disposition evidence")
+            try:
+                head = json.loads(head_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise PublisherError("revision.disposition producer head is unreadable") from exc
+            validate_producer_head(head, host_root=self.host_root)
+            envelope_path = self.host_root / str(head.get("envelope_path") or "")
+            try:
+                envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise PublisherError("revision.disposition envelope is unreadable") from exc
+            if envelope.get("evidence_id") != head.get("evidence_id"):
+                raise PublisherError("revision.disposition head conflicts with envelope")
+            payload = _mapping(envelope.get("payload"), "revision evidence payload")
+            if payload.get("gate_report_sha256") != gate_sha:
+                raise PublisherError("revision.disposition evidence is for a different gate")
+            return {
+                **envelope,
+                "envelope_sha256": head.get("envelope_sha256"),
+            }
+        return self._load_revision_not_applicable_receipt(
+            job_id=job_dir.name,
+            gate_sha=gate_sha,
         )
-        if not head_path.exists():
-            raise PublisherError("missing canonical revision.disposition evidence")
+
+    def _load_revision_not_applicable_receipt(
+        self,
+        *,
+        job_id: str,
+        gate_sha: str,
+    ) -> dict[str, Any]:
+        """Bind a passed revision job that has no refill attempt identity.
+
+        The revision loop strips ``refill_attempt`` from descendant jobs, so they
+        cannot emit a producer head. The not-applicable source receipt is still
+        authoritative for a passed candidate.
+        """
+        receipt_path = _revision_not_applicable_receipt_path(
+            self.host_root,
+            machine_id=self.config.machine_id,
+            job_id=job_id,
+            gate_sha=gate_sha,
+        )
+        if not receipt_path.is_file():
+            raise PublisherError("publisher cannot bind revision evidence without job identity")
         try:
-            head = json.loads(head_path.read_text(encoding="utf-8"))
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise PublisherError("revision.disposition producer head is unreadable") from exc
-        validate_producer_head(head, host_root=self.host_root)
-        envelope_path = self.host_root / str(head.get("envelope_path") or "")
-        try:
-            envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise PublisherError("revision.disposition envelope is unreadable") from exc
-        if envelope.get("evidence_id") != head.get("evidence_id"):
-            raise PublisherError("revision.disposition head conflicts with envelope")
-        payload = _mapping(envelope.get("payload"), "revision evidence payload")
-        if payload.get("gate_report_sha256") != gate_sha:
-            raise PublisherError("revision.disposition evidence is for a different gate")
+            raise PublisherError("revision not-applicable receipt is unreadable") from exc
+        if not isinstance(receipt, dict):
+            raise PublisherError("revision not-applicable receipt must be an object")
+        if receipt.get("receipt_type") != "revision.disposition.not_applicable.source":
+            raise PublisherError("revision not-applicable receipt type is invalid")
+        if receipt.get("source_job_id") != job_id:
+            raise PublisherError("revision not-applicable receipt is for a different job")
+        if receipt.get("gate_report_sha256") != gate_sha:
+            raise PublisherError("revision not-applicable receipt is for a different gate")
+        receipt_sha = _sha256_file(receipt_path)
         return {
-            **envelope,
-            "envelope_sha256": head.get("envelope_sha256"),
+            "evidence_kind": "revision.disposition",
+            "final": True,
+            "closed_status": "not_applicable",
+            "evidence_id": receipt_sha[:32],
+            "envelope_sha256": receipt_sha,
+            "payload": {
+                "revision_disposition": "not_applicable",
+                "gate_report_sha256": gate_sha,
+                "descendant_job_id": None,
+                "jobs_commit": None,
+            },
         }
 
     def _work_admission(
@@ -1450,7 +1522,10 @@ class ControlledPublisher:
         writer_id = str(admission_handoff.get("claim_writer_id") or "")
         if not writer_id:
             raise PublisherError("job work_admission claim_writer_id is required")
-        if sorted(admission_handoff.get("authorized_paths") or []) != list(expected_paths):
+        if not _authorized_paths_cover_expected(
+            [str(item) for item in admission_handoff.get("authorized_paths") or []],
+            expected_paths,
+        ):
             raise PublisherError("job work_admission authorized paths conflict with gate")
 
         raw_candidates = self._client().find_related_work(
@@ -1757,8 +1832,6 @@ class ControlledPublisher:
         results_commit: str,
     ) -> None:
         identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")
-        if identity is None:
-            raise PublisherError("drafted publication_review lacks attempt identity")
         product_commit = str(
             publication.get("product_commit") or publication.get("commit_sha") or ""
         ).lower()
@@ -1791,23 +1864,24 @@ class ControlledPublisher:
                     "recorded_at": published_at,
                 },
             )
-            emit_lifecycle_evidence(
-                self.host_root,
-                evidence_kind="publication_review.disposition",
-                identity=identity,
-                source_path=source_receipt,
-                payload={
-                    "publication_review_disposition": "drafted",
-                    "reason_code": "publication_review.drafted.v1",
-                    "draft_pr": pr_url,
-                    "product_branch": product_branch,
-                    "product_commit": product_commit,
-                    "results_commit": results_commit,
-                },
-                final=True,
-                closed_status="final",
-                observed_at=published_at,
-            )
+            if identity is not None:
+                emit_lifecycle_evidence(
+                    self.host_root,
+                    evidence_kind="publication_review.disposition",
+                    identity=identity,
+                    source_path=source_receipt,
+                    payload={
+                        "publication_review_disposition": "drafted",
+                        "reason_code": "publication_review.drafted.v1",
+                        "draft_pr": pr_url,
+                        "product_branch": product_branch,
+                        "product_commit": product_commit,
+                        "results_commit": results_commit,
+                    },
+                    final=True,
+                    closed_status="final",
+                    observed_at=published_at,
+                )
         except Exception as exc:
             record_producer_evidence_error(
                 self.host_root,
@@ -1860,6 +1934,11 @@ class ControlledPublisher:
                         and path.name not in job_ids
                     ):
                         job_ids.append(path.name)
+            # Publish new passed jobs before re-verifying already-drafted ones.
+            # A flake on an old GitHub lookup must not block a ready candidate.
+            job_ids = [job_id for job_id in job_ids if job_id not in ledger] + [
+                job_id for job_id in job_ids if job_id in ledger
+            ]
             for job_id in job_ids:
                 associated = {
                     "job_id": job_id,
@@ -1881,6 +1960,12 @@ class ControlledPublisher:
                     raise
                 existing = ledger.get(job_id)
                 if existing:
+                    existing_status = str(existing.get("status") or "")
+                    if existing_status.startswith("blocked_"):
+                        # Terminal non-publication dispositions stay disposed without
+                        # requiring a draft PR (e.g. main path drift after a founder merge).
+                        verified.add(job_id)
+                        continue
                     try:
                         pull = self._verify_ledger_entry(
                             job_id=job_id,
@@ -2002,7 +2087,21 @@ class ControlledPublisher:
                     )
                     processed.append(job_id)
                     verified.add(job_id)
-                except (PublisherError, OSError, KeyError, TypeError, ValueError) as exc:
+                except PublisherError as exc:
+                    message = str(exc)
+                    if "product main changed candidate paths since source HEAD" in message:
+                        ledger[job_id] = {
+                            "gate_report_sha256": gate_sha,
+                            "status": "blocked_main_path_drift",
+                            "blocked_at": _utc_now(),
+                            "message": message,
+                        }
+                        self._save_ledger(ledger)
+                        verified.add(job_id)
+                        continue
+                    self._write_error_marker(exc, associated=associated)
+                    raise
+                except (OSError, KeyError, TypeError, ValueError) as exc:
                     self._write_error_marker(exc, associated=associated)
                     raise
             verified_jobs = sorted(verified)

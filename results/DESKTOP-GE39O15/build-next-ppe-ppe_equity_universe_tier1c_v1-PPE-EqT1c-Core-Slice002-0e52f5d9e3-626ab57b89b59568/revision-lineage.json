@@ -1,0 +1,12 @@
+{
+  "gate_report_sha256": "1e8f5195293b01715ddc64dfd5e9ef2e90f9d89d51f4ff06eaa0d379dd9912f5",
+  "job_id": "build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568",
+  "not_applicable_evidence": true,
+  "producer": "controlled_publisher",
+  "product_commit": "20508bdab100764c1b54ac5f0b984d6a1e5fc3d7",
+  "publication_report_sha256": "05424c986ae7dd07996014b3d909be5e56a7b44d1490a35972c33fb33d9e76c6",
+  "revision_disposition": "not_applicable",
+  "revision_evidence_id": "be53460e03f763487c80eef45581b3a1",
+  "revision_evidence_sha256": "578ef8044eca497af785f4d8ea434e29a609b29d9470cbd9d9eb4df358527d0f",
+  "version": 1
+}

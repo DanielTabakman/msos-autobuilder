@@ -1,0 +1,573 @@
+diff --git a/apps/msos-web/src/app/api/theses/region-bet/route.ts b/apps/msos-web/src/app/api/theses/region-bet/route.ts
+new file mode 100644
+index 0000000..cc8c07b
+--- /dev/null
++++ b/apps/msos-web/src/app/api/theses/region-bet/route.ts
+@@ -0,0 +1,46 @@
++import { NextResponse } from "next/server";
++
++import type { RegionBetContract } from "@/lib/regionBet";
++import { requireProtectedIdentity } from "@/lib/msosIdentity";
++import {
++  getCurrentRegionBet,
++  getRegionBetById,
++  upsertRegionBet,
++} from "@/lib/msosWorkflowStore";
++
++export const runtime = "nodejs";
++
++export async function GET(request: Request) {
++  const identity = requireProtectedIdentity(request);
++  if (!identity.ok) return identity.response;
++  try {
++    const url = new URL(request.url);
++    const regionBetId = url.searchParams.get("id")?.trim();
++    const regionBet = regionBetId
++      ? await getRegionBetById(identity.email, regionBetId)
++      : await getCurrentRegionBet(identity.email);
++    return NextResponse.json({ regionBet });
++  } catch (err) {
++    console.error("region-bet GET failed", err);
++    return NextResponse.json({ error: "failed to load region bet" }, { status: 500 });
++  }
++}
++
++export async function PUT(request: Request) {
++  const identity = requireProtectedIdentity(request);
++  if (!identity.ok) return identity.response;
++  try {
++    const body = await request.json();
++    const regionBet = body?.regionBet as RegionBetContract | undefined;
++    if (!regionBet) {
++      return NextResponse.json({ error: "missing region bet" }, { status: 400 });
++    }
++    const saved = await upsertRegionBet(regionBet, identity.email);
++    return NextResponse.json({ regionBet: saved });
++  } catch (err) {
++    const message = err instanceof Error ? err.message : "failed to save region bet";
++    const status = message.includes("invalid region bet") ? 400 : 500;
++    console.error("region-bet PUT failed", err);
++    return NextResponse.json({ error: message }, { status });
++  }
++}
+diff --git a/apps/msos-web/src/lib/msosWorkflowStore.ts b/apps/msos-web/src/lib/msosWorkflowStore.ts
+index 01f02d7..b5b9da5 100644
+--- a/apps/msos-web/src/lib/msosWorkflowStore.ts
++++ b/apps/msos-web/src/lib/msosWorkflowStore.ts
+@@ -4,6 +4,7 @@ import { randomUUID } from "crypto";
+ 
+ import type { ExpressionRecord, PaperTradeStatus } from "@/lib/expressionPersistence";
+ import type { HorizonRegionIntent } from "@/lib/horizonRegion";
++import { isRegionBetContract, type RegionBetContract } from "@/lib/regionBet";
+ import type { ThesisRecord } from "@/lib/thesisPersistence";
+ import { normalizeOwnerEmail } from "@/lib/msosIdentityCore";
+ import { scopeOwnerId } from "@/lib/msosSession";
+@@ -27,10 +28,16 @@ export type StoredHorizonRegion = HorizonRegionIntent & {
+   ownerEmail?: string | null;
+ };
+ 
++export type StoredRegionBet = RegionBetContract & {
++  kind: "region_bet";
++  ownerEmail?: string | null;
++};
++
+ type OwnerPointers = {
+   thesisId: string | null;
+   expressionId: string | null;
+   horizonRegionId: string | null;
++  regionBetId: string | null;
+ };
+ 
+ type WorkflowStoreFile = {
+@@ -38,6 +45,7 @@ type WorkflowStoreFile = {
+   theses: StoredThesis[];
+   expressions: StoredExpression[];
+   horizonRegions?: StoredHorizonRegion[];
++  regionBets?: StoredRegionBet[];
+   currentThesisId: string | null;
+   currentExpressionId: string | null;
+   currentByOwner?: Record<string, OwnerPointers>;
+@@ -68,6 +76,7 @@ const EMPTY_STORE: WorkflowStoreFile = {
+   theses: [],
+   expressions: [],
+   horizonRegions: [],
++  regionBets: [],
+   currentThesisId: null,
+   currentExpressionId: null,
+   currentByOwner: {},
+@@ -104,6 +113,7 @@ function normalizeOwnerPointers(raw: Partial<OwnerPointers> | undefined): OwnerP
+     thesisId: typeof raw?.thesisId === "string" ? raw.thesisId : null,
+     expressionId: typeof raw?.expressionId === "string" ? raw.expressionId : null,
+     horizonRegionId: typeof raw?.horizonRegionId === "string" ? raw.horizonRegionId : null,
++    regionBetId: typeof raw?.regionBetId === "string" ? raw.regionBetId : null,
+   };
+ }
+ 
+@@ -113,6 +123,7 @@ function normalizeStore(raw: Partial<WorkflowStoreFile>): WorkflowStoreFile {
+   const horizonRegions = Array.isArray(raw.horizonRegions)
+     ? (raw.horizonRegions as StoredHorizonRegion[])
+     : [];
++  const regionBets = Array.isArray(raw.regionBets) ? (raw.regionBets as StoredRegionBet[]) : [];
+   const currentByOwner: Record<string, OwnerPointers> = {};
+   for (const [key, pointers] of Object.entries(raw.currentByOwner ?? {})) {
+     currentByOwner[key] = normalizeOwnerPointers(pointers);
+@@ -122,6 +133,7 @@ function normalizeStore(raw: Partial<WorkflowStoreFile>): WorkflowStoreFile {
+       thesisId: typeof raw.currentThesisId === "string" ? raw.currentThesisId : null,
+       expressionId: typeof raw.currentExpressionId === "string" ? raw.currentExpressionId : null,
+       horizonRegionId: null,
++      regionBetId: null,
+     };
+   }
+   return {
+@@ -129,6 +141,7 @@ function normalizeStore(raw: Partial<WorkflowStoreFile>): WorkflowStoreFile {
+     theses,
+     expressions,
+     horizonRegions,
++    regionBets,
+     currentThesisId: typeof raw.currentThesisId === "string" ? raw.currentThesisId : null,
+     currentExpressionId: typeof raw.currentExpressionId === "string" ? raw.currentExpressionId : null,
+     currentByOwner,
+@@ -227,6 +240,10 @@ function horizonRegionOwnerMatches(row: StoredHorizonRegion, ownerEmail: string)
+   return storedOwnerKey(row.ownerEmail) === ownerKey(ownerEmail);
+ }
+ 
++function regionBetOwnerMatches(row: StoredRegionBet, ownerEmail: string): boolean {
++  return storedOwnerKey(row.ownerEmail) === ownerKey(ownerEmail);
++}
++
+ function persistPointers(
+   store: WorkflowStoreFile,
+   ownerEmail: string,
+@@ -292,6 +309,7 @@ export async function upsertCurrentThesis(
+     thesisId: next.id,
+     expressionId: pointers.expressionId,
+     horizonRegionId: pointers.horizonRegionId,
++    regionBetId: pointers.regionBetId,
+   });
+   await writeStore({
+     ...nextStore,
+@@ -335,6 +353,7 @@ export async function upsertCurrentExpression(
+     thesisId: pointers.thesisId,
+     expressionId: next.id,
+     horizonRegionId: pointers.horizonRegionId,
++    regionBetId: pointers.regionBetId,
+   });
+   await writeStore({
+     ...nextStore,
+@@ -376,6 +395,7 @@ export async function appendPaperTrade(
+     thesisId: pointers.thesisId,
+     expressionId: next.id,
+     horizonRegionId: pointers.horizonRegionId,
++    regionBetId: pointers.regionBetId,
+   });
+   await writeStore({
+     ...nextStore,
+@@ -457,6 +477,7 @@ export async function deletePaperTrade(ownerEmail: string, tradeId: string): Pro
+     thesisId: pointers.thesisId,
+     expressionId,
+     horizonRegionId: pointers.horizonRegionId,
++    regionBetId: pointers.regionBetId,
+   });
+   await writeStore({ ...nextStore, expressions });
+   return true;
+@@ -491,6 +512,7 @@ export async function restorePaperTrade(
+     thesisId: pointers.thesisId ?? trade.thesisId,
+     expressionId: pointers.expressionId ?? trade.id,
+     horizonRegionId: pointers.horizonRegionId,
++    regionBetId: pointers.regionBetId,
+   });
+   await writeStore({ ...nextStore, expressions });
+   return withEffectiveStatus(restored);
+@@ -516,6 +538,7 @@ export async function clearPaperTrades(ownerEmail: string): Promise<number> {
+     thesisId: pointers.thesisId,
+     expressionId,
+     horizonRegionId: pointers.horizonRegionId,
++    regionBetId: pointers.regionBetId,
+   });
+   await writeStore({ ...nextStore, expressions });
+   return toRemove.size;
+@@ -607,6 +630,7 @@ export async function upsertHorizonRegion(
+     thesisId: pointers.thesisId,
+     expressionId: pointers.expressionId,
+     horizonRegionId: next.id,
++    regionBetId: pointers.regionBetId,
+   });
+   await writeStore({
+     ...nextStore,
+@@ -615,6 +639,69 @@ export async function upsertHorizonRegion(
+   return next;
+ }
+ 
++export async function getRegionBetById(
++  ownerEmail: string,
++  regionBetId: string,
++): Promise<StoredRegionBet | null> {
++  const store = await readStore();
++  return (
++    store.regionBets?.find(
++      (row) => row.id === regionBetId && regionBetOwnerMatches(row, ownerEmail),
++    ) ?? null
++  );
++}
++
++export async function getCurrentRegionBet(ownerEmail: string): Promise<StoredRegionBet | null> {
++  const store = await readStore();
++  const pointers = pointersForOwner(store, ownerEmail);
++  if (!pointers.regionBetId) return null;
++  return (
++    store.regionBets?.find(
++      (row) => row.id === pointers.regionBetId && regionBetOwnerMatches(row, ownerEmail),
++    ) ?? null
++  );
++}
++
++export async function upsertRegionBet(
++  regionBet: RegionBetContract,
++  ownerEmail: string,
++): Promise<StoredRegionBet> {
++  if (!isRegionBetContract(regionBet)) {
++    throw new Error("invalid region bet");
++  }
++  const store = await readStore();
++  const pointers = pointersForOwner(store, ownerEmail);
++  const existing =
++    store.regionBets?.find(
++      (row) => row.id === regionBet.id && regionBetOwnerMatches(row, ownerEmail),
++    ) ??
++    (pointers.regionBetId
++      ? store.regionBets?.find(
++          (row) => row.id === pointers.regionBetId && regionBetOwnerMatches(row, ownerEmail),
++        )
++      : undefined);
++  const owner = scopeOwnerId(ownerEmail) ?? normalizeOwnerEmail(ownerEmail);
++  const next: StoredRegionBet = {
++    ...regionBet,
++    id: existing?.id ?? regionBet.id,
++    kind: "region_bet",
++    ownerEmail: owner,
++  };
++  const regionBets = (store.regionBets ?? []).filter((row) => row.id !== next.id);
++  regionBets.push(next);
++  const nextStore = persistPointers(store, ownerEmail, {
++    thesisId: pointers.thesisId,
++    expressionId: pointers.expressionId,
++    horizonRegionId: pointers.horizonRegionId,
++    regionBetId: next.id,
++  });
++  await writeStore({
++    ...nextStore,
++    regionBets,
++  });
++  return next;
++}
++
+ export async function loadWorkflowSummary(ownerEmail: string): Promise<WorkflowSummary> {
+   const store = await readStore();
+   const scopedTheses = store.theses.filter((row) => thesisOwnerMatches(row, ownerEmail));
+diff --git a/apps/msos-web/src/lib/regionBet.ts b/apps/msos-web/src/lib/regionBet.ts
+new file mode 100644
+index 0000000..9917599
+--- /dev/null
++++ b/apps/msos-web/src/lib/regionBet.ts
+@@ -0,0 +1,224 @@
++/**
++ * Region Bet contract v1 - durable workspace object (simulation only).
++ */
++
++export type RegionBetStatus = "draft" | "active" | "monitoring" | "closed" | "archived";
++
++export type RegionBetContract = {
++  schema_version: 1;
++  id: string;
++  asset: {
++    asset_id: string;
++    symbol?: string;
++    venue?: string;
++  };
++  entry: {
++    spot_usd: number;
++    timestamp_utc: string;
++  };
++  selected_region: {
++    time_start_utc: string;
++    time_end_utc: string;
++    price_min_usd: number;
++    price_max_usd: number;
++  };
++  target: {
++    expiry_utc: string;
++    window_start_utc?: string;
++    window_end_utc?: string;
++  };
++  market_snapshot: {
++    as_of_utc: string;
++    source?: string;
++    method?: string;
++    implied_probability_pct?: number;
++    implied_move_pct?: number;
++  };
++  risk_constraints: {
++    max_loss_usd?: number;
++    max_premium_usd?: number;
++    position_size_usd?: number;
++    notes?: string;
++  };
++  selected_expression_ref: {
++    expression_id: string;
++    source?: string;
++  } | null;
++  lifecycle: {
++    status: RegionBetStatus;
++    created_at_utc: string;
++    updated_at_utc: string;
++    closed_at_utc?: string;
++  };
++  user_note?: string;
++};
++
++export const REGION_BET_STORAGE_KEY = "msos.region.bet.v1";
++
++export const REGION_BET_PERSISTENCE_LABEL =
++  "Saved to your workspace - simulation only, not order execution.";
++
++export function newRegionBetId(): string {
++  if (typeof crypto !== "undefined" && crypto.randomUUID) {
++    return crypto.randomUUID();
++  }
++  return `region-bet-${Date.now()}`;
++}
++
++function isFiniteNumber(value: unknown): value is number {
++  return typeof value === "number" && Number.isFinite(value);
++}
++
++function isOptionalFiniteNumber(value: unknown): value is number | undefined {
++  return value === undefined || isFiniteNumber(value);
++}
++
++function isOptionalString(value: unknown): value is string | undefined {
++  return value === undefined || typeof value === "string";
++}
++
++function isRegionBetStatus(value: unknown): value is RegionBetStatus {
++  return (
++    value === "draft" ||
++    value === "active" ||
++    value === "monitoring" ||
++    value === "closed" ||
++    value === "archived"
++  );
++}
++
++export function isRegionBetContract(value: unknown): value is RegionBetContract {
++  if (!value || typeof value !== "object") return false;
++  const row = value as Record<string, unknown>;
++  const asset = row.asset;
++  const entry = row.entry;
++  const selectedRegion = row.selected_region;
++  const target = row.target;
++  const marketSnapshot = row.market_snapshot;
++  const riskConstraints = row.risk_constraints;
++  const expressionRef = row.selected_expression_ref;
++  const lifecycle = row.lifecycle;
++  if (
++    !asset ||
++    typeof asset !== "object" ||
++    !entry ||
++    typeof entry !== "object" ||
++    !selectedRegion ||
++    typeof selectedRegion !== "object" ||
++    !target ||
++    typeof target !== "object" ||
++    !marketSnapshot ||
++    typeof marketSnapshot !== "object" ||
++    !riskConstraints ||
++    typeof riskConstraints !== "object" ||
++    !lifecycle ||
++    typeof lifecycle !== "object"
++  ) {
++    return false;
++  }
++  const assetRow = asset as Record<string, unknown>;
++  const entryRow = entry as Record<string, unknown>;
++  const selectedRegionRow = selectedRegion as Record<string, unknown>;
++  const targetRow = target as Record<string, unknown>;
++  const marketSnapshotRow = marketSnapshot as Record<string, unknown>;
++  const riskRow = riskConstraints as Record<string, unknown>;
++  const lifecycleRow = lifecycle as Record<string, unknown>;
++
++  const expressionRefValid =
++    expressionRef === null ||
++    (!!expressionRef &&
++      typeof expressionRef === "object" &&
++      typeof (expressionRef as Record<string, unknown>).expression_id === "string" &&
++      isOptionalString((expressionRef as Record<string, unknown>).source));
++
++  return (
++    row.schema_version === 1 &&
++    typeof row.id === "string" &&
++    typeof assetRow.asset_id === "string" &&
++    isOptionalString(assetRow.symbol) &&
++    isOptionalString(assetRow.venue) &&
++    isFiniteNumber(entryRow.spot_usd) &&
++    typeof entryRow.timestamp_utc === "string" &&
++    typeof selectedRegionRow.time_start_utc === "string" &&
++    typeof selectedRegionRow.time_end_utc === "string" &&
++    isFiniteNumber(selectedRegionRow.price_min_usd) &&
++    isFiniteNumber(selectedRegionRow.price_max_usd) &&
++    typeof targetRow.expiry_utc === "string" &&
++    isOptionalString(targetRow.window_start_utc) &&
++    isOptionalString(targetRow.window_end_utc) &&
++    typeof marketSnapshotRow.as_of_utc === "string" &&
++    isOptionalString(marketSnapshotRow.source) &&
++    isOptionalString(marketSnapshotRow.method) &&
++    isOptionalFiniteNumber(marketSnapshotRow.implied_probability_pct) &&
++    isOptionalFiniteNumber(marketSnapshotRow.implied_move_pct) &&
++    isOptionalFiniteNumber(riskRow.max_loss_usd) &&
++    isOptionalFiniteNumber(riskRow.max_premium_usd) &&
++    isOptionalFiniteNumber(riskRow.position_size_usd) &&
++    isOptionalString(riskRow.notes) &&
++    expressionRefValid &&
++    isRegionBetStatus(lifecycleRow.status) &&
++    typeof lifecycleRow.created_at_utc === "string" &&
++    typeof lifecycleRow.updated_at_utc === "string" &&
++    isOptionalString(lifecycleRow.closed_at_utc) &&
++    isOptionalString(row.user_note)
++  );
++}
++
++export function saveRegionBet(regionBet: RegionBetContract): void {
++  if (typeof window === "undefined") return;
++  window.localStorage.setItem(REGION_BET_STORAGE_KEY, JSON.stringify(regionBet));
++}
++
++export function loadRegionBet(): RegionBetContract | null {
++  if (typeof window === "undefined") return null;
++  try {
++    const raw = window.localStorage.getItem(REGION_BET_STORAGE_KEY);
++    if (!raw) return null;
++    const parsed: unknown = JSON.parse(raw);
++    return isRegionBetContract(parsed) ? parsed : null;
++  } catch {
++    return null;
++  }
++}
++
++export async function fetchRegionBet(): Promise<RegionBetContract | null> {
++  if (typeof window === "undefined") return null;
++  try {
++    const response = await fetch("/api/theses/region-bet", {
++      cache: "no-store",
++      credentials: "include",
++    });
++    if (!response.ok) {
++      return loadRegionBet();
++    }
++    const payload = (await response.json()) as { regionBet?: RegionBetContract | null };
++    if (payload.regionBet && isRegionBetContract(payload.regionBet)) {
++      saveRegionBet(payload.regionBet);
++      return payload.regionBet;
++    }
++    const local = loadRegionBet();
++    if (local) {
++      await persistRegionBet(local);
++      return local;
++    }
++    return null;
++  } catch {
++    return loadRegionBet();
++  }
++}
++
++export async function persistRegionBet(regionBet: RegionBetContract): Promise<boolean> {
++  saveRegionBet(regionBet);
++  if (typeof window === "undefined") return true;
++  try {
++    const response = await fetch("/api/theses/region-bet", {
++      method: "PUT",
++      headers: { "Content-Type": "application/json" },
++      credentials: "include",
++      body: JSON.stringify({ regionBet }),
++    });
++    return response.ok;
++  } catch {
++    return false;
++  }
++}
+diff --git a/tests/test_msos_web_region_bet_contract.py b/tests/test_msos_web_region_bet_contract.py
+new file mode 100644
+index 0000000..a495098
+--- /dev/null
++++ b/tests/test_msos_web_region_bet_contract.py
+@@ -0,0 +1,71 @@
++"""Region Bet contract v1 - MSOS persistence witness."""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++REPO_ROOT = Path(__file__).resolve().parents[1]
++MSOS_WEB = REPO_ROOT / "apps" / "msos-web"
++
++
++def test_region_bet_contract_schema_guard_covers_required_fields() -> None:
++    lib = (MSOS_WEB / "src" / "lib" / "regionBet.ts").read_text(encoding="utf-8")
++    assert "export type RegionBetContract" in lib
++    assert "schema_version: 1" in lib
++    assert "asset_id" in lib
++    assert "spot_usd" in lib
++    assert "timestamp_utc" in lib
++    assert "selected_region" in lib
++    assert "target" in lib
++    assert "market_snapshot" in lib
++    assert "risk_constraints" in lib
++    assert "selected_expression_ref" in lib
++    assert "lifecycle" in lib
++    assert "isRegionBetContract" in lib
++    assert "Number.isFinite" in lib
++
++
++def test_region_bet_client_calls_server_api() -> None:
++    lib = (MSOS_WEB / "src" / "lib" / "regionBet.ts").read_text(encoding="utf-8")
++    assert "fetchRegionBet" in lib
++    assert "persistRegionBet" in lib
++    assert 'fetch("/api/theses/region-bet"' in lib
++    assert 'credentials: "include"' in lib
++    assert "loadRegionBet" in lib
++    assert "REGION_BET_STORAGE_KEY" in lib
++
++
++def test_region_bet_workflow_store_supports_kind_crud_and_current_pointer() -> None:
++    lib = (MSOS_WEB / "src" / "lib" / "msosWorkflowStore.ts").read_text(encoding="utf-8")
++    assert "StoredRegionBet" in lib
++    assert '"region_bet"' in lib or "'region_bet'" in lib
++    assert "regionBets" in lib
++    assert "regionBetId" in lib
++    assert "upsertRegionBet" in lib
++    assert "getCurrentRegionBet" in lib
++    assert "getRegionBetById" in lib
++    assert "isRegionBetContract" in lib
++
++
++def test_region_bet_api_route_fails_closed_and_requires_identity() -> None:
++    route = (
++        MSOS_WEB / "src" / "app" / "api" / "theses" / "region-bet" / "route.ts"
++    ).read_text(encoding="utf-8")
++    assert "export async function GET" in route
++    assert "export async function PUT" in route
++    assert "requireProtectedIdentity" in route
++    assert "identity.email" in route
++    assert "upsertRegionBet" in route
++    assert "getCurrentRegionBet" in route
++    assert "getRegionBetById" in route
++    assert "missing region bet" in route
++    assert "invalid region bet" in route
++    assert "{ status: 400 }" in route
++
++
++def test_region_bet_contract_does_not_recreate_later_bridge_surfaces() -> None:
++    touched = (MSOS_WEB / "src" / "lib" / "regionBet.ts").read_text(encoding="utf-8")
++    assert "OptionsExpressionFitRankingPanel" not in touched
++    assert "OptionsHorizonComparison" not in touched
++    assert "brokerage" not in touched.lower()
++    assert "order ticket" not in touched.lower()

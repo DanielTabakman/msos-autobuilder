@@ -1,0 +1,65 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "apps/msos-web/src/app/api/theses/region-bet/route.ts",
+          "apps/msos-web/src/lib/msosWorkflowStore.ts",
+          "apps/msos-web/src/lib/regionBet.ts",
+          "tests/test_msos_web_region_bet_contract.py"
+        ],
+        "metadata": {
+          "output_tail": "et.ts](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/RegionBet-Contract-Product-Slice002/apps/msos-web/src/lib/regionBet.ts): added `RegionBetContract`, strict `isRegionBetContract`, local/server persistence helpers.\n- [msosWorkflowStore.ts](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/RegionBet-Contract-Product-Slice002/apps/msos-web/src/lib/msosWorkflowStore.ts): added `region_bet` storage, owner current pointer, `upsertRegionBet`, `getCurrentRegionBet`, `getRegionBetById`.\n- [route.ts](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/RegionBet-Contract-Product-Slice002/apps/msos-web/src/app/api/theses/region-bet/route.ts): added authenticated GET/PUT API with fail-closed validation.\n- [test_msos_web_region_bet_contract.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/RegionBet-Contract-Product-Slice002/tests/test_msos_web_region_bet_contract.py): added focused contract/persistence/API regressions.\n\nValidation:\n- `python -m pytest tests/test_msos_web_region_bet_contract.py` - 5 passed\n- `python -m pytest tests/test_msos_web_horizon_region_workflow.py tests/test_msos_web_workflow_persistence.py` - 27 passed\n- `python -m ruff check tests/test_msos_web_region_bet_contract.py` - passed\n- `python scripts/check_repository_boundaries.py` - passed\n- `python scripts/verify_msos_web_build.py --witness-only` - passed\n\nNotes:\n- `npx.cmd tsc --noEmit` could not run because `tsc` is not installed locally and npm attempted a blocked registry fetch.\n- The side-effect-free `run_gate_for_paths(...)` wrapper failed layer audit on the newly approved test path: `tests/test_msos_web_region_bet_contract.py` is reported outside MSOS_UI scope. I did not alter layer policy or control-plane files in this product slice.\n- Dirty paths are exactly the four allowed paths. No commit, push, smoke, closeout, queue, or control-plane update was performed.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\workspaces\\RegionBet-Contract-Product-Slice002"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 4 changed path(s)",
+        "task_id": "RegionBet-Contract-Product-Slice002"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "bd30f26ba5fb5edd146b19ad8ed63156f641c6d1",
+    "status": "completed"
+  },
+  "completed_at": "2026-09-07T21:33:17.692105+00:00",
+  "job_id": "build-next-ppe-region_bet_contract_v1-RegionBet-Contract-Product-Slice002-bd30f-6cf0dfb3d0028338",
+  "job_sha256": "2c490ad5193b680e732c955672b20195ba44d42f4f6287cb6dda13c1a0aa1702",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "changed_paths": [
+        "apps/msos-web/src/app/api/theses/region-bet/route.ts",
+        "apps/msos-web/src/lib/msosWorkflowStore.ts",
+        "apps/msos-web/src/lib/regionBet.ts",
+        "tests/test_msos_web_region_bet_contract.py"
+      ],
+      "complete_patch": true,
+      "lane_id": "RegionBet-Contract-Product-Slice002",
+      "patch_file": "patches/RegionBet-Contract-Product-Slice002.patch",
+      "patch_sha256": "40a7c942f9b15bb709a37964983c7b762a484a6e9452236985f5f39f733781f0",
+      "task_id": "RegionBet-Contract-Product-Slice002"
+    }
+  ],
+  "publication_enabled": false,
+  "relay": {
+    "canonical_patch_sha256_by_task": {
+      "RegionBet-Contract-Product-Slice002": "40a7c942f9b15bb709a37964983c7b762a484a6e9452236985f5f39f733781f0"
+    },
+    "canonical_report_role": "relay-corrected-canonical-downstream-report",
+    "complete_patch_reconstruction": true,
+    "machine_id": "DESKTOP-GE39O15",
+    "publication_enabled": false,
+    "relayed_at": "2026-09-07T21:33:35.701573+00:00",
+    "source_report_role": "original-worker-report-noncanonical-for-patch-identity",
+    "source_report_sha256": "e71669c99952ddbd8a1a566915013c7da8b3d2f6fd878e87d781136f69986c1e",
+    "version": 1
+  },
+  "requested_by": "capacity-one refill controller",
+  "source": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\queue\\pending\\build-next-ppe-region_bet_contract_v1-RegionBet-Contract-Product-Slice002-bd30f-6cf0dfb3d0028338.yaml",
+  "version": 1
+}

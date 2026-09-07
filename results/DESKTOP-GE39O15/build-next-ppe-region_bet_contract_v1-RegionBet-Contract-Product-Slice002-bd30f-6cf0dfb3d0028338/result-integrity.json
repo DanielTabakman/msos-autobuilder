@@ -1,0 +1,9 @@
+{
+  "canonical_patch_sha256_by_task": {
+    "RegionBet-Contract-Product-Slice002": "40a7c942f9b15bb709a37964983c7b762a484a6e9452236985f5f39f733781f0"
+  },
+  "corrected_report_sha256": "1b789d4d5ec02928580eba549d41a74eb9fc8d7f21ddb52699cc1f4c1a1289dd",
+  "publication_enabled": false,
+  "source_report_sha256": "e71669c99952ddbd8a1a566915013c7da8b3d2f6fd878e87d781136f69986c1e",
+  "version": 1
+}

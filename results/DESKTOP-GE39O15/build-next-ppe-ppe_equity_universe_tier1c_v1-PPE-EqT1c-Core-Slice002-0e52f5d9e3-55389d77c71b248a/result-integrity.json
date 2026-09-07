@@ -1,0 +1,9 @@
+{
+  "canonical_patch_sha256_by_task": {
+    "PPE-EqT1c-Core-Slice002": "3a438171ff3621c8ee85f390dbb7b6b9983182407910aee1c58976f78a900dec"
+  },
+  "corrected_report_sha256": "4a133b7d6d0255c8fb5c778a8e4169dc441399fa4f8fb90222ab0d5c39145c7d",
+  "publication_enabled": false,
+  "source_report_sha256": "3516368a7c2d4ce7bdf482d76ddd8decaf5d65ea63736c7384bf8c362978f7be",
+  "version": 1
+}

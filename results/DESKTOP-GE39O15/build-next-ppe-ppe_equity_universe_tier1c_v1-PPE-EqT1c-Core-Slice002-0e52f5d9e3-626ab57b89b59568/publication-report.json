@@ -1,0 +1,200 @@
+{
+  "changed_paths": [
+    "config/assets.yaml",
+    "config/assets_tier1_manifest.yaml",
+    "tests/test_assets_registry.py",
+    "tests/test_implied_lab_embed_display_boundary.py",
+    "tests/test_lab_asset_selection.py"
+  ],
+  "checks": [
+    {
+      "argv": [
+        "python",
+        "-c",
+        "import ast\nimport pathlib\npy_paths = ['src/viz/embed_display_boundary.py', 'scripts/witness_asset_catalog.py', 'tests/test_assets_registry.py', 'tests/test_lab_asset_selection.py', 'tests/test_implied_lab_embed_display_boundary.py']\nother_paths = ['config/assets.yaml', 'config/assets_tier1_manifest.yaml']\nfor path in py_paths:\n    ast.parse(pathlib.Path(path).read_text(encoding='utf-8'))\nfor path in other_paths:\n    text = pathlib.Path(path).read_text(encoding='utf-8')\n    if not text.strip():\n        raise SystemExit('empty patched file: ' + path)\n"
+      ],
+      "cwd": ".",
+      "finished_at": "2026-09-07T07:59:51.313047+00:00",
+      "name": "patched-sources-parse",
+      "passed": true,
+      "phase": "check",
+      "required": true,
+      "returncode": 0,
+      "skipped": false,
+      "started_at": "2026-09-07T07:59:51.049905+00:00",
+      "stderr": "",
+      "stdout": "",
+      "timed_out": false
+    }
+  ],
+  "claim_release_handoff": {
+    "allowed_terminal_states": [
+      "abandoned",
+      "failed",
+      "merged",
+      "released",
+      "superseded"
+    ],
+    "authorized_paths": [
+      "config/assets.yaml",
+      "config/assets_tier1_manifest.yaml",
+      "tests/test_assets_registry.py",
+      "tests/test_implied_lab_embed_display_boundary.py",
+      "tests/test_lab_asset_selection.py"
+    ],
+    "bounded_failure_behavior": {
+      "accepted_abandonment": "release as abandoned with founder/owner disposition evidence",
+      "submission_or_publication_failure": "release as failed with bounded failure evidence",
+      "superseded_duplicate": "release as superseded with canonical successor evidence"
+    },
+    "claim_generation": 3,
+    "consumer": "completion-controller",
+    "handoff": "msos-autobuilder.work_admission.claim_release.v1",
+    "immutability": "consumer must match objective_sha256, writer_id and claim_generation before release",
+    "linked_issue": null,
+    "objective_sha256": "c2533a0a45a9ba091f301d06385229b971402da798d2b25a55745dbedeef8a90",
+    "release_api": "msos_autobuilder.work_admission.release_claim",
+    "repository": "DanielTabakman/Probability-prediction-engine",
+    "verified_completion_terminal_state": "merged",
+    "version": 1,
+    "writer_id": "build-next:build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568"
+  },
+  "draft": true,
+  "gate_report_sha256": "1e8f5195293b01715ddc64dfd5e9ef2e90f9d89d51f4ff06eaa0d379dd9912f5",
+  "job_id": "build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568",
+  "main_write_enabled": false,
+  "merge_enabled": false,
+  "pr_number": 5434,
+  "pr_url": "https://github.com/DanielTabakman/Probability-prediction-engine/pull/5434",
+  "product_base_branch": "main",
+  "product_base_head": "0e52f5d9e3de78847b23de2f4b11b00cc4e4425e",
+  "product_branch": "autobuilder/build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568",
+  "product_commit": "20508bdab100764c1b54ac5f0b984d6a1e5fc3d7",
+  "published_at": "2026-09-07T07:59:57.083676+00:00",
+  "source_report_sha256": "210f54b84df518ccc7311a97e841fd4072e32aba0a2e34d7a2f1ddc0d2839963",
+  "status": "published-draft",
+  "version": 1,
+  "work_admission": {
+    "canonical": null,
+    "claim": {
+      "authorized_paths": [
+        "config/assets.yaml",
+        "config/assets_tier1_manifest.yaml",
+        "tests/test_assets_registry.py",
+        "tests/test_implied_lab_embed_display_boundary.py",
+        "tests/test_lab_asset_selection.py"
+      ],
+      "branch": "autobuilder/build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568",
+      "claimed_at": "2026-09-07T07:59:48Z",
+      "evidence": {
+        "admission_phase": "controlled_publisher.pre_branch_pr",
+        "authorized_paths": [
+          "config/assets.yaml",
+          "config/assets_tier1_manifest.yaml",
+          "tests/test_assets_registry.py",
+          "tests/test_implied_lab_embed_display_boundary.py",
+          "tests/test_lab_asset_selection.py"
+        ],
+        "claim_lifecycle": "active until verified merge, explicit supersession, accepted abandonment, or bounded failure disposition",
+        "classifications": [],
+        "job_id": "build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568",
+        "job_yaml": "C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/state/publisher-results-repo/results/DESKTOP-GE39O15/build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568/job.yaml",
+        "objective": {
+          "acceptance_contract_sha256": "01c386e96fdfde01a3fdc5b8efcb0d01e2f83e5b9f6c6c8135db915a150d6e39",
+          "error_signature": null,
+          "linked_issue": null,
+          "release_identity": null,
+          "repository": "DanielTabakman/Probability-prediction-engine",
+          "stable_key": "658cf88c7f90d62bd214e50c756e955907df05b84fdf35258eee6b8463f8f072",
+          "work_item_id": "ppe_equity_universe_tier1c_v1"
+        },
+        "objective_sha256": "c2533a0a45a9ba091f301d06385229b971402da798d2b25a55745dbedeef8a90",
+        "plan_branch": "autobuilder/build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568"
+      },
+      "generation": 3,
+      "linked_issue": null,
+      "objective_sha256": "c2533a0a45a9ba091f301d06385229b971402da798d2b25a55745dbedeef8a90",
+      "pr_number": null,
+      "repository": "DanielTabakman/Probability-prediction-engine",
+      "state": "active",
+      "updated_at": "2026-09-07T07:59:48Z",
+      "version": 1,
+      "writer_id": "build-next:build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568"
+    },
+    "classifications": [],
+    "evidence": {
+      "admission_phase": "controlled_publisher.pre_branch_pr",
+      "authorized_paths": [
+        "config/assets.yaml",
+        "config/assets_tier1_manifest.yaml",
+        "tests/test_assets_registry.py",
+        "tests/test_implied_lab_embed_display_boundary.py",
+        "tests/test_lab_asset_selection.py"
+      ],
+      "claim": {
+        "authorized_paths": [
+          "config/assets.yaml",
+          "config/assets_tier1_manifest.yaml",
+          "tests/test_assets_registry.py",
+          "tests/test_implied_lab_embed_display_boundary.py",
+          "tests/test_lab_asset_selection.py"
+        ],
+        "branch": "autobuilder/build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568",
+        "claimed_at": "2026-09-07T07:59:48Z",
+        "evidence": {
+          "admission_phase": "controlled_publisher.pre_branch_pr",
+          "authorized_paths": [
+            "config/assets.yaml",
+            "config/assets_tier1_manifest.yaml",
+            "tests/test_assets_registry.py",
+            "tests/test_implied_lab_embed_display_boundary.py",
+            "tests/test_lab_asset_selection.py"
+          ],
+          "claim_lifecycle": "active until verified merge, explicit supersession, accepted abandonment, or bounded failure disposition",
+          "classifications": [],
+          "job_id": "build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568",
+          "job_yaml": "C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/state/publisher-results-repo/results/DESKTOP-GE39O15/build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568/job.yaml",
+          "objective": {
+            "acceptance_contract_sha256": "01c386e96fdfde01a3fdc5b8efcb0d01e2f83e5b9f6c6c8135db915a150d6e39",
+            "error_signature": null,
+            "linked_issue": null,
+            "release_identity": null,
+            "repository": "DanielTabakman/Probability-prediction-engine",
+            "stable_key": "658cf88c7f90d62bd214e50c756e955907df05b84fdf35258eee6b8463f8f072",
+            "work_item_id": "ppe_equity_universe_tier1c_v1"
+          },
+          "objective_sha256": "c2533a0a45a9ba091f301d06385229b971402da798d2b25a55745dbedeef8a90",
+          "plan_branch": "autobuilder/build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568"
+        },
+        "generation": 3,
+        "linked_issue": null,
+        "objective_sha256": "c2533a0a45a9ba091f301d06385229b971402da798d2b25a55745dbedeef8a90",
+        "pr_number": null,
+        "repository": "DanielTabakman/Probability-prediction-engine",
+        "state": "active",
+        "updated_at": "2026-09-07T07:59:48Z",
+        "version": 1,
+        "writer_id": "build-next:build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568"
+      },
+      "claim_lifecycle": "active until verified merge, explicit supersession, accepted abandonment, or bounded failure disposition",
+      "claim_path": "C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/state/work-admission/claims/c2533a0a45a9ba091f301d06385229b971402da798d2b25a55745dbedeef8a90.json",
+      "classifications": [],
+      "job_id": "build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568",
+      "job_yaml": "C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/state/publisher-results-repo/results/DESKTOP-GE39O15/build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568/job.yaml",
+      "objective": {
+        "acceptance_contract_sha256": "01c386e96fdfde01a3fdc5b8efcb0d01e2f83e5b9f6c6c8135db915a150d6e39",
+        "error_signature": null,
+        "linked_issue": null,
+        "release_identity": null,
+        "repository": "DanielTabakman/Probability-prediction-engine",
+        "stable_key": "658cf88c7f90d62bd214e50c756e955907df05b84fdf35258eee6b8463f8f072",
+        "work_item_id": "ppe_equity_universe_tier1c_v1"
+      },
+      "objective_sha256": "c2533a0a45a9ba091f301d06385229b971402da798d2b25a55745dbedeef8a90",
+      "plan_branch": "autobuilder/build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568"
+    },
+    "message": "New work admitted and durable writer claim acquired.",
+    "objective_sha256": "c2533a0a45a9ba091f301d06385229b971402da798d2b25a55745dbedeef8a90",
+    "status": "NEW_WORK_ADMITTED"
+  }
+}

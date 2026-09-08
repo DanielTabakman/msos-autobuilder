@@ -1415,6 +1415,14 @@ class CompletionController:
             "cleanup_recorded",
         }:
             raise CompletionControllerError(f"unknown completion ledger status: {status}")
+        # cleanup_recorded jobs that already released the claim, or that lack attempt
+        # identity, cannot be safely re-terminalized. Treat them as done so one
+        # historical cleaned-up job cannot abort the rest of the scan.
+        if status == "cleanup_recorded":
+            if isinstance(existing.get("claim_release"), Mapping):
+                return None
+            if attempt_identity_from_job_yaml(job_dir / "job.yaml") is None:
+                return None
         job_id = job_dir.name
         evidence = self._load_job_evidence(job_dir)
         pr_number = int(existing["pr_number"])

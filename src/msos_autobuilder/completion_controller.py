@@ -652,6 +652,48 @@ def _check_observed_at(raw: Mapping[str, Any]) -> str:
     return str(raw.get("observed_at") or "").strip()
 
 
+def _is_blocking_check_state(state: str) -> bool:
+    normalized = state.strip().lower()
+    return normalized in CHECK_FAILED_STATES or normalized in CHECK_PENDING_STATES
+
+
+def _prefer_required_check_candidate(
+    existing: Mapping[str, str],
+    candidate: Mapping[str, str],
+) -> bool:
+    """Return True when candidate should replace existing for one required name.
+
+    Newer observed_at always wins. Equal or missing timestamps use state
+    preference, except untimestamped failed/pending must not be masked by a
+    stamped success/cancelled observation in either order.
+    """
+    existing_at = str(existing.get("observed_at") or "").strip()
+    observed_at = str(candidate.get("observed_at") or "").strip()
+    existing_state = str(existing.get("state") or "")
+    state = str(candidate.get("state") or "")
+
+    if observed_at and existing_at:
+        if observed_at > existing_at:
+            return True
+        if observed_at < existing_at:
+            return False
+        return _check_state_preference(state) > _check_state_preference(existing_state)
+
+    if observed_at and not existing_at:
+        # Stamped candidate vs untimestamped existing: never let success/cancelled
+        # erase an untimestamped failed/pending observation.
+        if _is_blocking_check_state(existing_state) and not _is_blocking_check_state(state):
+            return False
+        return True
+
+    if not observed_at and existing_at:
+        # Untimestamped candidate vs stamped existing: only a failed/pending
+        # candidate may replace; cancelled twins without stamps do not.
+        return _is_blocking_check_state(state)
+
+    return _check_state_preference(state) > _check_state_preference(existing_state)
+
+
 def _validate_required_checks(
     checks: Sequence[Mapping[str, Any]],
     required: Sequence[str],
@@ -670,31 +712,7 @@ def _validate_required_checks(
             "observed_at": observed_at,
         }
         existing = by_name.get(name)
-        if existing is None:
-            by_name[name] = candidate
-            continue
-        existing_at = existing.get("observed_at") or ""
-        # A newer observation always wins so an older success cannot mask a
-        # later pending/failed/cancelled rerun of the same required check.
-        if observed_at and existing_at:
-            if observed_at > existing_at:
-                by_name[name] = candidate
-                continue
-            if observed_at < existing_at:
-                continue
-            # Equal timestamps fall through to the same-time preference tiebreaker.
-        elif observed_at and not existing_at:
-            by_name[name] = candidate
-            continue
-        elif not observed_at and existing_at:
-            # An untimestamped failure/pending cannot prove it is older than a
-            # stamped success. Prefer it fail-closed so a later rerun that omits
-            # observed_at cannot be masked. Untimestamped cancelled stays a
-            # same-time twin concern and does not override a stamped success.
-            if state in CHECK_FAILED_STATES or state in CHECK_PENDING_STATES:
-                by_name[name] = candidate
-            continue
-        if _check_state_preference(state) > _check_state_preference(existing["state"]):
+        if existing is None or _prefer_required_check_candidate(existing, candidate):
             by_name[name] = candidate
     evidence: dict[str, dict[str, str]] = {}
     for name in required:

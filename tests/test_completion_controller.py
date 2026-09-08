@@ -1258,6 +1258,46 @@ def test_required_checks_untimestamped_pending_beats_stamped_success() -> None:
         )
 
 
+def test_required_checks_untimestamped_failure_before_stamped_success_stays_blocked() -> None:
+    with pytest.raises(CompletionControllerError, match="required check failed"):
+        _validate_required_checks(
+            (
+                {
+                    "name": "msos_web_build",
+                    "state": "failure",
+                    "source": "check_run",
+                },
+                {
+                    "name": "msos_web_build",
+                    "state": "success",
+                    "source": "check_run",
+                    "observed_at": "2026-09-01T00:00:00Z",
+                },
+            ),
+            ("msos_web_build",),
+        )
+
+
+def test_required_checks_untimestamped_pending_before_stamped_success_stays_blocked() -> None:
+    with pytest.raises(CompletionControllerError, match="required check is pending"):
+        _validate_required_checks(
+            (
+                {
+                    "name": "msos_web_build",
+                    "state": "pending",
+                    "source": "check_run",
+                },
+                {
+                    "name": "msos_web_build",
+                    "state": "success",
+                    "source": "check_run",
+                    "observed_at": "2026-09-01T00:00:00Z",
+                },
+            ),
+            ("msos_web_build",),
+        )
+
+
 def test_required_checks_untimestamped_cancelled_does_not_mask_stamped_success() -> None:
     evidence = _validate_required_checks(
         (

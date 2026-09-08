@@ -1,0 +1,10 @@
+{
+  "attempt_id": "20260908T224351.844207Z-595d425e17e0",
+  "outcome": "success",
+  "recorded_at": "2026-09-08T23:24:14.664735+00:00",
+  "report_path": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\reports\\20260908T224351.844207Z-595d425e17e0.json",
+  "requested_commit": "7eb21ca35ef1d1d28f0ef5ed5942eaeb92e900d8",
+  "requires_founder_attention": false,
+  "type": "autobuilder-self-update",
+  "version": 1
+}

@@ -1156,14 +1156,66 @@ def test_cli_parser_loads_completion_config(tmp_path: Path) -> None:
 def test_required_checks_prefer_success_over_stale_cancelled_twin() -> None:
     evidence = _validate_required_checks(
         (
-            {"name": "msos_web_build", "state": "cancelled", "source": "check_run"},
-            {"name": "msos_web_build", "state": "success", "source": "check_run"},
+            {
+                "name": "msos_web_build",
+                "state": "cancelled",
+                "source": "check_run",
+                "observed_at": "2026-09-01T00:00:00Z",
+            },
+            {
+                "name": "msos_web_build",
+                "state": "success",
+                "source": "check_run",
+                "observed_at": "2026-09-01T00:10:00Z",
+            },
             {"name": "pytest", "state": "success", "source": "check_run"},
         ),
         ("msos_web_build", "pytest"),
     )
     assert evidence["msos_web_build"]["state"] == "success"
     assert evidence["pytest"]["state"] == "success"
+
+
+def test_required_checks_newer_failure_beats_older_success() -> None:
+    with pytest.raises(CompletionControllerError, match="required check failed"):
+        _validate_required_checks(
+            (
+                {
+                    "name": "msos_web_build",
+                    "state": "success",
+                    "source": "check_run",
+                    "observed_at": "2026-09-01T00:00:00Z",
+                },
+                {
+                    "name": "msos_web_build",
+                    "state": "failure",
+                    "source": "check_run",
+                    "observed_at": "2026-09-01T00:10:00Z",
+                },
+            ),
+            ("msos_web_build",),
+        )
+
+
+def test_required_checks_newer_pending_beats_older_success() -> None:
+    with pytest.raises(CompletionControllerError, match="required check is pending"):
+        _validate_required_checks(
+            (
+                {
+                    "name": "msos_web_build",
+                    "state": "success",
+                    "source": "check_run",
+                    "observed_at": "2026-09-01T00:00:00Z",
+                },
+                {
+                    "name": "msos_web_build",
+                    "state": "pending",
+                    "source": "check_run",
+                    "observed_at": "2026-09-01T00:10:00Z",
+                },
+            ),
+            ("msos_web_build",),
+        )
 
 
 def test_required_checks_still_fail_when_only_cancelled_exists() -> None:

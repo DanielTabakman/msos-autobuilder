@@ -401,6 +401,9 @@ class CompletionGitHubClient:
                         "name": str(item.get("context") or ""),
                         "state": str(item.get("state") or ""),
                         "source": "status",
+                        "observed_at": str(
+                            item.get("updated_at") or item.get("created_at") or ""
+                        ),
                     }
                 )
         for item in _mapping(runs, "check runs").get("check_runs") or ():
@@ -410,6 +413,12 @@ class CompletionGitHubClient:
                         "name": str(item.get("name") or ""),
                         "state": str(item.get("conclusion") or item.get("status") or ""),
                         "source": "check_run",
+                        "observed_at": str(
+                            item.get("completed_at")
+                            or item.get("started_at")
+                            or item.get("updated_at")
+                            or ""
+                        ),
                     }
                 )
         return checks
@@ -620,11 +629,12 @@ def _validate_paths(job: Mapping[str, Any], changed_paths: Sequence[str]) -> Non
 
 
 def _check_state_preference(state: str) -> int:
-    """Higher is better when duplicate check-runs exist for one required name.
+    """Higher is better when duplicate check-runs share one required name and time.
 
     GitHub keeps cancelled/failed rows from superseded workflow attempts alongside
     the later successful rerun. Prefer success, then pending, then failure, then
-    cancelled so a green rerun is not blocked by a stale cancelled twin.
+    cancelled so a green rerun is not blocked by a stale cancelled twin. This is
+    only a same-timestamp tiebreaker; newer observed_at always wins.
     """
     normalized = state.strip().lower()
     if normalized in CHECK_SUCCESS_STATES:
@@ -638,6 +648,10 @@ def _check_state_preference(state: str) -> int:
     return 0
 
 
+def _check_observed_at(raw: Mapping[str, Any]) -> str:
+    return str(raw.get("observed_at") or "").strip()
+
+
 def _validate_required_checks(
     checks: Sequence[Mapping[str, Any]],
     required: Sequence[str],
@@ -648,9 +662,27 @@ def _validate_required_checks(
         state = str(raw.get("state") or "").strip().lower()
         if not name:
             continue
-        candidate = {"name": name, "state": state, "source": str(raw.get("source") or "")}
+        observed_at = _check_observed_at(raw)
+        candidate = {
+            "name": name,
+            "state": state,
+            "source": str(raw.get("source") or ""),
+            "observed_at": observed_at,
+        }
         existing = by_name.get(name)
-        if existing is None or _check_state_preference(state) > _check_state_preference(
+        if existing is None:
+            by_name[name] = candidate
+            continue
+        existing_at = existing.get("observed_at") or ""
+        # A newer observation always wins so an older success cannot mask a
+        # later pending/failed/cancelled rerun of the same required check.
+        if observed_at and existing_at and observed_at > existing_at:
+            by_name[name] = candidate
+            continue
+        if observed_at and not existing_at:
+            by_name[name] = candidate
+            continue
+        if observed_at == existing_at and _check_state_preference(state) > _check_state_preference(
             existing["state"]
         ):
             by_name[name] = candidate

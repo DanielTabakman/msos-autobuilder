@@ -676,15 +676,25 @@ def _validate_required_checks(
         existing_at = existing.get("observed_at") or ""
         # A newer observation always wins so an older success cannot mask a
         # later pending/failed/cancelled rerun of the same required check.
-        if observed_at and existing_at and observed_at > existing_at:
+        if observed_at and existing_at:
+            if observed_at > existing_at:
+                by_name[name] = candidate
+                continue
+            if observed_at < existing_at:
+                continue
+            # Equal timestamps fall through to the same-time preference tiebreaker.
+        elif observed_at and not existing_at:
             by_name[name] = candidate
             continue
-        if observed_at and not existing_at:
-            by_name[name] = candidate
+        elif not observed_at and existing_at:
+            # An untimestamped failure/pending cannot prove it is older than a
+            # stamped success. Prefer it fail-closed so a later rerun that omits
+            # observed_at cannot be masked. Untimestamped cancelled stays a
+            # same-time twin concern and does not override a stamped success.
+            if state in CHECK_FAILED_STATES or state in CHECK_PENDING_STATES:
+                by_name[name] = candidate
             continue
-        if observed_at == existing_at and _check_state_preference(state) > _check_state_preference(
-            existing["state"]
-        ):
+        if _check_state_preference(state) > _check_state_preference(existing["state"]):
             by_name[name] = candidate
     evidence: dict[str, dict[str, str]] = {}
     for name in required:

@@ -1218,6 +1218,67 @@ def test_required_checks_newer_pending_beats_older_success() -> None:
         )
 
 
+def test_required_checks_untimestamped_failure_beats_stamped_success() -> None:
+    with pytest.raises(CompletionControllerError, match="required check failed"):
+        _validate_required_checks(
+            (
+                {
+                    "name": "msos_web_build",
+                    "state": "success",
+                    "source": "check_run",
+                    "observed_at": "2026-09-01T00:00:00Z",
+                },
+                {
+                    "name": "msos_web_build",
+                    "state": "failure",
+                    "source": "check_run",
+                },
+            ),
+            ("msos_web_build",),
+        )
+
+
+def test_required_checks_untimestamped_pending_beats_stamped_success() -> None:
+    with pytest.raises(CompletionControllerError, match="required check is pending"):
+        _validate_required_checks(
+            (
+                {
+                    "name": "msos_web_build",
+                    "state": "success",
+                    "source": "check_run",
+                    "observed_at": "2026-09-01T00:00:00Z",
+                },
+                {
+                    "name": "msos_web_build",
+                    "state": "pending",
+                    "source": "check_run",
+                },
+            ),
+            ("msos_web_build",),
+        )
+
+
+def test_required_checks_untimestamped_cancelled_does_not_mask_stamped_success() -> None:
+    evidence = _validate_required_checks(
+        (
+            {
+                "name": "msos_web_build",
+                "state": "success",
+                "source": "check_run",
+                "observed_at": "2026-09-01T00:00:00Z",
+            },
+            {
+                "name": "msos_web_build",
+                "state": "cancelled",
+                "source": "check_run",
+            },
+            {"name": "pytest", "state": "success", "source": "check_run"},
+        ),
+        ("msos_web_build", "pytest"),
+    )
+    assert evidence["msos_web_build"]["state"] == "success"
+
+
 def test_required_checks_still_fail_when_only_cancelled_exists() -> None:
     with pytest.raises(CompletionControllerError, match="required check is cancelled"):
         _validate_required_checks(

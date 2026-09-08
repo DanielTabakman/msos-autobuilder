@@ -426,8 +426,15 @@ def _publisher_legacy_recovery_supersedes(
     entry = ledger.get(job_id)
     if not isinstance(entry, dict):
         return False, "publisher ledger lacks a matching job entry"
-    if entry.get("published_at") is not None:
-        return False, "publisher ledger should use explicit published_at ordering"
+    published_at = entry.get("published_at")
+    if published_at is not None:
+        # Timeout-after-draft: published_at may predate the marker. Still require a
+        # parseable timestamp and coherent publication identity before recovery.
+        published_at_dt = _ledger_time(published_at)
+        if published_at_dt is None:
+            return False, "publisher ledger entry lacks explicit published_at ordering"
+        if published_at_dt > marker_recorded:
+            return False, "publisher ledger should use explicit published_at ordering"
     coherent, coherent_error = _publisher_ledger_identity_is_coherent(entry, marker=marker)
     if not coherent:
         return False, coherent_error
@@ -636,14 +643,27 @@ def evaluate_service_error_marker(
     if job_id is not None:
         evidence["associated_job_id"] = job_id
 
-    success, success_error = _success_supersedes(
-        path=success_path,
-        service=spec.service,
-        marker_recorded=recorded,
-        current_generation_id=current_generation,
-        current_release=current_release,
-        job_id=job_id,
+    # Associated publisher markers must not be cleared by a later success witness
+    # alone unless they belong to the current generation. Prior-generation publisher
+    # recovery requires coherent publication identity (legacy / timeout-after-draft).
+    success = False
+    success_error: str | None = None
+    publisher_associated = spec.service == "publisher" and job_id is not None
+    current_publisher_generation = (
+        publisher_associated
+        and current_generation is not None
+        and raw.get("release_commit") == current_release
+        and raw.get("generation_id") == current_generation
     )
+    if not publisher_associated or current_publisher_generation:
+        success, success_error = _success_supersedes(
+            path=success_path,
+            service=spec.service,
+            marker_recorded=recorded,
+            current_generation_id=current_generation,
+            current_release=current_release,
+            job_id=job_id,
+        )
     if success:
         evidence.update(
             {
@@ -677,10 +697,10 @@ def evaluate_service_error_marker(
                 }
             )
             return evidence
-        if (
-            spec.service == "publisher"
-            and terminal_error == "publisher ledger entry lacks explicit published_at ordering"
-        ):
+        if spec.service == "publisher" and terminal_error in {
+            "publisher ledger entry lacks explicit published_at ordering",
+            "publisher ledger entry predates or equals marker",
+        }:
             legacy, legacy_error = _publisher_legacy_recovery_supersedes(
                 ledger=ledger,
                 success_path=success_path,

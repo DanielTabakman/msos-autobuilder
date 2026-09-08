@@ -925,9 +925,22 @@ def test_freeze_handoff_missing_frozen_sha_fails_closed(tmp_path: Path) -> None:
 
 def test_freeze_handoff_wrong_remote_fails_closed(tmp_path: Path) -> None:
     _work, origin, frozen = _product_remote(tmp_path / "target")
-    other = _init_repo(tmp_path / "other")
+    other = tmp_path / "other"
+    other.mkdir()
+    _git(other, "init", "-q")
+    _git(other, "config", "user.email", "test@example.com")
+    _git(other, "config", "user.name", "Test")
+    _git(other, "checkout", "-qb", "main")
+    (other / "README.md").write_text("unrelated remote history\n", encoding="utf-8")
+    _git(other, "add", "README.md")
+    _git(other, "commit", "-qm", "unrelated root")
     other_origin = tmp_path / "other-origin.git"
     _git(None, "clone", "-q", "--bare", str(other), str(other_origin))
+    assert frozen not in {
+        line.strip()
+        for line in _git(None, "--git-dir", str(other_origin), "rev-list", "--all").splitlines()
+        if line.strip()
+    }
     config, _source = _write_configs(
         tmp_path / "host-case",
         allow_test_local_source_remote=True,
@@ -950,6 +963,7 @@ def test_freeze_handoff_wrong_remote_fails_closed(tmp_path: Path) -> None:
     assert result.outcome == "failed"
     assert calls == 0
     assert origin.exists()
+    assert (paths.failed / "freeze-wrong-remote" / "error.json").exists()
 
 
 def test_freeze_handoff_does_not_clobber_dirty_unrelated_checkout(tmp_path: Path) -> None:
@@ -999,7 +1013,11 @@ def test_freeze_handoff_rerun_is_idempotent(tmp_path: Path) -> None:
 
     assert _git(cfg_a.source_repo, "rev-parse", "HEAD") == frozen
     assert _git(cfg_b.source_repo, "rev-parse", "HEAD") == frozen
-    assert prov_a["prepared_target_source_commit"] == prov_b["prepared_target_source_commit"] == frozen
+    assert (
+        prov_a["prepared_target_source_commit"]
+        == prov_b["prepared_target_source_commit"]
+        == frozen
+    )
     assert cfg_a.source_repo != cfg_b.source_repo
 
     cfg_a_again, prov_a_again = host._prepare_frozen_source(job_a, host_config)
@@ -1054,9 +1072,22 @@ def test_freeze_handoff_source_removed_from_remote_fails_at_execution(
     tmp_path: Path,
 ) -> None:
     _work, _origin, frozen = _product_remote(tmp_path / "target")
-    orphan = _init_repo(tmp_path / "orphan-product")
+    orphan = tmp_path / "orphan-product"
+    orphan.mkdir()
+    _git(orphan, "init", "-q")
+    _git(orphan, "config", "user.email", "test@example.com")
+    _git(orphan, "config", "user.name", "Test")
+    _git(orphan, "checkout", "-qb", "main")
+    (orphan / "README.md").write_text("orphan remote without freeze\n", encoding="utf-8")
+    _git(orphan, "add", "README.md")
+    _git(orphan, "commit", "-qm", "orphan root")
     orphan_origin = tmp_path / "orphan-origin.git"
     _git(None, "clone", "-q", "--bare", str(orphan), str(orphan_origin))
+    assert frozen not in {
+        line.strip()
+        for line in _git(None, "--git-dir", str(orphan_origin), "rev-list", "--all").splitlines()
+        if line.strip()
+    }
     config, _source = _write_configs(
         tmp_path / "host-case",
         allow_test_local_source_remote=True,

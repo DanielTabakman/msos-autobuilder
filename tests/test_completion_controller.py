@@ -19,6 +19,8 @@ from msos_autobuilder.completion_controller import (
     CompletionController,
     CompletionControllerError,
     CompletionGitHubClient,
+    CompletionPlan,
+    _validate_claim_release_handoff,
     _validate_required_checks,
     load_completion_config,
 )
@@ -1325,3 +1327,72 @@ def test_required_checks_still_fail_when_only_cancelled_exists() -> None:
             ({"name": "msos_web_build", "state": "cancelled", "source": "check_run"},),
             ("msos_web_build",),
         )
+
+
+def _handoff_fixture(*, job_generation: int, claim_generation: int) -> tuple[dict, dict]:
+    objective = "a" * 64
+    writer = "build-next:candidate-revision-1"
+    paths = ["src/viz/value.py"]
+    job = {
+        "founder_build_next": {
+            "work_admission": {
+                "objective_sha256": objective,
+                "claim_writer_id": writer,
+                "claim_generation": job_generation,
+                "authorized_paths": paths,
+            }
+        }
+    }
+    publication = {
+        "work_admission": {
+            "claim": {
+                "objective_sha256": objective,
+                "writer_id": writer,
+                "generation": claim_generation,
+                "authorized_paths": paths,
+            }
+        },
+        "claim_release_handoff": {
+            "handoff": "msos-autobuilder.work_admission.claim_release.v1",
+            "consumer": "completion-controller",
+            "objective_sha256": objective,
+            "writer_id": writer,
+            "claim_generation": claim_generation,
+            "authorized_paths": paths,
+            "verified_completion_terminal_state": "merged",
+        },
+    }
+    return job, publication
+
+
+def test_reclaimed_claim_generation_is_trusted_when_job_yaml_lags() -> None:
+    job, publication = _handoff_fixture(job_generation=1, claim_generation=2)
+    handoff = _validate_claim_release_handoff(job, publication)
+    assert handoff["claim_generation"] == 2
+
+
+def test_future_dated_job_claim_generation_is_rejected() -> None:
+    job, publication = _handoff_fixture(job_generation=3, claim_generation=2)
+    with pytest.raises(CompletionControllerError, match="generation is not trusted"):
+        _validate_claim_release_handoff(job, publication)
+
+
+def test_cleanup_recorded_ledger_recovery_is_noop(tmp_path: Path) -> None:
+    config_path, _, _, client, job_id = make_fixture(tmp_path)
+    ctl = controller(config_path, client)
+    existing = {
+        "status": "cleanup_recorded",
+        "pr_number": 7,
+        "validated_head": "a" * 40,
+        "merge_method": "merge",
+    }
+    assert (
+        ctl._recover_existing(
+            job_dir=tmp_path / "missing-job",
+            plan=CompletionPlan(required_checks=("linux-ci",), merge_method="merge"),
+            existing=existing,
+        )
+        is None
+    )
+    # Sibling AUTO_MERGE work must still be selectable after a historical cleanup row.
+    assert ctl.run_once() == (job_id,)

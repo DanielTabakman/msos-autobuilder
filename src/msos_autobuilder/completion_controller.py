@@ -813,10 +813,18 @@ def _validate_claim_release_handoff(
         if handoff.get(key) != claim.get(key) or handoff.get(key) != job_admission.get(claim_key):
             raise CompletionControllerError(f"claim release handoff {key} is not trusted")
     generation = handoff.get("claim_generation")
+    job_generation = job_admission.get("claim_generation")
+    # Handoff generation must match the active publication claim. Job.yaml records the
+    # original admission generation; publisher reclaim may advance the durable claim
+    # without rewriting that immutable snapshot. Require a positive job generation that
+    # does not exceed the active claim (no future-dated job.yaml).
     if (
         not isinstance(generation, int)
+        or generation < 1
         or generation != claim.get("generation")
-        or generation != job_admission.get("claim_generation")
+        or not isinstance(job_generation, int)
+        or job_generation < 1
+        or job_generation > generation
     ):
         raise CompletionControllerError("claim release handoff generation is not trusted")
     if sorted(handoff.get("authorized_paths") or []) != sorted(
@@ -1408,11 +1416,14 @@ class CompletionController:
                 method=str(existing["merge_method"]),
             )
             return None
+        # cleanup_recorded is a terminal successful ledger row. Re-emitting lifecycle on
+        # every scan aborts the watcher when historical jobs lack attempt identity.
+        if status == "cleanup_recorded":
+            return None
         if status not in {
             "merge_intent_prepared",
             "merge_accepted",
             "merge_verified",
-            "cleanup_recorded",
         }:
             raise CompletionControllerError(f"unknown completion ledger status: {status}")
         job_id = job_dir.name

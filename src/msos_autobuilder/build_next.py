@@ -1177,7 +1177,20 @@ def _submit_feed_job(config: BuildNextConfig, job: Mapping[str, Any]) -> FeedSub
         if destination.exists():
             existing = destination.read_text(encoding="utf-8")
             parse_host_job(existing)
-            if existing != text:
+            # approved_at is stamped at build time and must not break idempotent replay.
+            existing_payload = yaml.safe_load(existing)
+            new_payload = yaml.safe_load(text)
+            if not isinstance(existing_payload, dict) or not isinstance(new_payload, dict):
+                raise BuildNextError(
+                    f"approved job {job_id!r} already exists with different content"
+                )
+            existing_cmp = {
+                key: value for key, value in existing_payload.items() if key != "approved_at"
+            }
+            new_cmp = {
+                key: value for key, value in new_payload.items() if key != "approved_at"
+            }
+            if existing_cmp != new_cmp:
                 raise BuildNextError(
                     f"approved job {job_id!r} already exists with different content"
                 )

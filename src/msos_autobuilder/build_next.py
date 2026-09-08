@@ -263,6 +263,8 @@ class BuildNextConfig:
             requested_by=requested_by,
             submit=submit,
             allow_test_local_source_remote=allow_test_local_source_remote,
+            # Dispatch always materializes the immutable packet freeze under host state.
+            target_checkout_root=service.host_root / "state" / "target-checkouts",
         )
 
 
@@ -1510,6 +1512,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
             remote_url=admitted.target_remote_url,
             allow_test_local_source_remote=config.allow_test_local_source_remote,
         )
+        prepared_checkout: str | None = None
         if config.target_checkout_root is not None:
             fetched_commit = fetch_declared_target(
                 target_repository=admitted.target_repository,
@@ -1518,6 +1521,7 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                 remote_url=admitted.target_remote_url,
                 allow_test_local_source_remote=config.allow_test_local_source_remote,
             )
+            prepared_checkout = str(_target_checkout_root(config, job_id))
         if fetched_commit != admitted.target_source_commit:
             raise BuildNextError(
                 "target identity cannot redirect after immutable admission identity is established"
@@ -1538,6 +1542,21 @@ def build_next(config: BuildNextConfig) -> BuildNextReceipt:
                 "contract_sha256"
             ],
             "admitted_target": asdict(admitted),
+            "prepared_target_source_commit": fetched_commit,
+            **(
+                {"prepared_target_checkout": prepared_checkout}
+                if prepared_checkout is not None
+                else {}
+            ),
+        }
+        receipt_evidence_identity = {
+            **receipt_evidence_identity,
+            "prepared_target_source_commit": fetched_commit,
+            **(
+                {"prepared_target_checkout": prepared_checkout}
+                if prepared_checkout is not None
+                else {}
+            ),
         }
         try:
             submission = _submit_feed_job(config, job)

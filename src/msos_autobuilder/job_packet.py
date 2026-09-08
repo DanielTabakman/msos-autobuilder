@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -479,7 +481,26 @@ def fetch_declared_target(
         allow_test_local_source_remote=allow_test_local_source_remote,
     )
     if destination.exists():
-        shutil.rmtree(destination)
+        try:
+            existing_head = _git(destination, "rev-parse", "HEAD").lower()
+            existing_branch = _git(
+                destination,
+                "symbolic-ref",
+                "-q",
+                "--short",
+                "HEAD",
+                accepted=(0, 1),
+            )
+            existing_origin = _git(destination, "remote", "get-url", "origin")
+            existing_repository = normalize_github_repository(existing_origin)
+            origin_ok = existing_repository == target_repository or (
+                allow_test_local_source_remote and existing_repository is None
+            )
+            if existing_head == commit and not existing_branch and origin_ok:
+                return existing_head
+        except JobPacketError:
+            pass
+        _remove_checkout_destination(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     _git(None, "clone", "--no-tags", url, str(destination))
     cloned_origin = _git(destination, "remote", "get-url", "origin")
@@ -502,3 +523,34 @@ def fetch_declared_target(
             "admitted target checkout followed a moving branch instead of the frozen commit"
         )
     return head
+
+
+def _remove_checkout_destination(destination: Path) -> None:
+    """Remove a disposable checkout, tolerating transient Windows file locks."""
+    last_error: Exception | None = None
+    for attempt in range(6):
+        try:
+            if not destination.exists():
+                return
+            stale = destination.with_name(
+                f"{destination.name}.stale-{os.getpid()}-{attempt}"
+            )
+            if stale.exists():
+                shutil.rmtree(stale, ignore_errors=True)
+            destination.rename(stale)
+            shutil.rmtree(stale, ignore_errors=True)
+            if not destination.exists():
+                return
+        except OSError as exc:
+            last_error = exc
+            time.sleep(0.05 * (attempt + 1))
+    if destination.exists():
+        try:
+            shutil.rmtree(destination)
+            return
+        except OSError as exc:
+            last_error = exc
+    if last_error is not None and destination.exists():
+        raise JobPacketError(
+            f"unable to replace disposable checkout at {destination}: {last_error}"
+        ) from last_error

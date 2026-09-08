@@ -1263,6 +1263,41 @@ def test_no_product_main_write_or_merge_authority_is_introduced(tmp_path: Path) 
         "merge_enabled": False,
         "product_main_write_enabled": False,
     }
+    assert "merge_authority" not in job
+
+
+def test_catalog_merge_authority_is_stamped_on_dispatched_job(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    feed = _feed_repo(tmp_path / "feed-work")
+    catalog = _catalog_root(ppe)
+    declared_at = "2026-09-02T16:00:00Z"
+    for path in catalog.glob("*.json"):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["merge_authority"] = {
+            "class": "AUTO_MERGE_WHEN_GREEN",
+            "declared_at": declared_at,
+        }
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    receipt = build_next(_config(tmp_path, ppe, feed))
+
+    assert receipt.status == "QUEUED"
+    review = tmp_path / "review-merge-authority"
+    _git(None, "clone", "-q", "--branch", "jobs", str(feed), str(review))
+    job_path = next((review / "jobs" / "approved").glob("build-next-*.yaml"))
+    job = yaml.safe_load(job_path.read_text(encoding="utf-8"))
+    assert job["merge_authority"] == {
+        "class": "AUTO_MERGE_WHEN_GREEN",
+        "declared_at": declared_at,
+    }
+    assert job["approved_at"] >= declared_at
+    assert job["founder_build_next"]["authority"]["merge_enabled"] is False
+    assert job["founder_build_next"]["authority"]["merge_authority_class"] == (
+        "AUTO_MERGE_WHEN_GREEN"
+    )
+    assert job["founder_build_next"]["authority"]["merge_authority_declared_at"] == (
+        declared_at
+    )
 
 
 def _fixture_native_slice(slice_id: str = "Fixture-Product-Slice002"):

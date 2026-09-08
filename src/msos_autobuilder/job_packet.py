@@ -23,6 +23,11 @@ _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 _REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+MERGE_AUTHORITY_CLASSES = {
+    "AUTO_MERGE_WHEN_GREEN",
+    "FOUNDER_DECISION_REQUIRED",
+    "NEVER_MERGE",
+}
 
 DEFAULT_CATALOG_RELPATH = "jobs/catalog"
 
@@ -45,6 +50,7 @@ class ApprovedJobPacket:
     dependency_source_sha256: str
     work_item_source_sha256_v1: str
     authority: Mapping[str, Any]
+    merge_authority: Mapping[str, Any] | None
     validation: Mapping[str, Any]
     packet_sha256: str
     source_path: str
@@ -160,6 +166,20 @@ def _mapping(raw: Any, label: str) -> dict[str, Any]:
     return dict(raw)
 
 
+def _optional_merge_authority(raw: Mapping[str, Any]) -> dict[str, str] | None:
+    value = raw.get("merge_authority")
+    if value in (None, ""):
+        return None
+    authority = _mapping(value, "merge_authority")
+    cls = str(authority.get("class") or authority.get("authority_class") or "").strip()
+    if cls not in MERGE_AUTHORITY_CLASSES:
+        raise JobPacketError("merge_authority class is missing or malformed")
+    declared_at = str(authority.get("declared_at") or "").strip()
+    if not declared_at:
+        raise JobPacketError("merge_authority declared_at is required")
+    return {"class": cls, "declared_at": declared_at}
+
+
 def canonical_packet_identity(raw: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "adapter": raw.get("adapter"),
@@ -227,6 +247,7 @@ def parse_approved_job_packet(
         raise JobPacketError("approved job packet must not enable merge or product-main write")
     if authority.get("publication_enabled") is True:
         raise JobPacketError("approved job packet must not enable publication")
+    merge_authority = _optional_merge_authority(raw)
     validation = _mapping(raw.get("validation"), "validation") if raw.get("validation") else {}
     identity = canonical_packet_identity(
         {
@@ -255,6 +276,7 @@ def parse_approved_job_packet(
             "order": order,
             "eligible": eligible,
             "authority": authority,
+            "merge_authority": merge_authority,
             "prerequisites": prerequisites,
             "phase_plan": phase_plan,
             "work_item_source_sha256_v1": work_item_source_sha256,
@@ -277,6 +299,7 @@ def parse_approved_job_packet(
         dependency_source_sha256=dependency_source_sha256,
         work_item_source_sha256_v1=work_item_source_sha256,
         authority=authority,
+        merge_authority=merge_authority,
         validation=validation,
         packet_sha256=packet_sha256,
         source_path=source_path,

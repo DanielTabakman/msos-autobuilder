@@ -14,9 +14,11 @@ from msos_autobuilder.controlled_publisher import (
     ControlledPublisher,
     GitHubDraftClient,
     PublisherError,
+    _authorized_paths_cover_expected,
     _derive_publish_plan,
     load_publisher_config,
 )
+from msos_autobuilder.revision_loop import _revision_not_applicable_receipt_path
 from msos_autobuilder.lifecycle_evidence import (
     SourceRef,
     attempt_identity_from_job_yaml,
@@ -73,6 +75,12 @@ class FakeGitHubClient(GitHubDraftClient):
 
     def find_pull_requests(self, branch: str) -> list[dict[str, Any]]:
         return [pull for pull in self.pulls if pull["head"]["ref"] == branch]
+
+    def get_pull_request(self, number: int) -> dict[str, Any]:
+        for pull in self.pulls:
+            if pull.get("number") == number:
+                return pull
+        raise PublisherError(f"missing product PR {number}")
 
     def find_related_work(self, **_: Any) -> list[dict[str, Any]]:
         return []
@@ -251,6 +259,7 @@ def make_fixture(tmp_path: Path, *, overlap: bool = False) -> tuple[Path, Path, 
                 f"    claim_writer_id: build-next:{job_id}",
                 "    authorized_paths:",
                 "      - src/viz/value.py",
+                "      - scripts/witness_unused.py",
                 "    objective_identity:",
                 "      repository: owner/product",
                 "      linked_issue:",
@@ -330,6 +339,68 @@ plans:
         encoding="utf-8",
     )
     return config, product_bare, evidence_bare, job_id
+
+
+def test_publisher_publishes_revision_job_from_not_applicable_receipt(
+    tmp_path: Path,
+) -> None:
+    config_path, product_bare, evidence_bare, job_id = make_fixture(tmp_path)
+    edit = tmp_path / "revision-identity-edit"
+    git(None, "clone", "--branch", "results", str(evidence_bare), str(edit))
+    git(edit, "config", "user.name", "Fixture")
+    git(edit, "config", "user.email", "fixture@example.invalid")
+    job_path = edit / "results" / "MACHINE" / job_id / "job.yaml"
+    raw = job_path.read_text(encoding="utf-8")
+    stripped = raw.replace(
+        "  refill_attempt:\n    generation_id: refill-12345678\n"
+        "    attempt_ordinal: 1\n    retry_ordinal: 0\n",
+        "",
+    )
+    assert stripped != raw
+    job_path.write_text(stripped, encoding="utf-8")
+    git(edit, "add", ".")
+    git(edit, "commit", "-m", "strip refill identity from revision job")
+    git(edit, "push", "origin", "HEAD:results")
+
+    config = load_publisher_config(config_path)
+    gate_sha = sha256(edit / "results" / "MACHINE" / job_id / "gate-report.json")
+    receipt_path = _revision_not_applicable_receipt_path(
+        config.host_root,
+        machine_id="MACHINE",
+        job_id=job_id,
+        gate_sha=gate_sha,
+    )
+    write_json(
+        receipt_path,
+        {
+            "version": 1,
+            "receipt_type": "revision.disposition.not_applicable.source",
+            "machine_id": "MACHINE",
+            "source_job_id": job_id,
+            "gate_report_sha256": gate_sha,
+            "recorded_at": "2026-07-13T00:00:01+00:00",
+        },
+    )
+
+    publisher = ControlledPublisher(config, github_client=FakeGitHubClient(product_bare))
+    assert publisher.run_once() == (job_id,)
+    success = publisher_success(config_path)
+    assert success["terminal_evidence"]["processed_jobs"] == [job_id]
+
+
+def test_authorized_paths_may_be_a_superset_of_gate_changed_paths() -> None:
+    assert _authorized_paths_cover_expected(
+        (
+            "config/assets.yaml",
+            "scripts/witness_asset_catalog.py",
+            "tests/test_assets_registry.py",
+        ),
+        ("config/assets.yaml", "tests/test_assets_registry.py"),
+    )
+    assert not _authorized_paths_cover_expected(
+        ("config/assets.yaml",),
+        ("config/assets.yaml", "tests/test_assets_registry.py"),
+    )
 
 
 def test_controlled_publisher_creates_one_draft_pr_and_is_repeat_safe(tmp_path: Path) -> None:
@@ -553,16 +624,19 @@ def test_controlled_publisher_rejects_overlapping_product_main_change(tmp_path: 
     config = load_publisher_config(config_path)
     publisher = ControlledPublisher(config, github_client=FakeGitHubClient(product_bare))
 
-    with pytest.raises(PublisherError, match="changed candidate paths"):
-        publisher.run_once()
-    marker = json.loads(
-        (config.host_root / "state" / "controlled-publisher-error.json").read_text(
+    assert publisher.run_once() == ()
+    assert not (config.host_root / "state" / "controlled-publisher-error.json").exists()
+    ledger = json.loads(
+        (config.host_root / "state" / "controlled-publisher-seen.json").read_text(
             encoding="utf-8"
         )
     )
-    assert marker["service"] == "publisher"
-    assert marker["associated"]["job_id"] == job_id
-    assert marker["associated"]["repository"] == "owner/product"
+    assert ledger[job_id]["status"] == "blocked_main_path_drift"
+    assert "changed candidate paths" in ledger[job_id]["message"]
+    success = publisher_success(config_path)
+    assert job_id in success["associated_jobs"]
+    assert job_id in success["terminal_evidence"]["verified_jobs"]
+    assert job_id not in success["terminal_evidence"]["processed_jobs"]
     proc = subprocess.run(
         [
             "git",
@@ -605,7 +679,6 @@ def test_controlled_publisher_detects_branch_drift(tmp_path: Path) -> None:
     "mutate_pull,error",
     [
         (lambda pull: pull.update({"state": "closed"}), "not open"),
-        (lambda pull: pull.update({"draft": False}), "not draft"),
         (lambda pull: pull["head"].update({"sha": "0" * 40}), "head drifted"),
     ],
 )
@@ -625,6 +698,67 @@ def test_controlled_publisher_pr_drift_prevents_verified_success(
     with pytest.raises(PublisherError, match=error):
         publisher.run_once()
     assert not (config.host_root / "state" / "publisher-service-success.json").exists()
+
+
+def test_controlled_publisher_ready_for_review_stays_verified(
+    tmp_path: Path,
+) -> None:
+    config_path, product_bare, _, job_id = make_fixture(tmp_path)
+    config = load_publisher_config(config_path)
+    client = FakeGitHubClient(product_bare)
+    publisher = ControlledPublisher(config, github_client=client)
+    assert publisher.run_once() == (job_id,)
+    (config.host_root / "state" / "publisher-service-success.json").unlink()
+    client.pulls[0].update({"draft": False})
+
+    assert publisher.run_once() == ()
+    success = publisher_success(config_path)
+    assert job_id in success["terminal_evidence"]["verified_jobs"]
+
+
+def test_controlled_publisher_founder_merged_pr_stays_verified(
+    tmp_path: Path,
+) -> None:
+    config_path, product_bare, _, job_id = make_fixture(tmp_path)
+    config = load_publisher_config(config_path)
+    client = FakeGitHubClient(product_bare)
+    publisher = ControlledPublisher(config, github_client=client)
+    assert publisher.run_once() == (job_id,)
+    (config.host_root / "state" / "publisher-service-success.json").unlink()
+    client.pulls[0].update(
+        {
+            "state": "closed",
+            "draft": False,
+            "merged": True,
+            "merged_at": "2026-09-02T18:45:01Z",
+        }
+    )
+    proc = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(product_bare),
+            "update-ref",
+            "-d",
+            f"refs/heads/autobuilder/{job_id}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+
+    assert publisher.run_once() == ()
+    success = publisher_success(config_path)
+    assert job_id in success["terminal_evidence"]["verified_jobs"]
+    assert not (config.host_root / "state" / "controlled-publisher-error.json").exists()
+    claims = list((config.host_root / "state" / "work-admission" / "claims").glob("*.json"))
+    assert claims
+    claim = json.loads(claims[0].read_text(encoding="utf-8"))
+    assert claim["state"] == "merged"
+    assert claim["evidence"]["disposition"] == "verified_product_pr_merged"
 
 
 def test_controlled_publisher_gate_hash_drift_prevents_verified_success(

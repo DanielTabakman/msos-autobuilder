@@ -401,6 +401,9 @@ class CompletionGitHubClient:
                         "name": str(item.get("context") or ""),
                         "state": str(item.get("state") or ""),
                         "source": "status",
+                        "observed_at": str(
+                            item.get("updated_at") or item.get("created_at") or ""
+                        ),
                     }
                 )
         for item in _mapping(runs, "check runs").get("check_runs") or ():
@@ -410,6 +413,12 @@ class CompletionGitHubClient:
                         "name": str(item.get("name") or ""),
                         "state": str(item.get("conclusion") or item.get("status") or ""),
                         "source": "check_run",
+                        "observed_at": str(
+                            item.get("completed_at")
+                            or item.get("started_at")
+                            or item.get("updated_at")
+                            or ""
+                        ),
                     }
                 )
         return checks
@@ -431,6 +440,16 @@ class CompletionGitHubClient:
                 },
             ),
             "merge result",
+        )
+
+    def mark_ready_for_review(self, number: int) -> dict[str, Any]:
+        return _mapping(
+            self._request(
+                "POST",
+                f"/repos/{self.repo_full_name}/pulls/{number}/ready_for_review",
+                accepted=(200, 202),
+            ),
+            "ready-for-review result",
         )
 
     def delete_branch(self, branch: str) -> dict[str, Any]:
@@ -459,6 +478,8 @@ class EvidenceBranch:
                 None,
                 "-c",
                 "core.autocrlf=false",
+                "-c",
+                "core.longpaths=true",
                 "clone",
                 "--single-branch",
                 "--branch",
@@ -469,9 +490,12 @@ class EvidenceBranch:
             )
         else:
             _git(self.checkout, "config", "core.autocrlf", "false")
+            _git(self.checkout, "config", "core.longpaths", "true")
             _git(self.checkout, "fetch", "--no-tags", "origin", self.config.results_branch)
             _git(
                 self.checkout,
+                "-c",
+                "core.longpaths=true",
                 "checkout",
                 "-B",
                 self.config.results_branch,
@@ -480,6 +504,7 @@ class EvidenceBranch:
             _git(self.checkout, "reset", "--hard", f"origin/{self.config.results_branch}")
             _git(self.checkout, "clean", "-fd")
         _git(self.checkout, "config", "core.autocrlf", "false")
+        _git(self.checkout, "config", "core.longpaths", "true")
         _git(self.checkout, "config", "user.name", "MSOS Autobuilder Completion Controller")
         _git(self.checkout, "config", "user.email", "autobuilder-completion@localhost")
 
@@ -535,6 +560,8 @@ def _authority_from_job(job: Mapping[str, Any]) -> tuple[str, str]:
             or ""
         ).strip()
         declared_at = str(authority_map.get("merge_authority_declared_at") or "").strip()
+    if not authority:
+        return AUTHORITY_FOUNDER_REQUIRED, declared_at or "1970-01-01T00:00:00+00:00"
     if authority not in AUTHORITY_CLASSES:
         raise CompletionControllerError("merge authority class is missing or malformed")
     if not declared_at:
@@ -601,6 +628,72 @@ def _validate_paths(job: Mapping[str, Any], changed_paths: Sequence[str]) -> Non
         raise CompletionControllerError(f"changed paths include forbidden paths: {blocked}")
 
 
+def _check_state_preference(state: str) -> int:
+    """Higher is better when duplicate check-runs share one required name and time.
+
+    GitHub keeps cancelled/failed rows from superseded workflow attempts alongside
+    the later successful rerun. Prefer success, then pending, then failure, then
+    cancelled so a green rerun is not blocked by a stale cancelled twin. This is
+    only a same-timestamp tiebreaker; newer observed_at always wins.
+    """
+    normalized = state.strip().lower()
+    if normalized in CHECK_SUCCESS_STATES:
+        return 4
+    if normalized in CHECK_PENDING_STATES:
+        return 3
+    if normalized in CHECK_FAILED_STATES:
+        return 2
+    if normalized in CHECK_CANCELLED_STATES:
+        return 1
+    return 0
+
+
+def _check_observed_at(raw: Mapping[str, Any]) -> str:
+    return str(raw.get("observed_at") or "").strip()
+
+
+def _is_blocking_check_state(state: str) -> bool:
+    normalized = state.strip().lower()
+    return normalized in CHECK_FAILED_STATES or normalized in CHECK_PENDING_STATES
+
+
+def _prefer_required_check_candidate(
+    existing: Mapping[str, str],
+    candidate: Mapping[str, str],
+) -> bool:
+    """Return True when candidate should replace existing for one required name.
+
+    Newer observed_at always wins. Equal or missing timestamps use state
+    preference, except untimestamped failed/pending must not be masked by a
+    stamped success/cancelled observation in either order.
+    """
+    existing_at = str(existing.get("observed_at") or "").strip()
+    observed_at = str(candidate.get("observed_at") or "").strip()
+    existing_state = str(existing.get("state") or "")
+    state = str(candidate.get("state") or "")
+
+    if observed_at and existing_at:
+        if observed_at > existing_at:
+            return True
+        if observed_at < existing_at:
+            return False
+        return _check_state_preference(state) > _check_state_preference(existing_state)
+
+    if observed_at and not existing_at:
+        # Stamped candidate vs untimestamped existing: never let success/cancelled
+        # erase an untimestamped failed/pending observation.
+        if _is_blocking_check_state(existing_state) and not _is_blocking_check_state(state):
+            return False
+        return True
+
+    if not observed_at and existing_at:
+        # Untimestamped candidate vs stamped existing: only a failed/pending
+        # candidate may replace; cancelled twins without stamps do not.
+        return _is_blocking_check_state(state)
+
+    return _check_state_preference(state) > _check_state_preference(existing_state)
+
+
 def _validate_required_checks(
     checks: Sequence[Mapping[str, Any]],
     required: Sequence[str],
@@ -609,8 +702,18 @@ def _validate_required_checks(
     for raw in checks:
         name = str(raw.get("name") or "").strip()
         state = str(raw.get("state") or "").strip().lower()
-        if name:
-            by_name[name] = {"name": name, "state": state, "source": str(raw.get("source") or "")}
+        if not name:
+            continue
+        observed_at = _check_observed_at(raw)
+        candidate = {
+            "name": name,
+            "state": state,
+            "source": str(raw.get("source") or ""),
+            "observed_at": observed_at,
+        }
+        existing = by_name.get(name)
+        if existing is None or _prefer_required_check_candidate(existing, candidate):
+            by_name[name] = candidate
     evidence: dict[str, dict[str, str]] = {}
     for name in required:
         item = by_name.get(name)
@@ -910,9 +1013,13 @@ class CompletionController:
         if unresolved_threads != 0:
             raise CompletionControllerError("pull request has unresolved review threads")
         review_decision = str(review_evidence.get("review_decision") or "").upper()
-        if review_decision != "APPROVED":
+        if review_decision in {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}:
             raise CompletionControllerError(
-                "pull request lacks required APPROVED review decision"
+                f"pull request review decision blocks merge: {review_decision}"
+            )
+        if review_decision not in {"", "APPROVED"}:
+            raise CompletionControllerError(
+                f"pull request has unknown review decision: {review_decision}"
             )
         if readiness.get("canon_conflict") or readiness.get("evidence_conflict") or readiness.get(
             "ownership_conflict"
@@ -1143,8 +1250,10 @@ class CompletionController:
 
     def complete_job(self, job_dir: Path, plan: CompletionPlan) -> dict[str, Any]:
         job_id = job_dir.name
-        evidence = self._load_job_evidence(job_dir)
-        job = evidence["job"]
+        job = _mapping(
+            yaml.safe_load((job_dir / "job.yaml").read_text(encoding="utf-8")),
+            "job.yaml",
+        )
         authority, authority_declared_at = _authority_from_job(job)
         if plan.authority_class is not None and plan.authority_class != authority:
             raise CompletionControllerError(
@@ -1162,8 +1271,12 @@ class CompletionController:
                 authority=authority,
                 reason="NEVER_MERGE blocks automatic merge",
             )
+        evidence = self._load_job_evidence(job_dir)
         publication = evidence["publication"]
         pr_number = int(publication.get("pr_number"))
+        pr = self._client().get_pull_request(pr_number)
+        if pr.get("draft") is True:
+            self._client().mark_ready_for_review(pr_number)
         branch = _safe_branch(
             publication.get("product_branch"),
             base_branch=self.config.product_base_branch,
@@ -1427,6 +1540,10 @@ class CompletionController:
             for job_dir in self.evidence.job_dirs():
                 job_id = job_dir.name
                 if self.config.plans and job_id not in self.config.plans:
+                    continue
+                if not (job_dir / "publication-report.json").is_file():
+                    continue
+                if not (job_dir / "completion-readiness.json").is_file():
                     continue
                 plan = self.config.plans.get(job_id, CompletionPlan(
                     required_checks=self.config.required_checks,

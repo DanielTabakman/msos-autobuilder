@@ -1416,16 +1416,22 @@ class CompletionController:
                 method=str(existing["merge_method"]),
             )
             return None
-        # cleanup_recorded is a terminal successful ledger row. Re-emitting lifecycle on
-        # every scan aborts the watcher when historical jobs lack attempt identity.
-        if status == "cleanup_recorded":
-            return None
         if status not in {
             "merge_intent_prepared",
             "merge_accepted",
             "merge_verified",
+            "cleanup_recorded",
         }:
             raise CompletionControllerError(f"unknown completion ledger status: {status}")
+        # cleanup_recorded recovery continues when terminalization still needs to finish
+        # (crash after merge/cleanup before report). Skip only when claim release already
+        # landed or attempt identity is missing — otherwise one historical cleaned-up job
+        # aborts the whole AUTO_MERGE_WHEN_GREEN scan via _emit_completion_lifecycle.
+        if status == "cleanup_recorded":
+            if isinstance(existing.get("claim_release"), Mapping):
+                return None
+            if attempt_identity_from_job_yaml(job_dir / "job.yaml") is None:
+                return None
         job_id = job_dir.name
         evidence = self._load_job_evidence(job_dir)
         pr_number = int(existing["pr_number"])

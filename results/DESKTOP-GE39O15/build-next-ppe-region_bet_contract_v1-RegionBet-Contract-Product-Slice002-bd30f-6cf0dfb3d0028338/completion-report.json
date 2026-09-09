@@ -1,0 +1,114 @@
+{
+  "authority_class": "AUTO_MERGE_WHEN_GREEN",
+  "authority_declared_at": "2026-09-07T19:40:00+00:00",
+  "changed_paths": [
+    "apps/msos-web/src/app/api/theses/region-bet/route.ts",
+    "apps/msos-web/src/lib/msosWorkflowStore.ts",
+    "apps/msos-web/src/lib/regionBet.ts",
+    "tests/test_msos_web_region_bet_contract.py"
+  ],
+  "checks": {
+    "changes": {
+      "name": "changes",
+      "observed_at": "2026-09-07T21:46:28Z",
+      "source": "check_run",
+      "state": "success"
+    },
+    "ci_success": {
+      "name": "ci_success",
+      "observed_at": "2026-09-07T21:48:00Z",
+      "source": "check_run",
+      "state": "success"
+    },
+    "docker_entrypoint": {
+      "name": "docker_entrypoint",
+      "observed_at": "2026-09-07T21:47:32Z",
+      "source": "check_run",
+      "state": "success"
+    },
+    "msos_web_build": {
+      "name": "msos_web_build",
+      "observed_at": "2026-09-07T21:47:53Z",
+      "source": "check_run",
+      "state": "success"
+    },
+    "pytest": {
+      "name": "pytest",
+      "observed_at": "2026-09-07T21:47:15Z",
+      "source": "check_run",
+      "state": "success"
+    }
+  },
+  "claim_release_handoff": {
+    "allowed_terminal_states": [
+      "abandoned",
+      "failed",
+      "merged",
+      "released",
+      "superseded"
+    ],
+    "authorized_paths": [
+      "apps/msos-web/src/app/api/theses/region-bet/route.ts",
+      "apps/msos-web/src/lib/msosWorkflowStore.ts",
+      "apps/msos-web/src/lib/regionBet.ts",
+      "tests/test_msos_web_region_bet_contract.py"
+    ],
+    "bounded_failure_behavior": {
+      "accepted_abandonment": "release as abandoned with founder/owner disposition evidence",
+      "submission_or_publication_failure": "release as failed with bounded failure evidence",
+      "superseded_duplicate": "release as superseded with canonical successor evidence"
+    },
+    "claim_generation": 2,
+    "consumer": "completion-controller",
+    "handoff": "msos-autobuilder.work_admission.claim_release.v1",
+    "immutability": "consumer must match objective_sha256, writer_id and claim_generation before release",
+    "linked_issue": null,
+    "objective_sha256": "5ce79ec417002ab0eeddd4699cff36abce694d460b51444fff4bdaaa7ab1f62c",
+    "release_api": "msos_autobuilder.work_admission.release_claim",
+    "repository": "DanielTabakman/Probability-prediction-engine",
+    "verified_completion_terminal_state": "merged",
+    "version": 1,
+    "writer_id": "build-next:build-next-ppe-region_bet_contract_v1-RegionBet-Contract-Product-Slice002-bd30f-6cf0dfb3d0028338"
+  },
+  "cleanup": [
+    {
+      "action": "delete_branch",
+      "branch": "autobuilder/build-next-ppe-region_bet_contract_v1-RegionBet-Contract-Product-Slice002-bd30f-6cf0dfb3d0028338",
+      "status": "completed"
+    }
+  ],
+  "completed_at": "2026-09-09T22:53:22.072973+00:00",
+  "default_branch": "main",
+  "default_branch_head": "6a0473a780330a4df15d3e3187aa27e1b660a658",
+  "founder_digest": "Merged automatically\nWork: region_bet_contract_v1\nPR: 5436\nMerge commit: 6a0473a780330a4df15d3e3187aa27e1b660a658\nValidation: candidate gate + publication + required checks passed\nCleanup: completed\nDecision required: none",
+  "gate_report_sha256": "faef3c3c0362a31af2d07ca81caec97efa5392bb4909d657ba0e3397aca9c9d0",
+  "job_id": "build-next-ppe-region_bet_contract_v1-RegionBet-Contract-Product-Slice002-bd30f-6cf0dfb3d0028338",
+  "merge_commit": "6a0473a780330a4df15d3e3187aa27e1b660a658",
+  "merge_method": "merge",
+  "pr_number": 5436,
+  "product_branch": "autobuilder/build-next-ppe-region_bet_contract_v1-RegionBet-Contract-Product-Slice002-bd30f-6cf0dfb3d0028338",
+  "publication_report_sha256": "805c452fdc8578412cdfe420392a6b2b2cd7a36bb332a6116f0f8074edcc4f76",
+  "review_evidence": {
+    "latest_opinionated_reviews": [],
+    "review_decision": "",
+    "source": "github_graphql",
+    "unresolved_review_threads": 0
+  },
+  "revision_lineage": {
+    "gate_report_sha256": "faef3c3c0362a31af2d07ca81caec97efa5392bb4909d657ba0e3397aca9c9d0",
+    "job_id": "build-next-ppe-region_bet_contract_v1-RegionBet-Contract-Product-Slice002-bd30f-6cf0dfb3d0028338",
+    "not_applicable_evidence": true,
+    "producer": "controlled_publisher",
+    "product_commit": "3e8e04b601f3a23d21cafa72bd3099294aeed0fa",
+    "publication_report_sha256": "805c452fdc8578412cdfe420392a6b2b2cd7a36bb332a6116f0f8074edcc4f76",
+    "revision_disposition": "not_applicable",
+    "revision_evidence_id": "7e5955be953ffcacff382c60edb14bd1",
+    "revision_evidence_sha256": "47b41657d8c6ca9986e6b6153bc2466e56a22f78cca65b7c97f35661198c5fd3",
+    "version": 1
+  },
+  "status": "merged",
+  "terminal_path": "C:\\Users\\USER\\.msos-autobuilder-merge-witness-20260902\\state\\completion-terminal-work-items\\build-next-ppe-region_bet_contract_v1-RegionBet-Contract-Product-Slice002-bd30f-6cf0dfb3d0028338.json",
+  "validated_head": "3e8e04b601f3a23d21cafa72bd3099294aeed0fa",
+  "version": 1,
+  "work_item_id": "region_bet_contract_v1"
+}

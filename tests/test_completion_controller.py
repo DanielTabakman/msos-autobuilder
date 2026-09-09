@@ -4,9 +4,10 @@ import hashlib
 import json
 import shutil
 import subprocess
+from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import pytest
 from test_build_next import _catalog_root, _write_catalog_from_ppe

@@ -443,14 +443,43 @@ class CompletionGitHubClient:
         )
 
     def mark_ready_for_review(self, number: int) -> dict[str, Any]:
-        return _mapping(
-            self._request(
-                "POST",
-                f"/repos/{self.repo_full_name}/pulls/{number}/ready_for_review",
-                accepted=(200, 202),
-            ),
-            "ready-for-review result",
+        # Prefer GraphQL: REST POST .../ready_for_review returns 404 for common
+        # Git Credential Manager OAuth tokens (gho_) even with `repo` scope, while
+        # markPullRequestReadyForReview succeeds. Keep exact PR identity via node_id.
+        pr = self.get_pull_request(number)
+        if pr.get("draft") is not True:
+            return pr
+        node_id = str(pr.get("node_id") or "").strip()
+        if not node_id:
+            raise CompletionControllerError(
+                f"pull request #{number} is missing node_id for ready-for-review"
+            )
+        data = self._graphql(
+            """
+            mutation($id:ID!) {
+              markPullRequestReadyForReview(input:{pullRequestId:$id}) {
+                pullRequest { number isDraft url }
+              }
+            }
+            """,
+            {"id": node_id},
         )
+        payload = _mapping(
+            _mapping(data.get("markPullRequestReadyForReview"), "ready-for-review mutation").get(
+                "pullRequest"
+            ),
+            "ready-for-review pull request",
+        )
+        if payload.get("isDraft") is True:
+            raise CompletionControllerError(
+                f"pull request #{number} remained draft after ready-for-review mutation"
+            )
+        return {
+            "number": int(payload.get("number") or number),
+            "draft": False,
+            "html_url": str(payload.get("url") or ""),
+            "source": "github_graphql",
+        }
 
     def delete_branch(self, branch: str) -> dict[str, Any]:
         encoded = urllib.parse.quote(f"heads/{branch}", safe="")

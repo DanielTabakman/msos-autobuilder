@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -1469,3 +1470,75 @@ def test_cleanup_recorded_without_attempt_identity_does_not_abort_later_job(
     )
     assert ledger[job_id]["status"] == "cleanup_recorded"
     assert ledger[second_id]["status"] == "merged"
+
+
+class _StubReadyClient(CompletionGitHubClient):
+    def __init__(self, *, draft: bool = True, node_id: str = "PR_testnode") -> None:
+        super().__init__("DanielTabakman/Probability-prediction-engine", "token")
+        self.draft = draft
+        self.node_id = node_id
+        self.graphql_calls: list[tuple[str, dict[str, Any]]] = []
+
+    def get_pull_request(self, number: int) -> dict[str, Any]:
+        return {
+            "number": number,
+            "draft": self.draft,
+            "node_id": self.node_id,
+            "html_url": f"https://github.com/example/pull/{number}",
+        }
+
+    def _graphql(self, query: str, variables: Mapping[str, Any]) -> dict[str, Any]:
+        self.graphql_calls.append((query, dict(variables)))
+        assert "markPullRequestReadyForReview" in query
+        assert variables.get("id") == self.node_id
+        return {
+            "markPullRequestReadyForReview": {
+                "pullRequest": {
+                    "number": 5436,
+                    "isDraft": False,
+                    "url": "https://github.com/example/pull/5436",
+                }
+            }
+        }
+
+
+def test_mark_ready_for_review_uses_graphql_mutation() -> None:
+    client = _StubReadyClient(draft=True)
+    result = client.mark_ready_for_review(5436)
+    assert result["draft"] is False
+    assert result["source"] == "github_graphql"
+    assert len(client.graphql_calls) == 1
+
+
+def test_mark_ready_for_review_skips_mutation_when_already_ready() -> None:
+    client = _StubReadyClient(draft=False)
+    result = client.mark_ready_for_review(5436)
+    assert result["draft"] is False
+    assert client.graphql_calls == []
+
+
+def test_mark_ready_for_review_fails_closed_without_node_id() -> None:
+    client = _StubReadyClient(draft=True, node_id="")
+    with pytest.raises(CompletionControllerError, match="missing node_id"):
+        client.mark_ready_for_review(5436)
+    assert client.graphql_calls == []
+
+
+def test_mark_ready_for_review_fails_closed_when_mutation_leaves_draft() -> None:
+    class _StuckDraftClient(_StubReadyClient):
+        def _graphql(self, query: str, variables: Mapping[str, Any]) -> dict[str, Any]:
+            self.graphql_calls.append((query, dict(variables)))
+            return {
+                "markPullRequestReadyForReview": {
+                    "pullRequest": {
+                        "number": 5436,
+                        "isDraft": True,
+                        "url": "https://github.com/example/pull/5436",
+                    }
+                }
+            }
+
+    client = _StuckDraftClient(draft=True)
+    with pytest.raises(CompletionControllerError, match="remained draft"):
+        client.mark_ready_for_review(5436)
+    assert len(client.graphql_calls) == 1

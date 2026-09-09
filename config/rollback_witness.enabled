@@ -1,0 +1,2 @@
+This marker intentionally makes the revision-aware candidate gate exit at service startup.
+It exists only on the reviewed rollback-witness branch and must never merge to main.

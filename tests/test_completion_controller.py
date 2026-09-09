@@ -19,6 +19,7 @@ from msos_autobuilder.completion_controller import (
     CompletionController,
     CompletionControllerError,
     CompletionGitHubClient,
+    _validate_claim_release_handoff,
     _validate_required_checks,
     load_completion_config,
 )
@@ -1325,3 +1326,146 @@ def test_required_checks_still_fail_when_only_cancelled_exists() -> None:
             ({"name": "msos_web_build", "state": "cancelled", "source": "check_run"},),
             ("msos_web_build",),
         )
+
+
+def _handoff_fixture(*, job_generation: int, claim_generation: int) -> tuple[dict, dict]:
+    objective = "a" * 64
+    writer = "build-next:candidate-revision-1"
+    paths = ["src/viz/value.py"]
+    job = {
+        "founder_build_next": {
+            "work_admission": {
+                "objective_sha256": objective,
+                "claim_writer_id": writer,
+                "claim_generation": job_generation,
+                "authorized_paths": paths,
+            }
+        }
+    }
+    publication = {
+        "work_admission": {
+            "claim": {
+                "objective_sha256": objective,
+                "writer_id": writer,
+                "generation": claim_generation,
+                "authorized_paths": paths,
+            }
+        },
+        "claim_release_handoff": {
+            "handoff": "msos-autobuilder.work_admission.claim_release.v1",
+            "consumer": "completion-controller",
+            "objective_sha256": objective,
+            "writer_id": writer,
+            "claim_generation": claim_generation,
+            "authorized_paths": paths,
+            "verified_completion_terminal_state": "merged",
+        },
+    }
+    return job, publication
+
+
+def test_reclaimed_claim_generation_is_trusted_when_job_yaml_lags() -> None:
+    job, publication = _handoff_fixture(job_generation=1, claim_generation=2)
+    handoff = _validate_claim_release_handoff(job, publication)
+    assert handoff["claim_generation"] == 2
+
+
+def test_future_dated_job_claim_generation_is_rejected() -> None:
+    job, publication = _handoff_fixture(job_generation=3, claim_generation=2)
+    with pytest.raises(CompletionControllerError, match="generation is not trusted"):
+        _validate_claim_release_handoff(job, publication)
+
+
+def test_cleanup_recorded_without_attempt_identity_does_not_abort_later_job(
+    tmp_path: Path,
+) -> None:
+    """Historical cleanup_recorded jobs missing attempt identity must not abort the scan."""
+    config_path, _, head, client, job_id = make_fixture(tmp_path)
+    config = load_completion_config(config_path)
+    evidence_bare = Path(config.evidence_repo_url)
+    work = evidence_bare.parent / "cleanup-recorded-skip"
+    git(None, "clone", str(evidence_bare), str(work))
+    git(work, "config", "user.name", "Fixture")
+    git(work, "config", "user.email", "fixture@example.invalid")
+
+    historical = work / "results" / "MACHINE" / job_id
+    historical_job = (historical / "job.yaml").read_text(encoding="utf-8")
+    # Drop refill_attempt so attempt_identity_from_job_yaml returns None.
+    lines = historical_job.splitlines()
+    stripped: list[str] = []
+    skipping_refill = False
+    for line in lines:
+        if line.startswith("  refill_attempt:"):
+            skipping_refill = True
+            continue
+        if skipping_refill:
+            if line.startswith("    "):
+                continue
+            skipping_refill = False
+        stripped.append(line)
+    (historical / "job.yaml").write_text("\n".join(stripped) + "\n", encoding="utf-8")
+    assert attempt_identity_from_job_yaml(historical / "job.yaml") is None
+
+    source = historical
+    second_id = "candidate-revision-2"
+    target = source.parent / second_id
+    shutil.copytree(source, target)
+    for path in target.glob("*.json"):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("job_id") == job_id:
+            payload["job_id"] = second_id
+        write_json(path, payload)
+    report_sha = sha256(target / "report.json")
+    integrity = json.loads((target / "result-integrity.json").read_text(encoding="utf-8"))
+    integrity["corrected_report_sha256"] = report_sha
+    write_json(target / "result-integrity.json", integrity)
+    gate = json.loads((target / "gate-report.json").read_text(encoding="utf-8"))
+    gate["source_report_sha256"] = report_sha
+    write_json(target / "gate-report.json", gate)
+    gate_sha = sha256(target / "gate-report.json")
+    publication = json.loads((target / "publication-report.json").read_text(encoding="utf-8"))
+    publication["gate_report_sha256"] = gate_sha
+    write_json(target / "publication-report.json", publication)
+    publication_sha = sha256(target / "publication-report.json")
+    lineage = json.loads((target / "revision-lineage.json").read_text(encoding="utf-8"))
+    lineage["gate_report_sha256"] = gate_sha
+    lineage["publication_report_sha256"] = publication_sha
+    write_json(target / "revision-lineage.json", lineage)
+    original_job = git(work, "show", f"HEAD:results/MACHINE/{job_id}/job.yaml")
+    second_job = original_job.replace(f"job_id: {job_id}", f"job_id: {second_id}")
+    (target / "job.yaml").write_text(second_job, encoding="utf-8")
+    assert attempt_identity_from_job_yaml(target / "job.yaml") is not None
+
+    git(work, "add", ".")
+    git(work, "commit", "-m", "historical without identity plus later auto-merge job")
+    git(work, "push", "origin", "HEAD:results")
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").split("plans:", 1)[0],
+        encoding="utf-8",
+    )
+
+    state = config.host_root / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    write_json(
+        state / "completion-controller-seen.json",
+        {
+            job_id: {
+                "version": 1,
+                "status": "cleanup_recorded",
+                "job_id": job_id,
+                "pr_number": 7,
+                "validated_head": head,
+                "product_branch": "autobuilder/candidate-revision-1",
+                "merge_method": "merge",
+                "checks": {"linux-ci": {"name": "linux-ci", "state": "success"}},
+                "cleanup": [],
+            }
+        },
+    )
+
+    assert controller(config_path, client).run_once() == (second_id,)
+    ledger = json.loads(
+        (config.host_root / "state" / "completion-controller-seen.json").read_text("utf-8")
+    )
+    assert ledger[job_id]["status"] == "cleanup_recorded"
+    assert ledger[second_id]["status"] == "merged"

@@ -813,10 +813,18 @@ def _validate_claim_release_handoff(
         if handoff.get(key) != claim.get(key) or handoff.get(key) != job_admission.get(claim_key):
             raise CompletionControllerError(f"claim release handoff {key} is not trusted")
     generation = handoff.get("claim_generation")
+    job_generation = job_admission.get("claim_generation")
+    # Handoff generation must match the active publication claim. Job.yaml records the
+    # original admission generation; publisher reclaim may advance the durable claim
+    # without rewriting that immutable snapshot. Require a positive job generation that
+    # does not exceed the active claim (no future-dated job.yaml).
     if (
         not isinstance(generation, int)
+        or generation < 1
         or generation != claim.get("generation")
-        or generation != job_admission.get("claim_generation")
+        or not isinstance(job_generation, int)
+        or job_generation < 1
+        or job_generation > generation
     ):
         raise CompletionControllerError("claim release handoff generation is not trusted")
     if sorted(handoff.get("authorized_paths") or []) != sorted(
@@ -1415,6 +1423,15 @@ class CompletionController:
             "cleanup_recorded",
         }:
             raise CompletionControllerError(f"unknown completion ledger status: {status}")
+        # cleanup_recorded recovery continues when terminalization still needs to finish
+        # (crash after merge/cleanup before report). Skip only when claim release already
+        # landed or attempt identity is missing — otherwise one historical cleaned-up job
+        # aborts the whole AUTO_MERGE_WHEN_GREEN scan via _emit_completion_lifecycle.
+        if status == "cleanup_recorded":
+            if isinstance(existing.get("claim_release"), Mapping):
+                return None
+            if attempt_identity_from_job_yaml(job_dir / "job.yaml") is None:
+                return None
         job_id = job_dir.name
         evidence = self._load_job_evidence(job_dir)
         pr_number = int(existing["pr_number"])

@@ -1,0 +1,24 @@
+---
+description: Always-on Cursor guidance for MSOS Autobuilder control-plane and runtime work
+globs:
+alwaysApply: true
+---
+
+# MSOS Autobuilder Cursor rule
+
+- GitHub is the source of truth. When coordination, ownership, handoffs, disagreement, or role boundaries matter, read `Probability-prediction-engine/docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md` first.
+- Current founder objective for Issue #119 is Autobuilder operationality: prove one full automatic cycle from an already-chartered task A through tested draft PR publication and automatic selection of the next eligible already-chartered task B. Do not resurrect the historical freeze/manual-PPE sequencing; those comments are superseded.
+- The Autobuilder may select among founder-chartered eligible tasks. It must not invent product priorities or charter new product work on its own.
+- Known PPE checkout on Daniel's machine: `C:\Users\USER\probability-prediction-engine`. Do not run a locate/search task for that repository unless fresh evidence shows this path is unavailable.
+
+## Permission / interruption behavior
+
+- Daniel is using Cursor. Do not ask him in chat to approve routine repository commands when Cursor's approval UI or Auto-review can handle the actual tool call.
+- If a command is already inside the explicit GitHub task packet, authorized paths/state, and non-destructive validation/runtime boundary, proceed to the tool call rather than asking a separate conversational permission question.
+- Batch routine read-only inspection and focused validation when practical. Do not create permission-prompt loops by retrying the same need through alternate shells/wrappers.
+- Stop and surface the boundary only for actions that materially widen authority or risk: credentials/secrets, ACL/admin/system configuration changes, destructive Git, direct `main` writes/merges without authorization, unexpected Scheduled Task/service changes, refill/feed/publication authority widening, or mutation outside the current task's exact runtime/path boundary.
+- Cursor Run Mode is a local user setting, not repository canon. This rule does not grant OS permissions or bypass Cursor approval controls.
+
+## Coordination
+
+When reviewing, continuing, or depending on another agent's work, return the repository's mandatory `COORDINATION STATUS` block and do not silently reconcile disagreement.

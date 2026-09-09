@@ -1,0 +1,20 @@
+{
+  "attempt_id": "20260909T182126.434546Z-fe039a098018",
+  "attempted_at": "2026-09-09T18:21:26.446546+00:00",
+  "checks": [],
+  "cutover": {
+    "performed": false,
+    "reason": "blocked_after_rollback"
+  },
+  "errors": [],
+  "health": {},
+  "manifest_sha256": "2d9624d6e7b41bf12b0d63594da01f05b576de47bea871babe7fa0e6ff9c4a8f",
+  "outcome": "blocked_after_rollback",
+  "previous_commit": null,
+  "previous_release_path": null,
+  "release_id": "completion-claim-gen-and-recovery-v1",
+  "requested_commit": "b68caf03d47f55770be14cd8a0117d832537a202",
+  "rollback": {},
+  "staged_release_path": null,
+  "version": 1
+}

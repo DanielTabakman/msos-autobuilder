@@ -1,0 +1,10 @@
+{
+  "attempt_id": "20260909T182126.434546Z-fe039a098018",
+  "outcome": "blocked_after_rollback",
+  "recorded_at": "2026-09-09T18:21:26.474242+00:00",
+  "report_path": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\reports\\20260909T182126.434546Z-fe039a098018.json",
+  "requested_commit": "b68caf03d47f55770be14cd8a0117d832537a202",
+  "requires_founder_attention": true,
+  "type": "autobuilder-self-update",
+  "version": 1
+}

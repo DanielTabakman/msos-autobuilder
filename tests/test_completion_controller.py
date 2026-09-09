@@ -1515,3 +1515,30 @@ def test_mark_ready_for_review_skips_mutation_when_already_ready() -> None:
     result = client.mark_ready_for_review(5436)
     assert result["draft"] is False
     assert client.graphql_calls == []
+
+
+def test_mark_ready_for_review_fails_closed_without_node_id() -> None:
+    client = _StubReadyClient(draft=True, node_id="")
+    with pytest.raises(CompletionControllerError, match="missing node_id"):
+        client.mark_ready_for_review(5436)
+    assert client.graphql_calls == []
+
+
+def test_mark_ready_for_review_fails_closed_when_mutation_leaves_draft() -> None:
+    class _StuckDraftClient(_StubReadyClient):
+        def _graphql(self, query: str, variables: Mapping[str, Any]) -> dict[str, Any]:
+            self.graphql_calls.append((query, dict(variables)))
+            return {
+                "markPullRequestReadyForReview": {
+                    "pullRequest": {
+                        "number": 5436,
+                        "isDraft": True,
+                        "url": "https://github.com/example/pull/5436",
+                    }
+                }
+            }
+
+    client = _StuckDraftClient(draft=True)
+    with pytest.raises(CompletionControllerError, match="remained draft"):
+        client.mark_ready_for_review(5436)
+    assert len(client.graphql_calls) == 1

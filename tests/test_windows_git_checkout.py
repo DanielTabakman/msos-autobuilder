@@ -22,6 +22,7 @@ from msos_autobuilder.windows_git_checkout import (
     prefer_checkout,
     remove_git_tree,
     revision_results_checkout,
+    target_checkout_for_job,
 )
 
 
@@ -184,6 +185,32 @@ def test_prefer_checkout_defaults_to_short_and_reuses_legacy(tmp_path: Path) -> 
     legacy.mkdir(parents=True)
     (legacy / ".git").mkdir()
     assert prefer_checkout(state, "rl-repo", "revision-loop-results-repo") == legacy
+
+
+def test_candidate_workspace_uses_digest_not_raw_job_id(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    job_id = "build-next-ppe-fixture_work-Fixture-Product-Slice002-" + ("a" * 12)
+    workspace = candidate_workspace(state, job_id)
+    assert workspace.parent == candidate_workspace_root(state)
+    assert workspace.name != job_id
+    assert len(workspace.name) == 12
+
+
+def test_target_checkout_for_job_prefers_digest_and_reuses_legacy(tmp_path: Path) -> None:
+    root = tmp_path / "target-checkouts"
+    job_id = "build-next-ppe-fixture_work-Fixture-Product-Slice002-" + ("b" * 12)
+    short = target_checkout_for_job(root, job_id)
+    assert short.parent == root
+    assert short.name != job_id
+    assert len(short.name) == 16
+
+    legacy = root / job_id
+    legacy.mkdir(parents=True)
+    (legacy / ".git").mkdir()
+    assert target_checkout_for_job(root, job_id) == legacy
+
+    (short / ".git").mkdir(parents=True)
+    assert target_checkout_for_job(root, job_id) == short
 
 
 def test_git_environment_enables_longpaths() -> None:

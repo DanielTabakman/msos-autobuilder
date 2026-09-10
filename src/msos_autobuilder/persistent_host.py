@@ -38,6 +38,7 @@ from .lifecycle_evidence import (
     emit_lifecycle_evidence,
     record_producer_evidence_error,
 )
+from .windows_git_checkout import target_checkout_for_job
 from .work_admission import AdmissionError, release_claim
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -1299,7 +1300,7 @@ class PersistentHost:
         remote_url = job.admitted_target_remote_url
         if repository is None or commit is None or remote_url is None:
             raise HostJobError("admitted target freeze identity is incomplete")
-        destination = (self.paths.target_checkouts / job.job_id).resolve()
+        destination = target_checkout_for_job(self.paths.target_checkouts, job.job_id).resolve()
         configured_source = host_config.source_repo.resolve()
         if destination == configured_source:
             raise HostJobError(

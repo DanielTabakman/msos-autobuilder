@@ -19,6 +19,7 @@ CANDIDATE_RESULTS_SHORT = "cg-repo"
 CANDIDATE_RESULTS_LEGACY = "candidate-gate-results-repo"
 CANDIDATE_WORKSPACES_SHORT = "cg-ws"
 CANDIDATE_WORKSPACES_LEGACY = "candidate-gate-workspaces"
+TARGET_CHECKOUTS_DIR = "target-checkouts"
 
 
 def prefer_checkout(state_root: Path, short_name: str, legacy_name: str) -> Path:
@@ -72,6 +73,27 @@ def candidate_workspace(state_root: Path, job_id: str) -> Path:
 
     digest = hashlib.sha256(job_id.encode("utf-8")).hexdigest()[:12]
     return candidate_workspace_root(state_root) / digest
+
+
+def target_checkout_for_job(target_checkouts_root: Path, job_id: str) -> Path:
+    """Short per-job freeze checkout under ``state/target-checkouts``.
+
+    Full build-next job ids are ~90 characters. Nested staging TEMP roots
+    (``AppData/Local/Temp/msos/<id>/<id>/pytest-...``) push ``git clone`` past
+    Windows MAX_PATH even with ``core.longpaths``. Prefer a stable digest; reuse
+    an existing legacy ``job_id`` checkout so in-flight hosts are not migrated.
+    """
+
+    root = Path(target_checkouts_root)
+    safe_job = str(job_id or "").strip()
+    digest = hashlib.sha256(safe_job.encode("utf-8")).hexdigest()[:16]
+    short = root / digest
+    legacy = root / safe_job if safe_job else short
+    if (short / ".git").exists():
+        return short
+    if safe_job and (legacy / ".git").exists():
+        return legacy
+    return short
 
 
 def remove_git_tree(path: Path, *, ignore_errors: bool = False) -> None:

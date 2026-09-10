@@ -53,6 +53,7 @@ from .persistent_host import HostPaths, load_persistent_host_config, parse_host_
 from .validation_contract import (
     build_ppe_validation_contract,
 )
+from .windows_git_checkout import git_environment, target_checkout_for_job
 from .work_admission import (
     AdmissionRequest,
     AdmissionStatus,
@@ -300,6 +301,7 @@ def _run(
 ) -> subprocess.CompletedProcess[str]:
     if any("founder_portfolio.py" in str(part) for part in argv):
         raise BuildNextError("selector/refill path must not invoke founder_portfolio.py")
+    env = git_environment() if argv and str(argv[0]) == "git" else None
     proc = subprocess.run(
         list(argv),
         cwd=cwd,
@@ -310,6 +312,7 @@ def _run(
         errors="replace",
         shell=False,
         check=False,
+        env=env,
     )
     if proc.returncode not in accepted:
         detail = (proc.stderr or proc.stdout or "command failed").strip()
@@ -413,7 +416,7 @@ def _target_checkout_root(config: BuildNextConfig, job_id: str) -> Path:
         default_feed = Path(tempfile.gettempdir()) / "msos-autobuilder-build-next-feed"
         base = config.checkout_root or default_feed
         root = Path(base) / "admitted-targets"
-    return root.expanduser().resolve() / job_id
+    return target_checkout_for_job(root.expanduser().resolve(), job_id)
 
 
 def _safe_id(value: str, *, fallback: str = "item") -> str:

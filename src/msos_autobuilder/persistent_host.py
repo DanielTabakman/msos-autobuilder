@@ -32,6 +32,7 @@ from .codex_shadow import (
     run_codex_shadow,
 )
 from .job_packet import JobPacketError, fetch_declared_target
+from .windows_git_checkout import target_checkout_for_job
 from .lifecycle_evidence import (
     SourceRef,
     attempt_identity_from_job_yaml,
@@ -1299,7 +1300,7 @@ class PersistentHost:
         remote_url = job.admitted_target_remote_url
         if repository is None or commit is None or remote_url is None:
             raise HostJobError("admitted target freeze identity is incomplete")
-        destination = (self.paths.target_checkouts / job.job_id).resolve()
+        destination = target_checkout_for_job(self.paths.target_checkouts, job.job_id).resolve()
         configured_source = host_config.source_repo.resolve()
         if destination == configured_source:
             raise HostJobError(

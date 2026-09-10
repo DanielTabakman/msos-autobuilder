@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .managed_source import normalize_github_repository
+from .windows_git_checkout import git_environment
 
 
 class JobPacketError(ValueError):
@@ -409,6 +410,8 @@ def _git(repo: Path | None, *args: str, accepted: tuple[int, ...] = (0,)) -> str
     if repo is not None:
         argv.extend(["-C", str(repo)])
     argv.extend(args)
+    # Freeze handoff clones under host state/target-checkouts; staging pytest TEMP
+    # nests deeply enough that Windows MAX_PATH breaks git without core.longpaths.
     proc = subprocess.run(
         argv,
         capture_output=True,
@@ -417,6 +420,7 @@ def _git(repo: Path | None, *args: str, accepted: tuple[int, ...] = (0,)) -> str
         errors="replace",
         shell=False,
         check=False,
+        env=git_environment(),
     )
     if proc.returncode not in accepted:
         detail = (proc.stderr or proc.stdout or "command failed").strip()

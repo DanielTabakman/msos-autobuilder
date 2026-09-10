@@ -36,6 +36,7 @@ from msos_autobuilder.catalog_materializer import (
     load_phase_chapter_backlog,
     materialize_guided_shell_packet,
     order_is_draft_gated_blocked,
+    resolve_predecessor_terminal_proof,
     write_packet_to_catalog_dir,
 )
 from msos_autobuilder.job_packet import (
@@ -545,6 +546,32 @@ def test_ensure_jit_probe_skips_when_catalog_has_next(tmp_path: Path) -> None:
     )
     assert result.status == "skipped"
     assert result.reason == "catalog_next_not_empty"
+
+
+def test_empty_attempt_identity_does_not_prove_predecessor_terminal() -> None:
+    proof = resolve_predecessor_terminal_proof(
+        generation={
+            "last_attempt_classification": {
+                "category": "item_terminal",
+                "evidence": {
+                    "reason": "item_terminal_success_merged",
+                    "attempt_identity": {"work_item_id": ""},
+                },
+            }
+        }
+    )
+    assert proof is False
+    assert is_predecessor_terminal_proof(proof) is False
+
+    missing_identity = resolve_predecessor_terminal_proof(
+        generation={
+            "last_attempt_classification": {
+                "category": "item_terminal",
+                "evidence": {"reason": "item_terminal_success_merged"},
+            }
+        }
+    )
+    assert missing_identity is False
 
 
 def test_author_guided_shell_omits_merge_authority(tmp_path: Path) -> None:

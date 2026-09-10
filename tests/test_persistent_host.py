@@ -27,6 +27,7 @@ from msos_autobuilder.persistent_host import (
     parse_host_job,
     sync_git_job_feed,
 )
+from msos_autobuilder.windows_git_checkout import target_checkout_for_job
 from msos_autobuilder.work_admission import (
     AdmissionRequest,
     AdmissionStatus,
@@ -863,7 +864,7 @@ def test_freeze_handoff_prepares_exact_detached_source_before_runner(tmp_path: P
     report = json.loads(
         (paths.completed / "freeze-clean" / "report.json").read_text(encoding="utf-8")
     )
-    prepared = (paths.target_checkouts / "freeze-clean").resolve()
+    prepared = target_checkout_for_job(paths.target_checkouts, "freeze-clean").resolve()
 
     assert result.outcome == "completed"
     assert seen["head"] == frozen
@@ -1031,7 +1032,11 @@ def test_freeze_handoff_rerun_is_idempotent(tmp_path: Path) -> None:
     assert result.outcome == "completed"
     assert report["prepared_source"]["prepared_target_source_commit"] == frozen
     assert (paths.pending / "freeze-idem-b.yaml").exists()
-    assert _git(paths.target_checkouts / "freeze-idem-b", "rev-parse", "HEAD") == frozen
+    assert _git(
+        target_checkout_for_job(paths.target_checkouts, "freeze-idem-b"),
+        "rev-parse",
+        "HEAD",
+    ) == frozen
 
 
 def test_freeze_handoff_source_drift_between_packet_and_expected_fails_closed(

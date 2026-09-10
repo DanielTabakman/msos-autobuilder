@@ -3,8 +3,11 @@ from __future__ import annotations
 import ast
 import inspect
 import json
+import os
 import re
+import shutil
 import subprocess
+import tempfile
 import urllib.parse
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -30,6 +33,7 @@ from msos_autobuilder.validation_contract import (
     canonical_dependency_source_sha256,
     stable_contract_sha256,
 )
+from msos_autobuilder.windows_git_checkout import target_checkout_for_job
 from msos_autobuilder.work_admission import (
     AdmissionRequest,
     ObjectiveIdentity,
@@ -1206,7 +1210,7 @@ def test_production_config_is_derived_from_installed_service_config(tmp_path: Pa
     assert config.target_checkout_root == (host_root / "state" / "target-checkouts").resolve()
     assert receipt.status == "QUEUED"
     assert receipt.job_id is not None
-    prepared = config.target_checkout_root / receipt.job_id
+    prepared = target_checkout_for_job(config.target_checkout_root, receipt.job_id)
     assert prepared.is_dir()
     assert _git(prepared, "rev-parse", "HEAD") == receipt.source_commit
     detached = subprocess.run(
@@ -1219,6 +1223,85 @@ def test_production_config_is_derived_from_installed_service_config(tmp_path: Pa
     )
     assert detached.returncode != 0
     assert detached.stdout.strip() == ""
+
+
+def test_production_config_freeze_checkout_survives_deep_windows_temp(
+    tmp_path: Path,
+) -> None:
+    """Staging operator-apply nests pytest TEMP under AppData\\Local\\Temp\\msos\\...
+
+    Freeze handoff always materializes target-checkouts under host_root; without
+    short digest dirs + core.longpaths that deep path used to fail closed as BLOCKED.
+    """
+    # Match staging depth under Local\\Temp\\msos\\... without nesting under pytest's
+    # own tmp_path (which would double the prefix and overstate the failure mode).
+    deep = (
+        Path(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir())
+        / "Temp"
+        / "msos"
+        / f"prodconfig-{os.getpid()}-{tmp_path.name}"
+        / "cb9f661e"
+        / "pytest-of-USER"
+        / "pytest-0"
+        / "test_production_config_is_deri0"
+    )
+    shutil.rmtree(deep, ignore_errors=True)
+    deep.mkdir(parents=True, exist_ok=True)
+    try:
+        ppe = _write_ppe(deep / "ppe")
+        feed = _feed_repo(deep / "feed-work")
+        host_root = deep / "host"
+        codex_config = deep / "host.yaml"
+        codex_config.write_text(
+            yaml.safe_dump(
+                {
+                    "version": 1,
+                    "publication_enabled": False,
+                    "source_repo": str(ppe),
+                    "workspace_root": str(deep / "workspaces"),
+                    "runtime_root": str(deep / "runtime"),
+                    "owner_id": "test-host",
+                    "codex": {"sandbox_mode": "workspace-write", "max_concurrency": 1},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        service_config = deep / "service.yaml"
+        service_config.write_text(
+            yaml.safe_dump(
+                {
+                    "version": 1,
+                    "publication_enabled": False,
+                    "host_root": str(host_root),
+                    "codex_host_config": str(codex_config),
+                    "job_feed": {
+                        "enabled": True,
+                        "repo_url": str(feed),
+                        "branch": "jobs",
+                        "path": "jobs/approved",
+                    },
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        config = BuildNextConfig.from_service_config(
+            service_config,
+            checkout_root=deep / "checkout",
+            allow_test_local_source_remote=True,
+            packet_root=_catalog_root(ppe),
+        )
+        receipt = build_next(config)
+
+        assert receipt.status == "QUEUED", receipt.message
+        prepared = target_checkout_for_job(config.target_checkout_root, receipt.job_id)
+        assert prepared.is_dir()
+        assert prepared.name != receipt.job_id
+        assert len(prepared.name) == 16
+    finally:
+        shutil.rmtree(deep, ignore_errors=True)
 
 
 def test_receipts_distinguish_running_queued_blocked_and_unfilled(tmp_path: Path) -> None:

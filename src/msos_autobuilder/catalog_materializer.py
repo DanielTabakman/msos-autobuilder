@@ -27,6 +27,7 @@ from .job_packet import (
 )
 from .managed_source import normalize_github_repository
 from .validation_contract import canonical_dependency_source_sha256
+from .windows_git_checkout import git_environment
 
 
 class CatalogMaterializerError(RuntimeError):
@@ -118,6 +119,7 @@ def _git(repo: Path | None, *args: str, accepted: tuple[int, ...] = (0,)) -> str
         errors="replace",
         shell=False,
         check=False,
+        env=git_environment(),
     )
     if proc.returncode not in accepted:
         detail = (proc.stderr or proc.stdout or "command failed").strip()
@@ -741,7 +743,9 @@ def resolve_predecessor_terminal_proof(
                 if isinstance(identity, Mapping):
                     identity_work = str(identity.get("work_item_id") or "").strip()
                 reason = str(evidence.get("reason") or "").strip()
-                if identity_work in {"", work_item_id} and reason in MERGED_LIFECYCLE_DISPOSITIONS:
+                # Require an explicit predecessor work-item id. Empty identity must
+                # not false-qualify JIT eligibility (fixtures / unrelated terminals).
+                if identity_work == work_item_id and reason in MERGED_LIFECYCLE_DISPOSITIONS:
                     return {
                         "item_terminal": True,
                         "item_disposition": reason,

@@ -1,0 +1,8 @@
+﻿version: 1
+release_id: product-source-freeze-handoff-v1
+commit: self
+approved: true
+supervisor_update: false
+required_checks:
+  - test
+  - windows-test

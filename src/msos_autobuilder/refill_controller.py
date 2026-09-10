@@ -26,6 +26,10 @@ from .build_next import (
     _prepare_feed_checkout,
     build_next,
 )
+from .catalog_materializer import (
+    CatalogMaterializerError,
+    ensure_jit_catalog_for_refill,
+)
 from .codex_shadow import load_codex_host_config
 from .lifecycle_evidence import (
     EvidenceHeadsLock,
@@ -54,6 +58,64 @@ from .windows_git_checkout import candidate_results_checkout
 
 class RefillControllerError(RuntimeError):
     """Raised when refill policy or state would exceed the v1 boundary."""
+
+
+def _maybe_materialize_jit_catalog(
+    config: RefillConfig,
+    paths: HostPaths,
+    *,
+    exclusions: tuple[str, ...],
+    generation: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """After item_terminal / before dispatch: JIT-materialize when select would be empty.
+
+    Fail closed when materialization is eligible but jobs write config is missing.
+    Returns None when the catalog already has a selectable next packet.
+    """
+    results_root = candidate_results_checkout(paths.state) / "results"
+    try:
+        decision = ensure_jit_catalog_for_refill(
+            ppe_repo=config.build_next.ppe_repo,
+            feed_repo_url=str(config.build_next.feed_repo_url or ""),
+            packet_root=config.build_next.packet_root,
+            catalog_path=str(config.build_next.catalog_path),
+            jobs_branch=str(config.build_next.jobs_branch),
+            checkout_root=config.build_next.checkout_root,
+            exclude_work_item_ids=exclusions,
+            host_root=config.build_next.host_root,
+            results_root=results_root if results_root.exists() else None,
+            generation=generation,
+            allow_test_local_source_remote=bool(
+                config.build_next.allow_test_local_source_remote
+            ),
+            publish_to_jobs=config.build_next.packet_root is None,
+            fetch_remote=False,
+        )
+    except CatalogMaterializerError as exc:
+        return {
+            "blocked": True,
+            "status": "blocked",
+            "reason": "jit_catalog_materialize_failed",
+            "message": str(exc),
+            "action": "blocked_config_or_conflict",
+        }
+    if decision.status == "skipped" and decision.reason == "catalog_next_not_empty":
+        return None
+    return {
+        "blocked": False,
+        "status": decision.status,
+        "reason": decision.reason,
+        "message": decision.reason,
+        "action": decision.status,
+        "work_item_id": decision.work_item_id,
+        "chapter_id": decision.work_item_id,
+        "order": decision.order,
+        "packet_path": decision.packet_path,
+        "packet_sha256": decision.packet_sha256,
+        "frozen_commit": decision.frozen_commit,
+        "feed_commit": decision.feed_commit,
+        "evidence": dict(decision.evidence or {}),
+    }
 
 
 def _utc_now() -> str:
@@ -3222,6 +3284,39 @@ def _reconcile_refill_locked(config: RefillConfig) -> RefillReport:
     )
     if retry_same_item:
         exclusions = tuple(item for item in exclusions if item != retry_same_item)
+    jit_evidence = _maybe_materialize_jit_catalog(
+        config,
+        paths,
+        exclusions=exclusions,
+        generation=generation,
+    )
+    if isinstance(jit_evidence, Mapping) and jit_evidence.get("blocked") is True:
+        generation["state"] = "BLOCKED"
+        generation["jit_catalog_materialize"] = dict(jit_evidence)
+        save_refill_generation(config, generation)
+        return _report(
+            config=config,
+            policy=policy,
+            status="BLOCKED",
+            message=str(
+                jit_evidence.get("message")
+                or jit_evidence.get("reason")
+                or "JIT catalog materialization failed closed."
+            ),
+            active_running=active_running,
+            active_queued=active_queued,
+            feed_awaiting_import=feed_awaiting_import,
+            awaiting_review=awaiting_review,
+            evidence={
+                "reason": "jit_catalog_materialize_failed",
+                "jit_catalog_materialize": dict(jit_evidence),
+                "generation": generation,
+                "health": snapshot.health,
+            },
+        )
+    if isinstance(jit_evidence, Mapping) and jit_evidence:
+        generation["jit_catalog_materialize"] = dict(jit_evidence)
+        save_refill_generation(config, generation)
     attempt_ordinal = len(generation.get("attempt_sequence") or []) + 1
     prepared, dry_receipt = _prepare_dispatch(
         config,

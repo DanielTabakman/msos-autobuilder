@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -45,6 +46,7 @@ from msos_autobuilder.job_packet import (
     select_next_packet,
 )
 from msos_autobuilder.refill_controller import _maybe_materialize_jit_catalog
+from msos_autobuilder.validation_contract import canonical_dependency_source_sha256
 
 
 def _backlog_payload() -> dict[str, object]:
@@ -587,3 +589,190 @@ def test_author_guided_shell_omits_merge_authority(tmp_path: Path) -> None:
     assert "merge_authority" not in packet
     parsed = parse_approved_job_packet(packet, allow_test_local_source_remote=True)
     assert parsed.merge_authority is None
+
+
+def test_completed_guided_shell_is_not_materialized_again_after_main_advances(
+    tmp_path: Path,
+) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    _write_backlog(ppe)
+    catalog = _catalog_root(ppe)
+    _seed_contract_packet(catalog, ppe)
+    first = ensure_jit_catalog_for_refill(
+        ppe_repo=ppe,
+        packet_root=catalog,
+        exclude_work_item_ids=(PREDECESSOR_WORK_ITEM_ID,),
+        predecessor_proof=_merged_proof(),
+        allow_test_local_source_remote=True,
+        fetch_remote=False,
+    )
+    assert first.status == "created"
+    original = (catalog / GUIDED_SHELL_CATALOG_FILENAME).read_bytes()
+    (ppe / "README.md").write_text("product main advanced after 07 merged\n")
+    _commit_all(ppe, "merge completed guided shell")
+    _git(ppe, "push", "-q", "origin", "main")
+
+    for _ in range(2):
+        result = ensure_jit_catalog_for_refill(
+            ppe_repo=ppe,
+            packet_root=catalog,
+            exclude_work_item_ids=(PREDECESSOR_WORK_ITEM_ID, GUIDED_SHELL_WORK_ITEM_ID),
+            predecessor_proof=_merged_proof(),
+            allow_test_local_source_remote=True,
+            fetch_remote=False,
+        )
+        assert result.status == "skipped"
+        assert result.reason == "work_item_excluded"
+        assert (catalog / GUIDED_SHELL_CATALOG_FILENAME).read_bytes() == original
+
+
+def test_refill_materializes_current_remote_main_with_matching_dependency_digest(
+    tmp_path: Path,
+) -> None:
+    import yaml
+
+    from msos_autobuilder.build_next import BuildNextConfig, build_next
+    from msos_autobuilder.persistent_host import HostPaths
+    from msos_autobuilder.refill_controller import RefillConfig
+
+    ppe = _write_ppe(tmp_path / "ppe")
+    _write_backlog(ppe)
+    old_head = _git(ppe, "rev-parse", "HEAD")
+    catalog = _catalog_root(ppe)
+    _seed_contract_packet(catalog, ppe)
+    writer = tmp_path / "other-writer"
+    _git(None, "clone", "-q", _git(ppe, "remote", "get-url", "origin"), str(writer))
+    _git(writer, "config", "user.email", "test@example.com")
+    _git(writer, "config", "user.name", "Test")
+    requirements = b"# Newly approved dependencies on product main\n"
+    (writer / "requirements.txt").write_bytes(requirements)
+    current_backlog = _backlog_payload()
+    current_backlog["items"][1]["reason"] = "Retain asset, expiry and region on forward/back."
+    (writer / BACKLOG_RELPATH).write_text(json.dumps(current_backlog))
+    new_head = _commit_all(writer, "advance product main")
+    _git(writer, "push", "-q", "origin", "main")
+    host_root = tmp_path / "host"
+    feed = _feed_repo(tmp_path / "feed-work")
+    build_config = BuildNextConfig(
+        ppe_repo=ppe,
+        packet_root=catalog,
+        feed_repo_url=str(feed),
+        checkout_root=tmp_path / "feed-checkout",
+        host_root=host_root,
+        allow_test_local_source_remote=True,
+        submit=True,
+        exclude_work_item_ids=(PREDECESSOR_WORK_ITEM_ID,),
+    )
+    generation = {
+        "last_attempt_classification": {
+            "category": "item_terminal",
+            "evidence": {
+                "reason": "item_terminal_success_merged",
+                "attempt_identity": {"work_item_id": PREDECESSOR_WORK_ITEM_ID},
+            },
+        },
+    }
+    result = _maybe_materialize_jit_catalog(
+        RefillConfig(build_next=build_config),
+        HostPaths.from_root(host_root),
+        exclusions=(PREDECESSOR_WORK_ITEM_ID,),
+        generation=generation,
+    )
+    assert result is not None and result["status"] == "created"
+    raw = json.loads((catalog / GUIDED_SHELL_CATALOG_FILENAME).read_text())
+    assert raw["target_source_commit"] == new_head
+    assert raw["dependency_source_sha256"] == canonical_dependency_source_sha256(requirements)
+    assert _git(ppe, "rev-parse", "HEAD") == old_head
+    receipt = build_next(build_config)
+    assert receipt.status == "QUEUED", receipt.message
+    assert receipt.submitted is True
+    assert receipt.work_item_id == GUIDED_SHELL_WORK_ITEM_ID
+    assert receipt.source_commit == new_head
+    job = yaml.safe_load(_git(feed, "show", f"jobs:{receipt.feed_path}"))
+    assert "Retain asset, expiry and region on forward/back." in (
+        job["manifest"]["lanes"][0]["instruction"]
+    )
+
+
+def test_failed_main_fetch_cannot_fall_back_to_stale_main(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import msos_autobuilder.catalog_materializer as materializer
+
+    ppe = _write_ppe(tmp_path / "ppe")
+    _write_backlog(ppe)
+    catalog = _catalog_root(ppe)
+    run = subprocess.run
+
+    def failed_fetch(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        if "fetch" in argv and "main" in argv:
+            return subprocess.CompletedProcess(argv, 128, "", "network unavailable")
+        return run(argv, **kwargs)
+
+    monkeypatch.setattr(materializer.subprocess, "run", failed_fetch)
+    with pytest.raises(CatalogMaterializerError, match="network unavailable"):
+        materialize_guided_shell_packet(
+            backlog=ppe / BACKLOG_RELPATH,
+            ppe_repo=ppe,
+            predecessor_terminal=_merged_proof(),
+            catalog_dir=catalog,
+            allow_test_local_source_remote=True,
+        )
+    assert not (catalog / GUIDED_SHELL_CATALOG_FILENAME).exists()
+
+
+@pytest.mark.parametrize("reported_work", ["", PREDECESSOR_WORK_ITEM_ID + "_other"])
+def test_unrelated_completion_does_not_unlock_predecessor(
+    tmp_path: Path, reported_work: str,
+) -> None:
+    report = tmp_path / f"build-next-ppe-{PREDECESSOR_WORK_ITEM_ID}-other"
+    report.mkdir()
+    (report / "completion-report.json").write_text(json.dumps({
+        "status": "merged", "work_item_id": reported_work, "job_id": report.name,
+    }))
+    assert resolve_predecessor_terminal_proof(results_root=tmp_path) is False
+
+
+def test_missing_frozen_requirements_cannot_create_unusable_packet(tmp_path: Path) -> None:
+    ppe = _write_ppe(tmp_path / "ppe")
+    _write_backlog(ppe)
+    _git(ppe, "rm", "requirements.txt")
+    _commit_all(ppe, "remove dependency contract")
+    _git(ppe, "push", "-q", "origin", "main")
+    with pytest.raises(CatalogMaterializerError, match="requirements.txt"):
+        materialize_guided_shell_packet(
+            backlog=ppe / BACKLOG_RELPATH,
+            ppe_repo=ppe,
+            predecessor_terminal=_merged_proof(),
+            catalog_dir=_catalog_root(ppe),
+            allow_test_local_source_remote=True,
+            fetch_remote=False,
+        )
+
+
+def test_git_timeout_returns_a_bounded_materializer_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import msos_autobuilder.catalog_materializer as materializer
+
+    def timeout(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        assert kwargs["timeout"] == 180
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+    monkeypatch.setattr(materializer.subprocess, "run", timeout)
+    with pytest.raises(CatalogMaterializerError, match="did not complete"):
+        materializer.freeze_ppe_main_sha(ppe_repo=Path("fixture"))
+
+
+def test_source_remote_cannot_redirect_packet_to_another_product(tmp_path: Path) -> None:
+    from msos_autobuilder.catalog_materializer import freeze_ppe_main_sha
+
+    ppe = _write_ppe(tmp_path / "ppe")
+    _git(ppe, "remote", "set-url", "origin", "https://github.com/example/other-product.git")
+    with pytest.raises(CatalogMaterializerError, match="target remote does not match"):
+        freeze_ppe_main_sha(ppe_repo=ppe, fetch_remote=False)
+
+
+def test_explicit_completion_identity_unlocks_predecessor(tmp_path: Path) -> None:
+    report = tmp_path / "completion-report.json"
+    proof = _merged_proof()
+    report.write_text(json.dumps(proof))
+    assert resolve_predecessor_terminal_proof(results_root=tmp_path) == proof

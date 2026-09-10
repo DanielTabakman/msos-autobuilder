@@ -89,7 +89,7 @@ def _maybe_materialize_jit_catalog(
                 config.build_next.allow_test_local_source_remote
             ),
             publish_to_jobs=config.build_next.packet_root is None,
-            fetch_remote=False,
+            fetch_remote=True,
         )
     except CatalogMaterializerError as exc:
         return {

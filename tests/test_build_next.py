@@ -1203,7 +1203,22 @@ def test_production_config_is_derived_from_installed_service_config(tmp_path: Pa
     assert config.ppe_repo == ppe.resolve()
     assert config.host_root == host_root.resolve()
     assert config.feed_repo_url == str(feed)
+    assert config.target_checkout_root == (host_root / "state" / "target-checkouts").resolve()
     assert receipt.status == "QUEUED"
+    assert receipt.job_id is not None
+    prepared = config.target_checkout_root / receipt.job_id
+    assert prepared.is_dir()
+    assert _git(prepared, "rev-parse", "HEAD") == receipt.source_commit
+    detached = subprocess.run(
+        ["git", "-C", str(prepared), "symbolic-ref", "-q", "--short", "HEAD"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    assert detached.returncode != 0
+    assert detached.stdout.strip() == ""
 
 
 def test_receipts_distinguish_running_queued_blocked_and_unfilled(tmp_path: Path) -> None:

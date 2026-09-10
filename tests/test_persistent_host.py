@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ import yaml
 
 import msos_autobuilder.lifecycle_evidence as lifecycle
 import msos_autobuilder.persistent_host as persistent_host_module
-from msos_autobuilder.codex_shadow import CodexShadowReport
+from msos_autobuilder.codex_shadow import CodexShadowReport, load_codex_host_config
 from msos_autobuilder.persistent_host import (
     HostJobError,
     HostLockError,
@@ -35,9 +36,13 @@ from msos_autobuilder.work_admission import (
 )
 
 
-def _git(path: Path, *args: str) -> str:
+def _git(path: Path | None, *args: str) -> str:
+    argv = ["git"]
+    if path is not None:
+        argv.extend(["-C", str(path)])
+    argv.extend(args)
     proc = subprocess.run(
-        ["git", "-C", str(path), *args],
+        argv,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -134,6 +139,7 @@ def _write_configs(
     root: Path,
     *,
     feed: dict[str, Any] | None = None,
+    allow_test_local_source_remote: bool = False,
 ) -> tuple[PersistentHostConfig, Path]:
     root.mkdir(parents=True, exist_ok=True)
     source = _init_repo(root / "source")
@@ -171,6 +177,8 @@ def _write_configs(
     }
     if feed is not None:
         service["job_feed"] = feed
+    if allow_test_local_source_remote:
+        service["allow_test_local_source_remote"] = True
     service_path = root / "service.yaml"
     service_path.write_text(yaml.safe_dump(service, sort_keys=False), encoding="utf-8")
     return load_persistent_host_config(service_path), source
@@ -182,6 +190,8 @@ def _fake_runner(
 ) -> CodexShadowReport:
     for spec in specs:
         workspace = config.workspace_root / spec.task.lane.lane_id
+        if workspace.exists():
+            shutil.rmtree(workspace)
         subprocess.run(
             ["git", "clone", "-q", str(config.source_repo), str(workspace)],
             check=True,
@@ -776,3 +786,328 @@ def test_unapproved_feed_job_is_not_imported(tmp_path: Path) -> None:
     paths = HostPaths.from_root(config.host_root)
     assert sync_git_job_feed(config, paths) == ()
     assert not (paths.pending / "not-approved.yaml").exists()
+
+
+SOURCE_REPO = "DanielTabakman/Probability-prediction-engine"
+
+
+def _product_remote(tmp_path: Path) -> tuple[Path, Path, str]:
+    """Return (worktree, bare origin path, frozen SHA) for freeze-handoff tests."""
+    work = _init_repo(tmp_path / "product")
+    frozen = _git(work, "rev-parse", "HEAD")
+    origin = tmp_path / "product-origin.git"
+    _git(None, "clone", "-q", "--bare", str(work), str(origin))
+    _git(work, "remote", "add", "origin", str(origin))
+    return work, origin, frozen
+
+
+def _enqueue_freeze_job(
+    paths: HostPaths,
+    *,
+    job_id: str,
+    frozen: str,
+    remote_url: Path | str,
+    repository: str = SOURCE_REPO,
+    expected_source_head: str | None = None,
+) -> Path:
+    paths.ensure()
+    payload = {
+        "version": 1,
+        "job_id": job_id,
+        "approved": True,
+        "publication_enabled": False,
+        "expected_source_head": expected_source_head or frozen,
+        "founder_build_next": {
+            "pipeline_id": "ppe",
+            "work_item_id": "fixture-work",
+            "work_item_source_sha256_v1": "a" * 64,
+            "work_admission": {
+                "admitted_target": {
+                    "target_repository": repository,
+                    "target_source_commit": frozen,
+                    "target_remote_url": str(remote_url),
+                }
+            },
+        },
+        "manifest": _manifest(),
+    }
+    destination = paths.pending / f"{job_id}.yaml"
+    destination.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    return destination
+
+
+def test_freeze_handoff_prepares_exact_detached_source_before_runner(tmp_path: Path) -> None:
+    _work, origin, frozen = _product_remote(tmp_path / "target")
+    config, source = _write_configs(
+        tmp_path / "host-case",
+        allow_test_local_source_remote=True,
+    )
+    paths = HostPaths.from_root(config.host_root)
+    _enqueue_freeze_job(paths, job_id="freeze-clean", frozen=frozen, remote_url=origin)
+    seen: dict[str, Any] = {}
+
+    def runner(host_config: Any, specs: tuple[Any, ...]) -> CodexShadowReport:
+        seen["source_repo"] = Path(host_config.source_repo).resolve()
+        seen["head"] = _git(host_config.source_repo, "rev-parse", "HEAD")
+        seen["branch"] = subprocess.run(
+            ["git", "-C", str(host_config.source_repo), "symbolic-ref", "-q", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        ).stdout.strip()
+        return _fake_runner(host_config, specs)
+
+    result = PersistentHost(config, runner=runner).run_once(sync_feed=False)
+    report = json.loads(
+        (paths.completed / "freeze-clean" / "report.json").read_text(encoding="utf-8")
+    )
+    prepared = (paths.target_checkouts / "freeze-clean").resolve()
+
+    assert result.outcome == "completed"
+    assert seen["head"] == frozen
+    assert seen["branch"] == ""
+    assert seen["source_repo"] == prepared
+    assert seen["source_repo"] != source.resolve()
+    assert report["prepared_source"]["prepared_target_source_commit"] == frozen
+    assert report["codex_report"]["source_head"] == frozen
+
+
+def test_freeze_handoff_ignores_stale_shared_source_checkout(tmp_path: Path) -> None:
+    _work, origin, frozen = _product_remote(tmp_path / "target")
+    config, source = _write_configs(
+        tmp_path / "host-case",
+        allow_test_local_source_remote=True,
+    )
+    (source / "stale.txt").write_text("stale\n", encoding="utf-8")
+    _git(source, "add", "stale.txt")
+    _git(source, "commit", "-qm", "stale shared checkout")
+    stale_head = _git(source, "rev-parse", "HEAD")
+    assert not stale_head.startswith(frozen[:7])
+
+    paths = HostPaths.from_root(config.host_root)
+    _enqueue_freeze_job(paths, job_id="freeze-stale", frozen=frozen, remote_url=origin)
+    seen: dict[str, str] = {}
+
+    def runner(host_config: Any, specs: tuple[Any, ...]) -> CodexShadowReport:
+        seen["head"] = _git(host_config.source_repo, "rev-parse", "HEAD")
+        return _fake_runner(host_config, specs)
+
+    result = PersistentHost(config, runner=runner).run_once(sync_feed=False)
+
+    assert result.outcome == "completed"
+    assert seen["head"] == frozen
+    assert _git(source, "rev-parse", "HEAD") == stale_head
+
+
+def test_freeze_handoff_missing_frozen_sha_fails_closed(tmp_path: Path) -> None:
+    _work, origin, _frozen = _product_remote(tmp_path / "target")
+    missing = "ab" * 20
+    config, _source = _write_configs(
+        tmp_path / "host-case",
+        allow_test_local_source_remote=True,
+    )
+    paths = HostPaths.from_root(config.host_root)
+    _enqueue_freeze_job(paths, job_id="freeze-missing", frozen=missing, remote_url=origin)
+    calls = 0
+
+    def runner(host_config: Any, specs: tuple[Any, ...]) -> CodexShadowReport:
+        nonlocal calls
+        calls += 1
+        return _fake_runner(host_config, specs)
+
+    result = PersistentHost(config, runner=runner).run_once(sync_feed=False)
+    assert result.outcome == "failed"
+    assert calls == 0
+    assert (paths.failed / "freeze-missing" / "error.json").exists()
+
+
+def test_freeze_handoff_wrong_remote_fails_closed(tmp_path: Path) -> None:
+    _work, origin, frozen = _product_remote(tmp_path / "target")
+    other = tmp_path / "other"
+    other.mkdir()
+    _git(other, "init", "-q")
+    _git(other, "config", "user.email", "test@example.com")
+    _git(other, "config", "user.name", "Test")
+    _git(other, "checkout", "-qb", "main")
+    (other / "README.md").write_text("unrelated remote history\n", encoding="utf-8")
+    _git(other, "add", "README.md")
+    _git(other, "commit", "-qm", "unrelated root")
+    other_origin = tmp_path / "other-origin.git"
+    _git(None, "clone", "-q", "--bare", str(other), str(other_origin))
+    assert frozen not in {
+        line.strip()
+        for line in _git(None, "--git-dir", str(other_origin), "rev-list", "--all").splitlines()
+        if line.strip()
+    }
+    config, _source = _write_configs(
+        tmp_path / "host-case",
+        allow_test_local_source_remote=True,
+    )
+    paths = HostPaths.from_root(config.host_root)
+    _enqueue_freeze_job(
+        paths,
+        job_id="freeze-wrong-remote",
+        frozen=frozen,
+        remote_url=other_origin,
+    )
+    calls = 0
+
+    def runner(host_config: Any, specs: tuple[Any, ...]) -> CodexShadowReport:
+        nonlocal calls
+        calls += 1
+        return _fake_runner(host_config, specs)
+
+    result = PersistentHost(config, runner=runner).run_once(sync_feed=False)
+    assert result.outcome == "failed"
+    assert calls == 0
+    assert origin.exists()
+    assert (paths.failed / "freeze-wrong-remote" / "error.json").exists()
+
+
+def test_freeze_handoff_does_not_clobber_dirty_unrelated_checkout(tmp_path: Path) -> None:
+    _work, origin, frozen = _product_remote(tmp_path / "target")
+    config, source = _write_configs(
+        tmp_path / "host-case",
+        allow_test_local_source_remote=True,
+    )
+    dirty = source / "human-wip.txt"
+    dirty.write_text("do not touch\n", encoding="utf-8")
+    before_status = _git(source, "status", "--porcelain")
+    assert "human-wip.txt" in before_status
+
+    paths = HostPaths.from_root(config.host_root)
+    _enqueue_freeze_job(paths, job_id="freeze-dirty", frozen=frozen, remote_url=origin)
+    seen: dict[str, Path] = {}
+
+    def runner(host_config: Any, specs: tuple[Any, ...]) -> CodexShadowReport:
+        seen["source_repo"] = Path(host_config.source_repo).resolve()
+        return _fake_runner(host_config, specs)
+
+    result = PersistentHost(config, runner=runner).run_once(sync_feed=False)
+
+    assert result.outcome == "completed"
+    assert seen["source_repo"] != source.resolve()
+    assert dirty.read_text(encoding="utf-8") == "do not touch\n"
+    assert _git(source, "status", "--porcelain") == before_status
+
+
+def test_freeze_handoff_rerun_is_idempotent(tmp_path: Path) -> None:
+    _work, origin, frozen = _product_remote(tmp_path / "target")
+    config, _source = _write_configs(
+        tmp_path / "host-case",
+        allow_test_local_source_remote=True,
+    )
+    paths = HostPaths.from_root(config.host_root)
+    host = PersistentHost(config, runner=_fake_runner)
+    host_config = load_codex_host_config(config.codex_host_config)
+
+    _enqueue_freeze_job(paths, job_id="freeze-idem-a", frozen=frozen, remote_url=origin)
+    job_a = parse_host_job((paths.pending / "freeze-idem-a.yaml").read_text(encoding="utf-8"))
+    cfg_a, prov_a = host._prepare_frozen_source(job_a, host_config)
+
+    _enqueue_freeze_job(paths, job_id="freeze-idem-b", frozen=frozen, remote_url=origin)
+    job_b = parse_host_job((paths.pending / "freeze-idem-b.yaml").read_text(encoding="utf-8"))
+    cfg_b, prov_b = host._prepare_frozen_source(job_b, host_config)
+
+    assert _git(cfg_a.source_repo, "rev-parse", "HEAD") == frozen
+    assert _git(cfg_b.source_repo, "rev-parse", "HEAD") == frozen
+    assert (
+        prov_a["prepared_target_source_commit"]
+        == prov_b["prepared_target_source_commit"]
+        == frozen
+    )
+    assert cfg_a.source_repo != cfg_b.source_repo
+
+    cfg_a_again, prov_a_again = host._prepare_frozen_source(job_a, host_config)
+    assert cfg_a_again.source_repo == cfg_a.source_repo
+    assert prov_a_again["prepared_target_source_commit"] == frozen
+
+    result = host.run_once(sync_feed=False)
+    report = json.loads(
+        (paths.completed / "freeze-idem-a" / "report.json").read_text(encoding="utf-8")
+    )
+    assert result.outcome == "completed"
+    assert report["prepared_source"]["prepared_target_source_commit"] == frozen
+    assert (paths.pending / "freeze-idem-b.yaml").exists()
+    assert _git(paths.target_checkouts / "freeze-idem-b", "rev-parse", "HEAD") == frozen
+
+
+def test_freeze_handoff_source_drift_between_packet_and_expected_fails_closed(
+    tmp_path: Path,
+) -> None:
+    _work, origin, frozen = _product_remote(tmp_path / "target")
+    drifted = "cd" * 20
+    _write_configs(
+        tmp_path / "host-case",
+        allow_test_local_source_remote=True,
+    )
+    with pytest.raises(HostJobError, match="drifted from expected_source_head"):
+        parse_host_job(
+            yaml.safe_dump(
+                {
+                    "version": 1,
+                    "job_id": "freeze-drift",
+                    "approved": True,
+                    "publication_enabled": False,
+                    "expected_source_head": drifted,
+                    "founder_build_next": {
+                        "work_admission": {
+                            "admitted_target": {
+                                "target_repository": SOURCE_REPO,
+                                "target_source_commit": frozen,
+                                "target_remote_url": str(origin),
+                            }
+                        }
+                    },
+                    "manifest": _manifest(),
+                },
+                sort_keys=False,
+            )
+        )
+
+
+def test_freeze_handoff_source_removed_from_remote_fails_at_execution(
+    tmp_path: Path,
+) -> None:
+    _work, _origin, frozen = _product_remote(tmp_path / "target")
+    orphan = tmp_path / "orphan-product"
+    orphan.mkdir()
+    _git(orphan, "init", "-q")
+    _git(orphan, "config", "user.email", "test@example.com")
+    _git(orphan, "config", "user.name", "Test")
+    _git(orphan, "checkout", "-qb", "main")
+    (orphan / "README.md").write_text("orphan remote without freeze\n", encoding="utf-8")
+    _git(orphan, "add", "README.md")
+    _git(orphan, "commit", "-qm", "orphan root")
+    orphan_origin = tmp_path / "orphan-origin.git"
+    _git(None, "clone", "-q", "--bare", str(orphan), str(orphan_origin))
+    assert frozen not in {
+        line.strip()
+        for line in _git(None, "--git-dir", str(orphan_origin), "rev-list", "--all").splitlines()
+        if line.strip()
+    }
+    config, _source = _write_configs(
+        tmp_path / "host-case",
+        allow_test_local_source_remote=True,
+    )
+    paths = HostPaths.from_root(config.host_root)
+    _enqueue_freeze_job(
+        paths,
+        job_id="freeze-gone",
+        frozen=frozen,
+        remote_url=orphan_origin,
+    )
+
+    calls = 0
+
+    def runner(host_config: Any, specs: tuple[Any, ...]) -> CodexShadowReport:
+        nonlocal calls
+        calls += 1
+        return _fake_runner(host_config, specs)
+
+    result = PersistentHost(config, runner=runner).run_once(sync_feed=False)
+    assert result.outcome == "failed"
+    assert calls == 0
+    assert (paths.failed / "freeze-gone" / "error.json").exists()

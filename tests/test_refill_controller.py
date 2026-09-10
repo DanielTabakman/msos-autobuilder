@@ -5962,6 +5962,9 @@ def test_refill_from_service_config_uses_isolated_supervisor_root_and_disabled_f
 
     assert config.supervisor_root == supervisor_root.resolve()
     assert config.build_next.submit is False
+    assert config.build_next.target_checkout_root == (
+        host_root / "state" / "target-checkouts"
+    ).resolve()
     assert refill_controller._supervisor_root(config, paths) == supervisor_root.resolve()
     production_default = (Path.home() / ".msos-autobuilder-supervisor").resolve()
     assert refill_controller._supervisor_root(config, paths) != production_default

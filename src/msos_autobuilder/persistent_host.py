@@ -16,7 +16,7 @@ import time
 import traceback
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -31,6 +31,7 @@ from .codex_shadow import (
     load_codex_shadow_manifest,
     run_codex_shadow,
 )
+from .job_packet import JobPacketError, fetch_declared_target
 from .lifecycle_evidence import (
     SourceRef,
     attempt_identity_from_job_yaml,
@@ -74,6 +75,7 @@ class PersistentHostConfig:
     heartbeat_seconds: float = 5.0
     publication_enabled: bool = False
     feed: GitJobFeedConfig | None = None
+    allow_test_local_source_remote: bool = False
 
 
 @dataclass(frozen=True)
@@ -86,6 +88,7 @@ class HostPaths:
     state: Path
     runtime_jobs: Path
     feed_repo: Path
+    target_checkouts: Path
     artifacts: Path
     logs: Path
     status_file: Path
@@ -108,6 +111,7 @@ class HostPaths:
             state=state,
             runtime_jobs=state / "jobs",
             feed_repo=state / "feed-repo",
+            target_checkouts=state / "target-checkouts",
             artifacts=resolved / "artifacts" / "host-jobs",
             logs=resolved / "logs",
             status_file=state / "host-status.json",
@@ -125,6 +129,7 @@ class HostPaths:
             self.failed,
             self.state,
             self.runtime_jobs,
+            self.target_checkouts,
             self.artifacts,
             self.logs,
             self.archive_staging,
@@ -143,6 +148,9 @@ class HostJob:
     approved_at: str | None = None
     expected_source_head: str | None = None
     source: str | None = None
+    admitted_target_repository: str | None = None
+    admitted_target_source_commit: str | None = None
+    admitted_target_remote_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -418,6 +426,9 @@ def load_persistent_host_config(path: str | Path) -> PersistentHostConfig:
         heartbeat_seconds=heartbeat_seconds,
         publication_enabled=False,
         feed=feed,
+        allow_test_local_source_remote=bool(
+            root.get("allow_test_local_source_remote", False)
+        ),
     )
 
 
@@ -442,6 +453,31 @@ def _validate_manifest(manifest: Any) -> dict[str, Any]:
     return manifest
 
 
+def _admitted_target_from_raw(
+    raw: Mapping[str, Any],
+) -> tuple[str, str, str] | None:
+    """Extract immutable packet freeze identity when present on a host job."""
+    founder = raw.get("founder_build_next")
+    if not isinstance(founder, Mapping):
+        return None
+    admission = founder.get("work_admission")
+    if not isinstance(admission, Mapping):
+        return None
+    admitted = admission.get("admitted_target")
+    if admitted is None:
+        return None
+    if not isinstance(admitted, Mapping):
+        raise HostJobError("founder_build_next.work_admission.admitted_target must be a mapping")
+    repository = str(admitted.get("target_repository") or "").strip()
+    commit = str(admitted.get("target_source_commit") or "").strip().lower()
+    remote_url = str(admitted.get("target_remote_url") or "").strip()
+    if not repository or not commit or not remote_url:
+        raise HostJobError("admitted_target is incomplete")
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise HostJobError("admitted_target.target_source_commit must be a full commit SHA")
+    return repository, commit, remote_url
+
+
 def parse_host_job(text: str, *, source: str | None = None) -> HostJob:
     try:
         raw = yaml.safe_load(text)
@@ -463,6 +499,16 @@ def parse_host_job(text: str, *, source: str | None = None) -> HostJob:
     )
     if expected_source_head and not re.fullmatch(r"[0-9a-fA-F]{7,64}", expected_source_head):
         raise HostJobError("expected_source_head must be a Git commit SHA")
+    admitted = _admitted_target_from_raw(raw)
+    admitted_repository = admitted[0] if admitted is not None else None
+    admitted_commit = admitted[1] if admitted is not None else None
+    admitted_remote = admitted[2] if admitted is not None else None
+    if admitted_commit is not None and expected_source_head:
+        expected = expected_source_head.lower()
+        if admitted_commit != expected and not admitted_commit.startswith(expected):
+            raise HostJobError(
+                "admitted_target.source commit drifted from expected_source_head"
+            )
     return HostJob(
         job_id=_safe_id(str(raw.get("job_id") or "")),
         approved=approved,
@@ -473,6 +519,9 @@ def parse_host_job(text: str, *, source: str | None = None) -> HostJob:
         approved_at=str(raw.get("approved_at") or "").strip() or None,
         expected_source_head=expected_source_head,
         source=source or (str(raw.get("source") or "").strip() or None),
+        admitted_target_repository=admitted_repository,
+        admitted_target_source_commit=admitted_commit,
+        admitted_target_remote_url=admitted_remote,
     )
 
 
@@ -1181,6 +1230,8 @@ class PersistentHost:
         report: CodexShadowReport,
         host_config: CodexHostConfig,
         specs: tuple[ShadowTaskSpec, ...],
+        *,
+        prepared_source: Mapping[str, Any] | None = None,
     ) -> Path:
         destination = self.paths.completed / job.job_id
         if destination.exists():
@@ -1191,7 +1242,7 @@ class PersistentHost:
         # A crash is then recovered as an interrupted job rather than losing it.
         shutil.copy2(running_path, staging / "job.yaml")
         patch_index = self._collect_workspace_patches(host_config, specs, staging)
-        report_payload = {
+        report_payload: dict[str, Any] = {
             "version": 1,
             "job_id": job.job_id,
             "outcome": "completed",
@@ -1203,6 +1254,8 @@ class PersistentHost:
             "codex_report": asdict(report),
             "patches": patch_index,
         }
+        if prepared_source is not None:
+            report_payload["prepared_source"] = dict(prepared_source)
         _atomic_write_json(staging / "report.json", report_payload)
         running_path.unlink()
         os.replace(staging, destination)
@@ -1236,6 +1289,57 @@ class PersistentHost:
             )
         return destination
 
+    def _prepare_frozen_source(
+        self,
+        job: HostJob,
+        host_config: CodexHostConfig,
+    ) -> tuple[CodexHostConfig, dict[str, Any]]:
+        repository = job.admitted_target_repository
+        commit = job.admitted_target_source_commit
+        remote_url = job.admitted_target_remote_url
+        if repository is None or commit is None or remote_url is None:
+            raise HostJobError("admitted target freeze identity is incomplete")
+        destination = (self.paths.target_checkouts / job.job_id).resolve()
+        configured_source = host_config.source_repo.resolve()
+        if destination == configured_source:
+            raise HostJobError(
+                "refusing to prepare freeze checkout over the configured mutable source_repo"
+            )
+        try:
+            destination.relative_to(self.paths.target_checkouts.resolve())
+        except ValueError as exc:
+            raise HostJobError(
+                "freeze checkout destination must stay under host state/target-checkouts"
+            ) from exc
+        try:
+            prepared_sha = fetch_declared_target(
+                target_repository=repository,
+                target_source_commit=commit,
+                destination=destination,
+                remote_url=remote_url,
+                allow_test_local_source_remote=self.config.allow_test_local_source_remote,
+            )
+        except JobPacketError as exc:
+            raise HostJobError(str(exc)) from exc
+        if prepared_sha != commit:
+            raise HostJobError(
+                f"prepared source {prepared_sha} drifted from frozen commit {commit}"
+            )
+        if job.expected_source_head:
+            expected = job.expected_source_head.lower()
+            if prepared_sha != expected and not prepared_sha.startswith(expected):
+                raise HostJobError(
+                    f"prepared source {prepared_sha} does not match expected "
+                    f"{job.expected_source_head}"
+                )
+        prepared = {
+            "target_repository": repository,
+            "target_remote_url": remote_url,
+            "prepared_target_source_commit": prepared_sha,
+            "prepared_target_checkout": _host_relative(self.config.host_root, destination),
+        }
+        return replace(host_config, source_repo=destination), prepared
+
     def process_one(self) -> HostRunResult:
         claimed = self._claim_next_job()
         if claimed is None:
@@ -1245,12 +1349,20 @@ class PersistentHost:
         runtime_dir = self.paths.runtime_jobs / job.job_id
         try:
             host_config = load_codex_host_config(self.config.codex_host_config)
-            current_head = self._current_source_head(host_config)
-            if job.expected_source_head and not current_head.startswith(job.expected_source_head):
-                raise HostJobError(
-                    f"source HEAD {current_head} does not match expected "
-                    f"{job.expected_source_head}"
-                )
+            prepared_source: dict[str, Any] | None = None
+            if job.admitted_target_source_commit is not None:
+                # Packetized freeze: prepare an isolated detached checkout. Never
+                # substitute the shared mutable human/product checkout.
+                host_config, prepared_source = self._prepare_frozen_source(job, host_config)
+            else:
+                current_head = self._current_source_head(host_config)
+                if job.expected_source_head and not current_head.startswith(
+                    job.expected_source_head
+                ):
+                    raise HostJobError(
+                        f"source HEAD {current_head} does not match expected "
+                        f"{job.expected_source_head}"
+                    )
 
             if runtime_dir.exists():
                 shutil.rmtree(runtime_dir)
@@ -1266,6 +1378,7 @@ class PersistentHost:
                 report,
                 host_config,
                 specs,
+                prepared_source=prepared_source,
             )
             self.last_result = {
                 "job_id": job.job_id,

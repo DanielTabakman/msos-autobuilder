@@ -337,6 +337,7 @@ class RefillConfig:
                 requested_by=requested_by,
                 # Disabled feed must not clone or count the live jobs branch.
                 submit=False,
+                target_checkout_root=service.host_root / "state" / "target-checkouts",
             )
         else:
             build_config = BuildNextConfig.from_service_config(

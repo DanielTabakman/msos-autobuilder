@@ -1,0 +1,140 @@
+{
+  "version": 1,
+  "pipeline_id": "ppe",
+  "work_item_id": "region_bet_guided_shell_v1",
+  "order": 7,
+  "eligible": true,
+  "target_repository": "DanielTabakman/Probability-prediction-engine",
+  "target_source_commit": "d5e1ec55bea2da0fc4f0192a0b96e0b9c20093e9",
+  "target_remote_url": "https://github.com/DanielTabakman/Probability-prediction-engine.git",
+  "adapter": "ppe_operator",
+  "allowed_paths": [
+    "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+    "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+    "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+    "apps/msos-web/src/lib/regionBet.ts",
+    "apps/msos-web/src/lib/msosWorkflowStore.ts",
+    "tests/test_msos_web_region_bet_guided_shell.py"
+  ],
+  "native_slice": {
+    "slice_id": "RegionBet-GuidedShell-Product-Slice002",
+    "build_branch": "build/auto/RegionBet-GuidedShell-Product-Slice002",
+    "layer_preset": "MSOS_UI",
+    "worker_mode": "local-agent",
+    "declared_plane": "PRODUCT-PLANE",
+    "touch_set": [
+      "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+      "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+      "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+      "apps/msos-web/src/lib/regionBet.ts",
+      "apps/msos-web/src/lib/msosWorkflowStore.ts",
+      "tests/test_msos_web_region_bet_guided_shell.py"
+    ],
+    "sequence_index": 1,
+    "total_slices": 4,
+    "previous_slices": [
+      "RegionBet-GuidedShell-Control-Slice001"
+    ],
+    "following_slices": [
+      "RegionBet-GuidedShell-Witness-Slice003",
+      "RegionBet-GuidedShell-Closeout-Slice004"
+    ],
+    "sprint_spec_path": "docs/SOP/SPRINT_REGION_BET_GUIDED_SHELL_V1.md",
+    "selection_record": "docs/SOP/POST_REGION_BET_GUIDED_SHELL_V1_SELECTION.md",
+    "raw_slice": {
+      "sliceId": "RegionBet-GuidedShell-Product-Slice002",
+      "layerPreset": "MSOS_UI",
+      "sprintSpecPath": "docs/SOP/SPRINT_REGION_BET_GUIDED_SHELL_V1.md",
+      "buildBranch": "build/auto/RegionBet-GuidedShell-Product-Slice002",
+      "declaredPlane": "PRODUCT-PLANE",
+      "implementationStatus": "PENDING",
+      "workerMode": "local-agent",
+      "susMinutes": 90,
+      "hardMinutes": 240,
+      "maxAttempts": 2,
+      "touchSet": [
+        "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+        "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+        "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+        "apps/msos-web/src/lib/regionBet.ts",
+        "apps/msos-web/src/lib/msosWorkflowStore.ts",
+        "tests/test_msos_web_region_bet_guided_shell.py"
+      ]
+    }
+  },
+  "phase_plan": "docs/SOP/PHASE_PLANS/region_bet_guided_shell_v1_relay.json",
+  "prerequisites": {
+    "version": 1,
+    "read_only": true,
+    "source": "ppe_native_read_only",
+    "evidence": {
+      "frozen_target_commit": "d5e1ec55bea2da0fc4f0192a0b96e0b9c20093e9",
+      "target_remote_url": "https://github.com/DanielTabakman/Probability-prediction-engine.git",
+      "phase_plan": "docs/SOP/PHASE_PLANS/region_bet_guided_shell_v1_relay.json",
+      "phase_plan_blob_sha": "d6f41727738d0e05a7d1e07bb0d7440ee2215334",
+      "control_slice": {
+        "slice_id": "RegionBet-GuidedShell-Control-Slice001",
+        "implementationStatus": "COMPLETE",
+        "nonBlocking": true
+      },
+      "source_files": [
+        {
+          "path": "docs/SOP/PHASE_PLANS/region_bet_guided_shell_v1_relay.json",
+          "exists": true,
+          "git_commit": "d5e1ec55bea2da0fc4f0192a0b96e0b9c20093e9",
+          "blob_sha": "d6f41727738d0e05a7d1e07bb0d7440ee2215334",
+          "sha256": "fca5465dfbda2ea257bd8edc8e51e1153bc634d736fd43523efa2fa0ce390736"
+        },
+        {
+          "path": "docs/SOP/SPRINT_REGION_BET_GUIDED_SHELL_V1.md",
+          "exists": true,
+          "git_commit": "d5e1ec55bea2da0fc4f0192a0b96e0b9c20093e9",
+          "blob_sha": "90152a5908225c0c4027a66aada40431f1363877",
+          "sha256": "fbcee0257ceef823b8d6795fd4e85d5360001aed158adc649f207faeff437abc"
+        },
+        {
+          "path": "docs/SOP/POST_REGION_BET_GUIDED_SHELL_V1_SELECTION.md",
+          "exists": true,
+          "git_commit": "d5e1ec55bea2da0fc4f0192a0b96e0b9c20093e9",
+          "blob_sha": "8c16ba77627d2240e630ba8c92e6184d15b4040c",
+          "sha256": "b769893660962be519a78eb70d15b3972e21337cc0b14b0ae3906585ff993f50"
+        },
+        {
+          "path": "docs/SOP/REGION_BET_GUIDED_SHELL_V1_EVIDENCE_STATUS.md",
+          "exists": true,
+          "git_commit": "d5e1ec55bea2da0fc4f0192a0b96e0b9c20093e9",
+          "blob_sha": "9eec579455b8e21f139d5ecdb1289b5b22e7c1cf",
+          "sha256": "0af990373d9011fe45bbc61f500c92541a72a7bd48ac30ca051c448398b8a400"
+        },
+        {
+          "path": "docs/SOP/ACTIVE_PHASE_MANIFEST.json",
+          "exists": true,
+          "git_commit": "d5e1ec55bea2da0fc4f0192a0b96e0b9c20093e9",
+          "blob_sha": "bef16bafa160f5240b85c69b119b6ba627e041bb",
+          "sha256": "c1425fc9fda014c0379113ff849a0466e3c31e5c4f489975becfbb913bf067dc"
+        }
+      ]
+    },
+    "statuses": [
+      {
+        "slice_id": "RegionBet-GuidedShell-Control-Slice001",
+        "status": "complete",
+        "non_blocking": true
+      }
+    ]
+  },
+  "dependency_source_sha256": "47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394",
+  "authority": {
+    "publication_enabled": false,
+    "merge_enabled": false,
+    "product_main_write_enabled": false
+  },
+  "validation": {
+    "profile_id": "ppe-ci-pytest-v1"
+  },
+  "merge_authority": {
+    "class": "AUTO_MERGE_WHEN_GREEN",
+    "declared_at": "2026-09-10T23:50:51+00:00"
+  },
+  "work_item_source_sha256_v1": "025d9709c1ec7ea7b7c1f8c2754ced34a474143f1c85d2c58a1efcd9c23bc246"
+}

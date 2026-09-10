@@ -1517,3 +1517,287 @@ def test_queued_revision_stays_in_flight_until_descendant_drafts(tmp_path: Path)
     )
     assert source_row["item_disposition"] == "item_terminal_success_drafted"
     assert source_row["refill_action"] == "exclude_item_and_select_next"
+
+
+def _emit_failed_execution(tmp_path: Path, identity: dict[str, object]) -> None:
+    _emit_prepared_and_submitted(tmp_path, identity)
+    emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind="host.execution",
+        identity=identity,
+        source_path=_source(tmp_path, "host-failed\n"),
+        payload={
+            "execution_outcome": "failed",
+            "host_archive_path": f"queue/failed/{identity['job_id']}",
+            "error_class": "PermissionError",
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:02:00Z",
+    )
+
+
+def _write_merged_completion_report(
+    tmp_path: Path,
+    *,
+    job_id: str,
+    work_item_id: str,
+    generation_id: str | None = None,
+    repository: str | None = None,
+    checkout_name: str = "completion-results-repo",
+    repository_in_handoff: bool = False,
+) -> Path:
+    path = (
+        tmp_path
+        / "state"
+        / checkout_name
+        / "results"
+        / "machine-1"
+        / job_id
+        / "completion-report.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, object] = {
+        "version": 1,
+        "job_id": job_id,
+        "work_item_id": work_item_id,
+        "status": "merged",
+        "pr_number": 5436,
+        "merge_commit": "f" * 40,
+    }
+    if generation_id is not None:
+        payload["generation_id"] = generation_id
+    if repository is not None and not repository_in_handoff:
+        payload["repository"] = repository
+    if repository is not None and repository_in_handoff:
+        payload["claim_release_handoff"] = {"repository": repository}
+    path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def _snapshot_for_identity(tmp_path: Path, identity: dict[str, object]) -> dict[str, object]:
+    digest = identity_digest(identity)
+    path = tmp_path / "state" / "attempt-lifecycle" / "attempts" / f"{digest}.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_failed_execution_with_matching_merged_completion_report_is_item_terminal(
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    _emit_failed_execution(tmp_path, identity)
+    _write_merged_completion_report(
+        tmp_path,
+        job_id=str(identity["job_id"]),
+        work_item_id=str(identity["work_item_id"]),
+        generation_id=str(identity["generation_id"]),
+        repository=str(identity["repository_identity"]),
+    )
+
+    lifecycle.reduce_attempt_lifecycle(tmp_path)
+    snapshot = _snapshot_for_identity(tmp_path, identity)
+    classification = lifecycle.canonical_refill_classification(
+        tmp_path,
+        job_id=str(identity["job_id"]),
+        generation_id=str(identity["generation_id"]),
+    )
+
+    assert snapshot["execution_outcome"] == "failed"
+    assert snapshot["item_disposition"] == "item_terminal_success_merged"
+    assert snapshot["item_terminal"] is True
+    assert snapshot["refill_action"] == "exclude_item_and_select_next"
+    assert classification is not None
+    assert classification["category"] == "item_terminal"
+    assert classification["evidence"]["reason"] == "item_terminal_success_merged"
+    assert classification["evidence"]["refill_action"] == "exclude_item_and_select_next"
+
+
+def test_failed_execution_with_rl_repo_merged_completion_report_is_item_terminal(
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    _emit_failed_execution(tmp_path, identity)
+    _write_merged_completion_report(
+        tmp_path,
+        job_id=str(identity["job_id"]),
+        work_item_id=str(identity["work_item_id"]),
+        repository=str(identity["repository_identity"]),
+        checkout_name="rl-repo",
+        repository_in_handoff=True,
+    )
+
+    lifecycle.reduce_attempt_lifecycle(tmp_path)
+    snapshot = _snapshot_for_identity(tmp_path, identity)
+
+    assert snapshot["execution_outcome"] == "failed"
+    assert snapshot["item_disposition"] == "item_terminal_success_merged"
+    assert snapshot["refill_action"] == "exclude_item_and_select_next"
+
+
+def test_failed_execution_with_mismatched_completion_report_stays_blocked(
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    _emit_failed_execution(tmp_path, identity)
+    _write_merged_completion_report(
+        tmp_path,
+        job_id=str(identity["job_id"]),
+        work_item_id="other-work-item",
+        generation_id=str(identity["generation_id"]),
+    )
+
+    lifecycle.reduce_attempt_lifecycle(tmp_path)
+    snapshot = _snapshot_for_identity(tmp_path, identity)
+
+    assert snapshot["execution_outcome"] == "failed"
+    assert snapshot["item_disposition"] == "operator_required_execution_failed"
+    assert snapshot["item_terminal"] is False
+    assert snapshot["refill_action"] == "block_fail_closed"
+
+
+def test_failed_execution_without_completion_report_stays_operator_required(
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    _emit_failed_execution(tmp_path, identity)
+
+    report = lifecycle.reduce_attempt_lifecycle(tmp_path)
+    snapshot = _snapshot_for_identity(tmp_path, identity)
+    classification = lifecycle.canonical_refill_classification(
+        tmp_path,
+        job_id=str(identity["job_id"]),
+        generation_id=str(identity["generation_id"]),
+    )
+
+    assert report["reduced"][0]["item_disposition"] == "operator_required_execution_failed"
+    assert snapshot["item_disposition"] == "operator_required_execution_failed"
+    assert snapshot["refill_action"] == "block_fail_closed"
+    assert classification is not None
+    assert classification["category"] == "unknown"
+    assert classification["evidence"]["reason"] == "operator_required_execution_failed"
+
+
+def test_failed_execution_with_matching_publication_merged_is_item_terminal(
+    tmp_path: Path,
+) -> None:
+    identity = _identity()
+    _emit_failed_execution(tmp_path, identity)
+    emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind="publication_review.disposition",
+        identity=identity,
+        source_path=_source(tmp_path, "publication-merged\n"),
+        payload={
+            "publication_review_disposition": "merged",
+            "reason_code": "publication_review.merged.verified.v1",
+            "merged_pr": "5436",
+            "product_branch": "autobuilder/job",
+            "product_commit": "a" * 40,
+            "merge_commit": "b" * 40,
+            "default_branch": "main",
+            "results_commit": "c" * 40,
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:10:00Z",
+    )
+
+    lifecycle.reduce_attempt_lifecycle(tmp_path)
+    snapshot = _snapshot_for_identity(tmp_path, identity)
+
+    assert snapshot["execution_outcome"] == "failed"
+    assert snapshot["publication_review_disposition"] == "merged"
+    assert snapshot["item_disposition"] == "item_terminal_success_merged"
+    assert snapshot["refill_action"] == "exclude_item_and_select_next"
+
+
+def test_coherent_completed_merged_path_unchanged(tmp_path: Path) -> None:
+    identity = _identity()
+    _emit_prepared_and_submitted(tmp_path, identity)
+    emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind="host.execution",
+        identity=identity,
+        source_path=_source(tmp_path, "host-complete\n"),
+        payload={
+            "execution_outcome": "completed",
+            "host_archive_path": f"queue/completed/{identity['job_id']}",
+            "error_class": None,
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:02:00Z",
+    )
+    emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind="relay.result",
+        identity=identity,
+        source_path=_source(tmp_path, "relay\n"),
+        payload={
+            "relay_disposition": "relayed",
+            "relayed_commit": "a" * 40,
+            "canonical_report_sha256": "3" * 64,
+            "source_report_sha256": "4" * 64,
+            "complete_patch_reconstruction": True,
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:03:00Z",
+    )
+    emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind="gate.validation",
+        identity=identity,
+        source_path=_source(tmp_path, "gate\n"),
+        payload={
+            "validation_outcome": "passed",
+            "validation_state": "candidate_passed",
+            "validation_contract_sha256": "5" * 64,
+            "gate_report_sha256": "6" * 64,
+            "results_commit": "b" * 40,
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:04:00Z",
+    )
+    emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind="revision.disposition",
+        identity=identity,
+        source_path=_source(tmp_path, "revision\n"),
+        payload={
+            "revision_disposition": "not_applicable",
+            "descendant_job_id": None,
+            "gate_report_sha256": "6" * 64,
+            "jobs_commit": None,
+        },
+        final=True,
+        closed_status="not_applicable",
+        observed_at="2026-07-29T12:05:00Z",
+    )
+    emit_lifecycle_evidence(
+        tmp_path,
+        evidence_kind="publication_review.disposition",
+        identity=identity,
+        source_path=_source(tmp_path, "publication\n"),
+        payload={
+            "publication_review_disposition": "merged",
+            "reason_code": "publication_review.merged.verified.v1",
+            "merged_pr": "1",
+            "product_branch": "autobuilder/job",
+            "product_commit": "c" * 40,
+            "merge_commit": "d" * 40,
+            "default_branch": "main",
+            "results_commit": "e" * 40,
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:06:00Z",
+    )
+
+    lifecycle.reduce_attempt_lifecycle(tmp_path)
+    snapshot = _snapshot_for_identity(tmp_path, identity)
+
+    assert snapshot["execution_outcome"] == "completed"
+    assert snapshot["item_disposition"] == "item_terminal_success_merged"
+    assert snapshot["refill_action"] == "exclude_item_and_select_next"

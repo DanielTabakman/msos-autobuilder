@@ -1112,6 +1112,15 @@ def _reduce_identity_heads(host_root: Path, heads: Sequence[Mapping[str, Any]]) 
         base["attempt_terminal"] = True
         base["attempt_terminality"] = "terminal"
         base["retry_eligibility"] = "operator_required"
+        merged_reason = _merged_completion_proof_reason(
+            host_root,
+            identity,
+            publication=payload("publication_review.disposition"),
+        )
+        if merged_reason is not None:
+            base["lifecycle_phase"] = "publication_review_recorded"
+            base["publication_review_disposition"] = "merged"
+            return _terminal_item(base, "item_terminal_success_merged", merged_reason)
         return _blocked(base, "complete", "operator_required_execution_failed")
     if execution != "completed":
         return _blocked(base, "evidence_conflict", "operator_required_evidence_conflict")
@@ -1205,6 +1214,152 @@ def _reduce_identity_heads(host_root: Path, heads: Sequence[Mapping[str, Any]]) 
         "evidence_" + (disposition or "missing"),
         "operator_required_publication_blocked",
     )
+
+
+_COMPLETION_REPORT_CHECKOUT_NAMES = (
+    "completion-results-repo",
+    "publisher-results-repo",
+    "rl-repo",
+    "revision-loop-results-repo",
+    "cg-repo",
+    "candidate-gate-results-repo",
+)
+
+
+def _normalize_repository_identity(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip().lower().removesuffix(".git")
+
+
+def _proof_identity_value(proof: Mapping[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        raw = proof.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw
+    handoff = proof.get("claim_release_handoff")
+    if isinstance(handoff, Mapping):
+        for key in keys:
+            raw = handoff.get(key)
+            if isinstance(raw, str) and raw.strip():
+                return raw
+    return None
+
+
+def _proof_identity_compatible(
+    identity: Mapping[str, Any],
+    proof: Mapping[str, Any],
+    *,
+    companion_identity: Mapping[str, Any] | None = None,
+) -> bool | None:
+    """Return True when durable merge proof matches attempt identity.
+
+    False means present identity fields conflict (fail closed). None means the
+    payload is not a usable merged completion proof for this attempt.
+    """
+    if str(proof.get("status") or "") != "merged":
+        return None
+    if companion_identity is not None:
+        try:
+            if identity_digest(companion_identity) != identity_digest(identity):
+                return False
+            return True
+        except LifecycleEvidenceError:
+            return False
+    field_pairs = (
+        ("job_id", ("job_id",)),
+        ("work_item_id", ("work_item_id",)),
+        ("generation_id", ("generation_id", "generation")),
+        ("repository_identity", ("repository_identity", "repository")),
+    )
+    compared = 0
+    for identity_key, proof_keys in field_pairs:
+        proof_value = _proof_identity_value(proof, *proof_keys)
+        if proof_value is None:
+            continue
+        compared += 1
+        expected = identity.get(identity_key)
+        if identity_key == "repository_identity":
+            if _normalize_repository_identity(expected) != _normalize_repository_identity(
+                proof_value
+            ):
+                return False
+        elif str(expected or "") != str(proof_value):
+            return False
+    # Require at least job_id on the report so a bare status=merged cannot upgrade.
+    if _proof_identity_value(proof, "job_id") is None:
+        return None
+    if compared == 0:
+        return None
+    return True
+
+
+def _iter_merged_completion_proofs(
+    host_root: Path, job_id: str
+) -> list[tuple[dict[str, Any], Mapping[str, Any] | None]]:
+    proofs: list[tuple[dict[str, Any], Mapping[str, Any] | None]] = []
+    seen: set[str] = set()
+
+    def _add(path: Path) -> None:
+        if not path.is_file():
+            return
+        key = str(path.resolve())
+        if key in seen:
+            return
+        try:
+            payload = _read_json_mapping(path)
+        except LifecycleEvidenceError:
+            return
+        if str(payload.get("status") or "") != "merged":
+            return
+        companion: Mapping[str, Any] | None = None
+        job_yaml = path.parent / "job.yaml"
+        if job_yaml.is_file():
+            try:
+                companion = attempt_identity_from_job_yaml(job_yaml)
+            except LifecycleEvidenceError:
+                # Unreadable companion identity fails closed for this proof only.
+                return
+        seen.add(key)
+        proofs.append((payload, companion))
+
+    state = host_root / "state"
+    for checkout_name in _COMPLETION_REPORT_CHECKOUT_NAMES:
+        results_root = state / checkout_name / "results"
+        if not results_root.is_dir():
+            continue
+        for path in sorted(results_root.glob(f"*/{job_id}/completion-report.json")):
+            _add(path)
+    _add(state / "completion-terminal-work-items" / f"{job_id}.json")
+    return proofs
+
+
+def _merged_completion_proof_reason(
+    host_root: Path,
+    identity: Mapping[str, Any],
+    *,
+    publication: Mapping[str, Any] | None,
+) -> str | None:
+    """Return terminal merged reason when durable same-attempt merge proof exists."""
+    job_id = str(identity.get("job_id") or "")
+    if job_id:
+        for proof, companion in _iter_merged_completion_proofs(host_root, job_id):
+            match = _proof_identity_compatible(
+                identity, proof, companion_identity=companion
+            )
+            if match is True:
+                return "publication_review.merged.verified.v1"
+            # mismatch: ignore this proof and keep searching / fall through fail-closed
+    if publication is not None:
+        disposition = str(publication.get("publication_review_disposition") or "")
+        if disposition == "merged":
+            reason = str(publication.get("reason_code") or "")
+            if reason in TERMINAL_REASON_CODES_V1:
+                expected = TERMINAL_REASON_CODES_V1[reason]
+                if expected["item_disposition"] == "item_terminal_success_merged":
+                    return reason
+            return None
+    return None
 
 
 def _payload_for_job_kind(

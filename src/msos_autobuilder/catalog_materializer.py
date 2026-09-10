@@ -20,6 +20,7 @@ from typing import Any
 from .build_next import FeedMutationLock, _prepare_feed_checkout
 from .job_packet import (
     DEFAULT_CATALOG_RELPATH,
+    JobPacketError,
     load_packet_dir,
     parse_approved_job_packet,
     prove_declared_commit_fetchable,
@@ -70,6 +71,7 @@ MERGED_COMPLETION_STATUSES = frozenset({"merged"})
 MERGED_LIFECYCLE_DISPOSITIONS = frozenset({"item_terminal_success_merged"})
 _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 _CATALOG_WRITE_LOCK = threading.Lock()
+_GIT_TIMEOUT_SECONDS = 180
 
 
 @dataclass(frozen=True)
@@ -111,16 +113,20 @@ def _git(repo: Path | None, *args: str, accepted: tuple[int, ...] = (0,)) -> str
     if repo is not None:
         argv.extend(["-C", str(repo)])
     argv.extend(args)
-    proc = subprocess.run(
-        argv,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        shell=False,
-        check=False,
-        env=git_environment(),
-    )
+    try:
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            shell=False,
+            check=False,
+            env=git_environment(),
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CatalogMaterializerError(f"Git command did not complete: {argv}") from exc
     if proc.returncode not in accepted:
         detail = (proc.stderr or proc.stdout or "command failed").strip()
         raise CatalogMaterializerError(f"{' '.join(argv)}: {detail}")
@@ -310,54 +316,40 @@ def freeze_ppe_main_sha(
     frozen_commit: str | None = None,
 ) -> tuple[str, str]:
     """Return (commit, remote_url) frozen at materialization time."""
+    repo = ppe_repo.expanduser().resolve() if ppe_repo is not None else None
+    remote = target_remote_url
+    if repo is not None:
+        remote = _git(repo, "remote", "get-url", "origin", accepted=(0, 2)) or remote
+    remote_repository = normalize_github_repository(remote)
+    if remote_repository != target_repository and not (
+        remote_repository is None and allow_test_local_source_remote
+    ):
+        raise CatalogMaterializerError("target remote does not match target_repository")
+
     if frozen_commit:
         commit = frozen_commit.lower()
         if not _COMMIT_RE.fullmatch(commit):
             raise CatalogMaterializerError("frozen_commit must be a 40-character SHA")
-        remote = target_remote_url
-        if ppe_repo is not None:
-            origin = _git(
-                ppe_repo.expanduser().resolve(),
-                "remote",
-                "get-url",
-                "origin",
-                accepted=(0, 2),
-            )
-            if origin:
-                remote = origin
-        if fetch_remote or allow_test_local_source_remote:
+    elif repo is None:
+        raise CatalogMaterializerError("ppe_repo is required to freeze current main SHA")
+    elif fetch_remote:
+        # A failed fetch is not permission to reuse an old tracking ref or HEAD.
+        _git(repo, "fetch", "--no-tags", "origin", "main")
+        commit = _git(repo, "rev-parse", "FETCH_HEAD^{commit}").lower()
+    else:
+        commit = _git(repo, "rev-parse", "HEAD^{commit}").lower()
+    if not _COMMIT_RE.fullmatch(commit):
+        raise CatalogMaterializerError("could not freeze a 40-character PPE main SHA")
+    if frozen_commit or not fetch_remote:
+        try:
             prove_declared_commit_fetchable(
                 target_repository=target_repository,
                 target_source_commit=commit,
                 remote_url=remote,
                 allow_test_local_source_remote=allow_test_local_source_remote,
             )
-        return commit, remote
-
-    if ppe_repo is None:
-        raise CatalogMaterializerError("ppe_repo is required to freeze current main SHA")
-    repo = ppe_repo.expanduser().resolve()
-    if fetch_remote:
-        _git(repo, "fetch", "--no-tags", "origin", "main", accepted=(0, 128))
-        commit = _git(repo, "rev-parse", "origin/main", accepted=(0, 128)).lower()
-        if not _COMMIT_RE.fullmatch(commit):
-            commit = _git(repo, "rev-parse", "HEAD").lower()
-    else:
-        commit = _git(repo, "rev-parse", "HEAD").lower()
-    if not _COMMIT_RE.fullmatch(commit):
-        raise CatalogMaterializerError("could not freeze a 40-character PPE main SHA")
-    remote = target_remote_url
-    origin = _git(repo, "remote", "get-url", "origin", accepted=(0, 2))
-    if origin:
-        remote = origin
-    prove_declared_commit_fetchable(
-        target_repository=target_repository
-        if normalize_github_repository(remote) is None
-        else (normalize_github_repository(remote) or target_repository),
-        target_source_commit=commit,
-        remote_url=remote,
-        allow_test_local_source_remote=allow_test_local_source_remote,
-    )
+        except JobPacketError as exc:
+            raise CatalogMaterializerError(str(exc)) from exc
     return commit, remote
 
 
@@ -369,6 +361,7 @@ def author_guided_shell_packet(
     target_repository: str = DEFAULT_TARGET_REPOSITORY,
     allow_test_local_source_remote: bool = False,
     allowed_paths: Sequence[str] | None = None,
+    objective: str | None = None,
 ) -> dict[str, Any]:
     paths = tuple(allowed_paths) if allowed_paths is not None else GUIDED_SHELL_ALLOWED_PATHS
     commit = frozen_commit.lower()
@@ -423,6 +416,11 @@ def author_guided_shell_packet(
         "authority": dict(DEFAULT_AUTHORITY),
         "validation": dict(DEFAULT_VALIDATION),
     }
+    if objective:
+        packet["native_slice"]["raw_slice"]["objective"] = objective
+        packet["native_slice"]["raw_slice"]["backlogSource"] = (
+            f"{BACKLOG_RELPATH}#{GUIDED_SHELL_WORK_ITEM_ID}"
+        )
     # Order-07 backlog does not authorize AUTO_MERGE_WHEN_GREEN; omit merge_authority.
     parse_approved_job_packet(
         packet,
@@ -502,13 +500,22 @@ def write_packet_to_catalog_dir(
     )
 
 
-def _dependency_digest(ppe_repo: Path | None) -> str:
+def _frozen_blob(ppe_repo: Path | None, commit: str, path: str) -> bytes:
     if ppe_repo is None:
-        return "0" * 64
-    requirements = ppe_repo.expanduser().resolve() / "requirements.txt"
-    if not requirements.is_file():
-        return "0" * 64
-    return canonical_dependency_source_sha256(requirements.read_bytes())
+        raise CatalogMaterializerError(f"ppe_repo is required to read frozen {path}")
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(ppe_repo), "cat-file", "blob", f"{commit}:{path}"],
+            stderr=subprocess.PIPE,
+            env=git_environment(),
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CatalogMaterializerError(f"cannot read frozen {path} at {commit}") from exc
+
+
+def _dependency_digest(ppe_repo: Path | None, commit: str) -> str:
+    return canonical_dependency_source_sha256(_frozen_blob(ppe_repo, commit, "requirements.txt"))
 
 
 def _publish_packet_to_jobs(
@@ -644,13 +651,49 @@ def materialize_guided_shell_packet(
         fetch_remote=fetch_remote,
         frozen_commit=frozen_commit,
     )
-    repo_name = normalize_github_repository(remote) or target_repository
+    if (
+        ppe_repo is not None
+        and isinstance(backlog, (str, Path))
+        and Path(backlog).resolve() == (ppe_repo / BACKLOG_RELPATH).resolve()
+    ):
+        # Eligibility and dependencies must describe the same commit as the job.
+        try:
+            frozen_backlog = json.loads(_frozen_blob(ppe_repo, commit, BACKLOG_RELPATH))
+        except (ValueError, UnicodeError) as exc:
+            raise CatalogMaterializerError("invalid frozen chapter backlog") from exc
+        if not isinstance(frozen_backlog, Mapping):
+            raise CatalogMaterializerError("frozen chapter backlog must be an object")
+        backlog = frozen_backlog
+        eligibility = evaluate_jit_eligibility(
+            frozen_backlog,
+            predecessor_terminal=predecessor_terminal,
+            related_pr_resolved=related_pr_resolved,
+        )
+        if eligibility.status != "eligible":
+            return MaterializeResult(
+                status="skipped",
+                reason=eligibility.reason,
+                work_item_id=eligibility.work_item_id,
+                order=eligibility.order,
+                frozen_commit=commit,
+                evidence=eligibility.evidence,
+            )
+    items = (
+        load_phase_chapter_backlog(backlog)
+        if isinstance(backlog, (str, Path, Mapping))
+        else backlog
+    )
+    selected_item = next(item for item in items if item.chapter_id == GUIDED_SHELL_WORK_ITEM_ID)
+    objective = str(selected_item.raw.get("reason") or "").strip()
+    if not objective:
+        raise CatalogMaterializerError("guided shell backlog objective is missing")
     packet = author_guided_shell_packet(
         frozen_commit=commit,
         target_remote_url=remote,
-        dependency_source_sha256=_dependency_digest(ppe_repo),
-        target_repository=repo_name,
+        dependency_source_sha256=_dependency_digest(ppe_repo, commit),
+        target_repository=target_repository,
         allow_test_local_source_remote=allow_test_local_source_remote,
+        objective=objective,
     )
     if publish_to_jobs:
         return _publish_packet_to_jobs(
@@ -691,8 +734,7 @@ def _scan_completion_reports(results_root: Path, work_item_id: str) -> list[dict
         report_work = str(
             payload.get("work_item_id") or payload.get("workItemId") or ""
         ).strip()
-        job_id = str(payload.get("job_id") or path.parent.name).strip()
-        if report_work != work_item_id and work_item_id not in job_id:
+        if report_work != work_item_id:
             continue
         matches.append({"status": str(payload.get("status") or "").strip().lower(), **payload})
     return matches
@@ -791,8 +833,6 @@ def ensure_jit_catalog_for_refill(
     is not durably terminal, or backlog/probe is unavailable. Fail closed only
     after eligibility is proven and authoring/publish cannot proceed safely.
     """
-    from .job_packet import JobPacketError
-
     try:
         if packet_root is not None:
             catalog = load_packet_dir(
@@ -833,6 +873,22 @@ def ensure_jit_catalog_for_refill(
             work_item_id=selected.work_item_id,
             order=selected.order,
             evidence={"selected_work_item_id": selected.work_item_id},
+        )
+
+    if GUIDED_SHELL_WORK_ITEM_ID in exclude_work_item_ids:
+        return MaterializeResult(
+            status="skipped",
+            reason="work_item_excluded",
+            work_item_id=GUIDED_SHELL_WORK_ITEM_ID,
+            order=GUIDED_SHELL_ORDER,
+        )
+    if any(packet.work_item_id == GUIDED_SHELL_WORK_ITEM_ID for packet in catalog):
+        # Existing nonselectable packets retain their immutable eligibility.
+        return MaterializeResult(
+            status="skipped",
+            reason="catalog_packet_not_eligible",
+            work_item_id=GUIDED_SHELL_WORK_ITEM_ID,
+            order=GUIDED_SHELL_ORDER,
         )
 
     proof = resolve_predecessor_terminal_proof(

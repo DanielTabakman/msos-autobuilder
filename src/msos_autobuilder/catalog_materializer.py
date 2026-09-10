@@ -781,29 +781,46 @@ def ensure_jit_catalog_for_refill(
     fetch_remote: bool = True,
     backlog_path: Path | None = None,
 ) -> MaterializeResult:
-    """Refill hook entry: materialize only when next select would be empty."""
-    if packet_root is not None:
-        catalog = load_packet_dir(
-            packet_root.expanduser().resolve(),
-            allow_test_local_source_remote=allow_test_local_source_remote,
-        )
-    else:
-        from .build_next import BuildNextConfig, _load_catalog
+    """Refill hook entry: materialize only when next select would be empty.
 
-        if not feed_repo_url.strip():
-            raise CatalogMaterializerError(
-                "JIT catalog probe requires packet_root or feed_repo_url"
-            )
-        catalog = _load_catalog(
-            BuildNextConfig(
-                feed_repo_url=feed_repo_url,
-                catalog_path=catalog_path,
-                jobs_branch=jobs_branch,
-                checkout_root=checkout_root,
+    Skip (do not fail closed) when catalog already has a next packet, predecessor
+    is not durably terminal, or backlog/probe is unavailable. Fail closed only
+    after eligibility is proven and authoring/publish cannot proceed safely.
+    """
+    from .job_packet import JobPacketError
+
+    try:
+        if packet_root is not None:
+            catalog = load_packet_dir(
+                packet_root.expanduser().resolve(),
                 allow_test_local_source_remote=allow_test_local_source_remote,
-                submit=False,
             )
+        else:
+            from .build_next import BuildNextConfig, _load_catalog
+
+            if not feed_repo_url.strip():
+                return MaterializeResult(
+                    status="skipped",
+                    reason="catalog_probe_unavailable",
+                )
+            catalog = _load_catalog(
+                BuildNextConfig(
+                    feed_repo_url=feed_repo_url,
+                    catalog_path=catalog_path,
+                    jobs_branch=jobs_branch,
+                    checkout_root=checkout_root,
+                    allow_test_local_source_remote=allow_test_local_source_remote,
+                    submit=False,
+                )
+            )
+    except JobPacketError as exc:
+        # Malformed catalog ownership stays with build_next/refill dispatch.
+        return MaterializeResult(
+            status="skipped",
+            reason="catalog_probe_unreadable",
+            evidence={"message": str(exc)},
         )
+
     selected = select_next_packet(catalog, exclude_work_item_ids=exclude_work_item_ids)
     if selected is not None:
         return MaterializeResult(
@@ -820,12 +837,26 @@ def ensure_jit_catalog_for_refill(
         results_root=results_root,
         generation=generation,
     )
+    if not is_predecessor_terminal_proof(proof):
+        return MaterializeResult(
+            status="skipped",
+            reason="predecessor_not_terminal",
+            work_item_id=GUIDED_SHELL_WORK_ITEM_ID,
+            order=GUIDED_SHELL_ORDER,
+        )
+
     if backlog_path is not None:
         backlog: Any = backlog_path
     elif ppe_repo is not None:
         backlog = ppe_repo.expanduser().resolve() / BACKLOG_RELPATH
+        if not Path(backlog).is_file():
+            raise CatalogMaterializerError(
+                f"JIT eligible but backlog missing at {backlog}"
+            )
     else:
-        raise CatalogMaterializerError("ppe_repo or backlog_path required for JIT refill")
+        raise CatalogMaterializerError(
+            "JIT eligible but ppe_repo/backlog_path missing for catalog materialization"
+        )
 
     return materialize_guided_shell_packet(
         backlog=backlog,

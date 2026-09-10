@@ -99,8 +99,21 @@ def _maybe_materialize_jit_catalog(
             "message": str(exc),
             "action": "blocked_config_or_conflict",
         }
-    if decision.status == "skipped" and decision.reason == "catalog_next_not_empty":
-        return None
+    if decision.status == "skipped":
+        # Not eligible / catalog already has next / probe unavailable: leave
+        # refill on its normal UNFILLED/dispatch path (do not BLOCK).
+        if decision.reason == "catalog_next_not_empty":
+            return None
+        return {
+            "blocked": False,
+            "status": "skipped",
+            "reason": decision.reason,
+            "message": decision.reason,
+            "action": "skipped",
+            "work_item_id": decision.work_item_id,
+            "order": decision.order,
+            "evidence": dict(decision.evidence or {}),
+        }
     return {
         "blocked": False,
         "status": decision.status,

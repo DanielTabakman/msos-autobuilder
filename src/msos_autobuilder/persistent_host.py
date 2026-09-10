@@ -32,13 +32,13 @@ from .codex_shadow import (
     run_codex_shadow,
 )
 from .job_packet import JobPacketError, fetch_declared_target
-from .windows_git_checkout import target_checkout_for_job
 from .lifecycle_evidence import (
     SourceRef,
     attempt_identity_from_job_yaml,
     emit_lifecycle_evidence,
     record_producer_evidence_error,
 )
+from .windows_git_checkout import target_checkout_for_job
 from .work_admission import AdmissionError, release_claim
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")

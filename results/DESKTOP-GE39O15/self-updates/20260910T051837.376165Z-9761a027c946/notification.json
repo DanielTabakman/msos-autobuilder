@@ -1,0 +1,10 @@
+{
+  "attempt_id": "20260910T051837.376165Z-9761a027c946",
+  "outcome": "failed_before_cutover",
+  "recorded_at": "2026-09-10T06:12:08.889933+00:00",
+  "report_path": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c-supervisor\\reports\\20260910T051837.376165Z-9761a027c946.json",
+  "requested_commit": "cf78b4d586156d459b2213ba77562cc4216c3549",
+  "requires_founder_attention": true,
+  "type": "autobuilder-self-update",
+  "version": 1
+}

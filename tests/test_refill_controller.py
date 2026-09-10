@@ -3583,6 +3583,77 @@ def test_fresh_canonical_permission_error_blocks_operator_required_without_ambig
     assert generation["item_scoped_terminal_exclusions"] == []
 
 
+def test_failed_execution_with_matching_merged_completion_report_excludes_item(
+    tmp_path: Path,
+) -> None:
+    ppe = _write_ppe(tmp_path / "ppe", snapshot=_ready_snapshot_with_a_b())
+    config = _refill_config(tmp_path, ppe=ppe, feed=_feed_repo(tmp_path / "feed-work"))
+    _write_host_status(config)
+    job_id = _submit_tracked_attempt(config)
+    _mark_post_recorder_generation(config)
+    assert config.build_next.host_root is not None
+    identity = attempt_identity_from_job_yaml(_feed_job_path(config, job_id))
+    assert identity is not None
+    _archive_job_yaml_from_feed(config, job_id, failed=True)
+    emit_lifecycle_evidence(
+        config.build_next.host_root,
+        evidence_kind="host.execution",
+        identity=identity,
+        source_path=_host_source(
+            config,
+            f"queue/failed/{job_id}/error.json",
+            {"message": "closed-stream conflict prevented upgrade"},
+        ),
+        payload={
+            "execution_outcome": "failed",
+            "host_archive_path": f"queue/failed/{job_id}",
+            "error_class": "LifecycleEvidenceError",
+        },
+        final=True,
+        closed_status="final",
+        observed_at="2026-07-29T12:00:00Z",
+    )
+    report_path = (
+        config.build_next.host_root
+        / "state"
+        / "completion-results-repo"
+        / "results"
+        / "machine-1"
+        / job_id
+        / "completion-report.json"
+    )
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "job_id": job_id,
+                "work_item_id": identity["work_item_id"],
+                "status": "merged",
+                "generation_id": identity["generation_id"],
+                "repository": identity["repository_identity"],
+                "pr_number": 5436,
+                "merge_commit": "f" * 40,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    reduce_attempt_lifecycle(config.build_next.host_root)
+
+    report = reconcile_refill(config)
+    generation = load_refill_generation(config)
+
+    assert report.status == "QUEUED"
+    assert generation is not None
+    classification = generation["last_attempt_classification"]
+    assert classification["stage"] == "canonical_lifecycle"
+    assert classification["evidence"]["reason"] == "item_terminal_success_merged"
+    assert classification["evidence"]["refill_action"] == "exclude_item_and_select_next"
+    assert A_WORK_ITEM in generation["item_scoped_terminal_exclusions"]
+
+
 def test_keep_one_creates_generation_and_refuses_ready_overwrite(tmp_path: Path) -> None:
     config = _refill_config(tmp_path)
     keep_one_running(config)

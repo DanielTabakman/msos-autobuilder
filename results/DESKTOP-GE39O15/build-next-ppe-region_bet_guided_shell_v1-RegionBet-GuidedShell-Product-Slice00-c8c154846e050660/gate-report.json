@@ -1,21 +1,135 @@
 {
-  "bootstrap": [],
-  "checks": [],
-  "errors": [
+  "bootstrap": [
     {
-      "message": "[WinError 32] The process cannot access the file because it is being used by another process: 'C:\\\\Users\\\\USER\\\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\\\state\\\\cg-ws\\\\f71498d821fc\\\\.msos-candidate-env\\\\Lib\\\\site-packages\\\\pip\\\\_internal\\\\locations\\\\__pycache__'",
-      "type": "PermissionError"
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\state\\cg-ws\\f71498d821fc\\.msos-candidate-env\\Scripts\\python.exe",
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "pip"
+      ],
+      "cwd": ".",
+      "finished_at": "2026-09-11T00:19:32.109691+00:00",
+      "name": "upgrade-pip",
+      "passed": true,
+      "phase": "bootstrap",
+      "required": true,
+      "returncode": 0,
+      "skipped": false,
+      "started_at": "2026-09-11T00:19:26.774420+00:00",
+      "stderr": "",
+      "stdout": "Requirement already satisfied: pip in c:\\users\\user\\.msos-autobuilder-pilot-issue119-6e9434c-20260807t0226z-c\\state\\cg-ws\\f71498d821fc\\.msos-candidate-env\\lib\\site-packages (24.2)\nCollecting pip\n  Using cached pip-26.2.1-py3-none-any.whl.metadata (4.6 kB)\nUsing cached pip-26.2.1-py3-none-any.whl (1.8 MB)\nInstalling collected packages: pip\n  Attempting uninstall: pip\n    Found existing installation: pip 24.2\n    Uninstalling pip-24.2:\n      Successfully uninstalled pip-24.2\nSuccessfully installed pip-26.2.1\n",
+      "timed_out": false
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\state\\cg-ws\\f71498d821fc\\.msos-candidate-env\\Scripts\\python.exe",
+        "-m",
+        "pip",
+        "install",
+        "-r",
+        "requirements.txt"
+      ],
+      "cwd": ".",
+      "finished_at": "2026-09-11T00:19:32.224689+00:00",
+      "name": "install-requirements",
+      "passed": false,
+      "phase": "bootstrap",
+      "required": true,
+      "returncode": 1,
+      "skipped": false,
+      "started_at": "2026-09-11T00:19:32.110690+00:00",
+      "stderr": "Traceback (most recent call last):\n  File \"<frozen runpy>\", line 198, in _run_module_as_main\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\state\\cg-ws\\f71498d821fc\\.msos-candidate-env\\Lib\\site-packages\\pip\\__main__.py\", line 22, in <module>\n    from pip._internal.cli.main import main as _main\nModuleNotFoundError: No module named 'pip._internal.cli.main'\n",
+      "stdout": "",
+      "timed_out": false
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\state\\cg-ws\\f71498d821fc\\.msos-candidate-env\\Scripts\\python.exe",
+        "-m",
+        "pip",
+        "install",
+        "pytest",
+        "pytest-xdist",
+        "ruff"
+      ],
+      "cwd": ".",
+      "finished_at": "2026-09-11T00:19:32.334689+00:00",
+      "name": "install-test-tooling",
+      "passed": false,
+      "phase": "bootstrap",
+      "required": true,
+      "returncode": 1,
+      "skipped": false,
+      "started_at": "2026-09-11T00:19:32.224689+00:00",
+      "stderr": "Traceback (most recent call last):\n  File \"<frozen runpy>\", line 198, in _run_module_as_main\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\state\\cg-ws\\f71498d821fc\\.msos-candidate-env\\Lib\\site-packages\\pip\\__main__.py\", line 22, in <module>\n    from pip._internal.cli.main import main as _main\nModuleNotFoundError: No module named 'pip._internal.cli.main'\n",
+      "stdout": "",
+      "timed_out": false
+    },
+    {
+      "argv": [
+        "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\state\\cg-ws\\f71498d821fc\\.msos-candidate-env\\Scripts\\python.exe",
+        "-m",
+        "pip",
+        "install",
+        "-e",
+        "."
+      ],
+      "cwd": ".",
+      "finished_at": "2026-09-11T00:19:32.444626+00:00",
+      "name": "install-candidate-package",
+      "passed": false,
+      "phase": "bootstrap",
+      "required": true,
+      "returncode": 1,
+      "skipped": false,
+      "started_at": "2026-09-11T00:19:32.334689+00:00",
+      "stderr": "Traceback (most recent call last):\n  File \"<frozen runpy>\", line 198, in _run_module_as_main\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\state\\cg-ws\\f71498d821fc\\.msos-candidate-env\\Lib\\site-packages\\pip\\__main__.py\", line 22, in <module>\n    from pip._internal.cli.main import main as _main\nModuleNotFoundError: No module named 'pip._internal.cli.main'\n",
+      "stdout": "",
+      "timed_out": false
     }
   ],
-  "finished_at": "2026-09-11T00:19:29.747433+00:00",
+  "candidate_environment": {
+    "path": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\state\\cg-ws\\f71498d821fc\\.msos-candidate-env",
+    "path_prepend": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\state\\cg-ws\\f71498d821fc\\.msos-candidate-env\\Scripts",
+    "python": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\state\\cg-ws\\f71498d821fc\\.msos-candidate-env\\Scripts\\python.exe",
+    "python_no_user_site": true,
+    "pythonpath_prepend": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\state\\cg-ws\\f71498d821fc\\.msos-candidate-env\\msos_gate_support",
+    "scripts": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\state\\cg-ws\\f71498d821fc\\.msos-candidate-env\\Scripts",
+    "virtual_env": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\state\\cg-ws\\f71498d821fc\\.msos-candidate-env"
+  },
+  "candidate_environment_removed": true,
+  "changed_paths": [
+    "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+    "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+    "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+    "tests/test_msos_web_region_bet_guided_shell.py"
+  ],
+  "checks": [],
+  "errors": [],
+  "finished_at": "2026-09-11T00:19:33.523102+00:00",
   "job_id": "build-next-ppe-region_bet_guided_shell_v1-RegionBet-GuidedShell-Product-Slice00-c8c154846e050660",
+  "patches": [
+    {
+      "changed_paths": [
+        "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+        "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+        "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+        "tests/test_msos_web_region_bet_guided_shell.py"
+      ],
+      "patch_file": "patches/RegionBet-GuidedShell-Product-Slice002.patch",
+      "patch_sha256": "a113c0b25b870717ca51b911f93e62196da6040423c9d96b397e5125e7293409",
+      "task_id": "RegionBet-GuidedShell-Product-Slice002"
+    }
+  ],
   "plan_source": "candidate_validation",
   "policy_blocks": [],
   "product_write_performed": false,
   "publication_enabled": false,
   "source_head": "d5e1ec55bea2da0fc4f0192a0b96e0b9c20093e9",
   "source_report_sha256": "a857d945da25986c83506bf449de73b7a2414ca391dee918c481b15161030d73",
-  "started_at": "2026-09-11T00:19:28.985462+00:00",
+  "started_at": "2026-09-11T00:19:14.302309+00:00",
   "state": "candidate_failed",
   "status": "failed",
   "validation_contract_sha256": "e119cf5efccbf073be560a60ad4f37b4e43cb5e2018b7494702501a9dd722a44",

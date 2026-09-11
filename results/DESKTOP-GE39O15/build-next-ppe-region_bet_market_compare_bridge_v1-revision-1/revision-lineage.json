@@ -1,0 +1,12 @@
+{
+  "gate_report_sha256": "888ab1b6fbf808b34d69281c71dfc0e266fb6c7c2a7703da5d34bca3b2bf11c2",
+  "job_id": "build-next-ppe-region_bet_market_compare_bridge_v1-revision-1",
+  "not_applicable_evidence": true,
+  "producer": "controlled_publisher",
+  "product_commit": "415355ac82fdbebff8b6998e44531fd485752a47",
+  "publication_report_sha256": "4e057f77d494527720d023283e7dbd0479f4f0ee28b93be2b2613093d9760d01",
+  "revision_disposition": "not_applicable",
+  "revision_evidence_id": "599fdfa34bf75f04a8c9183b662bcadd",
+  "revision_evidence_sha256": "599fdfa34bf75f04a8c9183b662bcadd52c1ede6514276aec071a9e2098e71c6",
+  "version": 1
+}

@@ -1,0 +1,14 @@
+{
+  "canon_conflict": false,
+  "claim_generation": 3,
+  "claim_writer_id": "build-next:build-next-ppe-region_bet_market_compare_bridge_v1-RegionBet-MarketCompare-Prod-91113c597b863830",
+  "evidence_conflict": false,
+  "founder_decision_required": false,
+  "job_id": "build-next-ppe-region_bet_market_compare_bridge_v1-revision-1",
+  "objective_sha256": "cdb3083acfbd98295a4f2ef805ee48bab7da54a4e8f213b8850f95d36c0b77bd",
+  "ownership_conflict": false,
+  "pr_number": 5444,
+  "producer": "controlled_publisher",
+  "product_commit": "415355ac82fdbebff8b6998e44531fd485752a47",
+  "version": 1
+}

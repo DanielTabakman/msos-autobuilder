@@ -1,0 +1,775 @@
+diff --git a/apps/msos-web/src/components/RegionBetGuidedShell.tsx b/apps/msos-web/src/components/RegionBetGuidedShell.tsx
+new file mode 100644
+index 0000000..cb21afb
+--- /dev/null
++++ b/apps/msos-web/src/components/RegionBetGuidedShell.tsx
+@@ -0,0 +1,193 @@
++"use client";
++
++import { useCallback, useEffect, useMemo, useState } from "react";
++
++import {
++  RegionBetGuidedShellPanel,
++  type RegionBetGuidedAssetOption,
++} from "@/components/RegionBetGuidedShellPanel";
++import {
++  REGION_BET_GUIDED_SHELL_STEPS,
++  applyRegionBetGuidedShellPatch,
++  buildRegionBetGuidedShellSnapshot,
++  createRegionBetGuidedDraft,
++  isRegionBetGuidedDraftPersistable,
++  nextRegionBetGuidedShellStep,
++  previousRegionBetGuidedShellStep,
++  regionBetGuidedShellStepIndex,
++  type RegionBetGuidedShellPatch,
++  type RegionBetGuidedShellStep,
++} from "@/lib/regionBetGuidedShell";
++import {
++  REGION_BET_PERSISTENCE_LABEL,
++  fetchRegionBet,
++  persistRegionBet,
++  type RegionBetContract,
++} from "@/lib/regionBet";
++
++const DEFAULT_ASSET_OPTIONS: RegionBetGuidedAssetOption[] = [
++  { asset_id: "ETH", symbol: "ETH", venue: "Deribit", spot_usd: 3000 },
++  { asset_id: "BTC", symbol: "BTC", venue: "Deribit", spot_usd: 65000 },
++  { asset_id: "NVDA", symbol: "NVDA", venue: "equity options chain", spot_usd: 120 },
++];
++
++type SaveState = "idle" | "saving" | "saved" | "invalid" | "offline";
++
++type RegionBetGuidedShellProps = {
++  initialRegionBet?: RegionBetContract | null;
++  initialStep?: RegionBetGuidedShellStep;
++  assetOptions?: RegionBetGuidedAssetOption[];
++};
++
++export function RegionBetGuidedShell({
++  initialRegionBet = null,
++  initialStep = "asset",
++  assetOptions = DEFAULT_ASSET_OPTIONS,
++}: RegionBetGuidedShellProps) {
++  const [step, setStep] = useState<RegionBetGuidedShellStep>(initialStep);
++  const [draft, setDraft] = useState<RegionBetContract>(() =>
++    createRegionBetGuidedDraft(initialRegionBet),
++  );
++  const [hydrated, setHydrated] = useState(Boolean(initialRegionBet));
++  const [saveState, setSaveState] = useState<SaveState>("idle");
++
++  useEffect(() => {
++    let cancelled = false;
++    void fetchRegionBet().then((stored) => {
++      if (cancelled) return;
++      if (stored) {
++        setDraft(createRegionBetGuidedDraft(stored));
++      }
++      setHydrated(true);
++    });
++    return () => {
++      cancelled = true;
++    };
++  }, []);
++
++  const currentIndex = regionBetGuidedShellStepIndex(step);
++  const snapshot = useMemo(() => buildRegionBetGuidedShellSnapshot(draft), [draft]);
++
++  const updateDraft = useCallback((patch: RegionBetGuidedShellPatch) => {
++    setDraft((current) => applyRegionBetGuidedShellPatch(current, patch));
++    setSaveState("idle");
++  }, []);
++
++  const persistDraft = useCallback(async () => {
++    if (!isRegionBetGuidedDraftPersistable(draft)) {
++      setSaveState("invalid");
++      return false;
++    }
++    setSaveState("saving");
++    const saved = await persistRegionBet(draft);
++    setSaveState(saved ? "saved" : "offline");
++    return true;
++  }, [draft]);
++
++  const goPrevious = useCallback(() => {
++    setStep((current) => previousRegionBetGuidedShellStep(current));
++  }, []);
++
++  const goNext = useCallback(async () => {
++    const saved = await persistDraft();
++    if (saved) {
++      setStep((current) => nextRegionBetGuidedShellStep(current));
++    }
++  }, [persistDraft]);
++
++  const atFirstStep = currentIndex === 0;
++  const atLastStep = currentIndex === REGION_BET_GUIDED_SHELL_STEPS.length - 1;
++  const statusLabel =
++    saveState === "saving"
++      ? "Saving draft..."
++      : saveState === "saved"
++        ? REGION_BET_PERSISTENCE_LABEL
++        : saveState === "invalid"
++          ? "Draft needs a valid asset, window, and price region before saving."
++          : saveState === "offline"
++            ? "Saved locally; server sync will retry from the Region Bet contract."
++            : hydrated
++              ? "Draft loaded from the Region Bet contract."
++              : "Loading Region Bet draft...";
++
++  return (
++    <section className="work strategy-lab-work" aria-label="Region Bet guided shell">
++      <div className="panel chart">
++        <div className="panel-head">
++          <div>
++            <h2>Region Bet</h2>
++            <div className="panel-sub">Guided draft shell - simulation only.</div>
++          </div>
++          <span className="tag">Guided</span>
++        </div>
++        <nav className="workflow-stepper" aria-label="Region Bet workflow">
++          {REGION_BET_GUIDED_SHELL_STEPS.map((item, index) => {
++            const active = item.id === step;
++            const done = index < currentIndex;
++            const className = [
++              "workflow-step",
++              active ? "active" : undefined,
++              done ? "done" : undefined,
++            ]
++              .filter(Boolean)
++              .join(" ");
++            return (
++              <button
++                key={item.id}
++                type="button"
++                className={className}
++                aria-current={active ? "step" : undefined}
++                onClick={() => setStep(item.id)}
++              >
++                <span className="workflow-step-num" aria-hidden="true">
++                  {index + 1}
++                </span>
++                {item.label}
++              </button>
++            );
++          })}
++        </nav>
++      </div>
++
++      <RegionBetGuidedShellPanel
++        step={step}
++        draft={draft}
++        snapshot={snapshot}
++        assetOptions={assetOptions}
++        onDraftChange={updateDraft}
++      />
++
++      <div className="panel outcome">
++        <div className="decision-strip">
++          <div>
++            <strong>{statusLabel}</strong>
++            <p>
++              Retained context: {snapshot.symbol ?? snapshot.asset_id}, expiry{" "}
++              {snapshot.expiry_utc.slice(0, 10)}, region{" "}
++              {snapshot.selected_region.price_min_usd} to{" "}
++              {snapshot.selected_region.price_max_usd}.
++            </p>
++          </div>
++          <div className="lab-setup-actions">
++            <button
++              type="button"
++              className="btn slim"
++              onClick={goPrevious}
++              disabled={atFirstStep}
++            >
++              Back
++            </button>
++            <button
++              type="button"
++              className="btn slim primary"
++              onClick={atLastStep ? persistDraft : goNext}
++              disabled={saveState === "saving"}
++            >
++              {atLastStep ? "Save draft" : "Next"}
++            </button>
++          </div>
++        </div>
++      </div>
++    </section>
++  );
++}
+diff --git a/apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx b/apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx
+new file mode 100644
+index 0000000..efc98a5
+--- /dev/null
++++ b/apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx
+@@ -0,0 +1,260 @@
++"use client";
++
++import type {
++  RegionBetGuidedShellStep,
++  RegionBetGuidedShellSnapshot,
++} from "@/lib/regionBetGuidedShell";
++import type { RegionBetContract } from "@/lib/regionBet";
++
++export type RegionBetGuidedAssetOption = {
++  asset_id: string;
++  symbol?: string;
++  venue?: string;
++  spot_usd: number;
++};
++
++type RegionBetGuidedShellPanelProps = {
++  step: RegionBetGuidedShellStep;
++  draft: RegionBetContract;
++  snapshot: RegionBetGuidedShellSnapshot;
++  assetOptions: RegionBetGuidedAssetOption[];
++  onDraftChange: (patch: {
++    asset?: Partial<RegionBetContract["asset"]>;
++    entry?: Partial<RegionBetContract["entry"]>;
++    target?: Partial<RegionBetContract["target"]>;
++    selected_region?: Partial<RegionBetContract["selected_region"]>;
++    user_note?: string;
++  }) => void;
++};
++
++function datetimeValue(value: string | undefined): string {
++  if (!value) return "";
++  const date = new Date(value);
++  if (Number.isNaN(date.getTime())) return "";
++  return date.toISOString().slice(0, 16);
++}
++
++function fromDatetimeInput(value: string): string | undefined {
++  if (!value) return undefined;
++  const parsed = new Date(value);
++  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
++}
++
++function numberOrCurrent(value: string, current: number): number {
++  const parsed = Number(value);
++  return Number.isFinite(parsed) ? parsed : current;
++}
++
++export function RegionBetGuidedShellPanel({
++  step,
++  draft,
++  snapshot,
++  assetOptions,
++  onDraftChange,
++}: RegionBetGuidedShellPanelProps) {
++  if (step === "asset") {
++    return (
++      <div className="panel chart" data-testid="region-bet-guided-shell-panel">
++        <div className="panel-head">
++          <div>
++            <h2>Choose the asset</h2>
++            <div className="panel-sub">Simulation-only Region Bet draft.</div>
++          </div>
++          <span className="tag">Paper</span>
++        </div>
++        <div className="lab-setup-row">
++          <label>
++            <span>Asset</span>
++            <select
++              value={draft.asset.asset_id}
++              onChange={(event) => {
++                const selected = assetOptions.find(
++                  (item) => item.asset_id === event.currentTarget.value,
++                );
++                if (!selected) return;
++                onDraftChange({
++                  asset: {
++                    asset_id: selected.asset_id,
++                    symbol: selected.symbol ?? selected.asset_id,
++                    venue: selected.venue,
++                  },
++                  entry: { spot_usd: selected.spot_usd },
++                });
++              }}
++            >
++              {assetOptions.map((asset) => (
++                <option key={asset.asset_id} value={asset.asset_id}>
++                  {asset.symbol ?? asset.asset_id}
++                </option>
++              ))}
++            </select>
++          </label>
++          <label>
++            <span>Spot reference</span>
++            <input
++              type="number"
++              min="0"
++              step="0.01"
++              value={draft.entry.spot_usd}
++              onChange={(event) =>
++                onDraftChange({
++                  entry: {
++                    spot_usd: numberOrCurrent(event.currentTarget.value, draft.entry.spot_usd),
++                  },
++                })
++              }
++            />
++          </label>
++        </div>
++      </div>
++    );
++  }
++
++  if (step === "window") {
++    return (
++      <div className="panel chart" data-testid="region-bet-guided-shell-panel">
++        <div className="panel-head">
++          <div>
++            <h2>Set the expiry window</h2>
++            <div className="panel-sub">Forward and back keeps these dates on the same draft.</div>
++          </div>
++          <span className="tag">Window</span>
++        </div>
++        <div className="lab-setup-row">
++          <label>
++            <span>Expiry</span>
++            <input
++              type="datetime-local"
++              value={datetimeValue(draft.target.expiry_utc)}
++              onChange={(event) => {
++                const next = fromDatetimeInput(event.currentTarget.value);
++                if (next) onDraftChange({ target: { expiry_utc: next } });
++              }}
++            />
++          </label>
++          <label>
++            <span>Window start</span>
++            <input
++              type="datetime-local"
++              value={datetimeValue(draft.target.window_start_utc)}
++              onChange={(event) => {
++                const next = fromDatetimeInput(event.currentTarget.value);
++                if (next) {
++                  onDraftChange({
++                    target: { window_start_utc: next },
++                    selected_region: { time_start_utc: next },
++                  });
++                }
++              }}
++            />
++          </label>
++          <label>
++            <span>Window end</span>
++            <input
++              type="datetime-local"
++              value={datetimeValue(draft.target.window_end_utc)}
++              onChange={(event) => {
++                const next = fromDatetimeInput(event.currentTarget.value);
++                if (next) {
++                  onDraftChange({
++                    target: { window_end_utc: next },
++                    selected_region: { time_end_utc: next },
++                  });
++                }
++              }}
++            />
++          </label>
++        </div>
++      </div>
++    );
++  }
++
++  if (step === "region") {
++    return (
++      <div className="panel chart" data-testid="region-bet-guided-shell-panel">
++        <div className="panel-head">
++          <div>
++            <h2>Select the price-time region</h2>
++            <div className="panel-sub">This shell stores the selected box, not execution intent.</div>
++          </div>
++          <span className="tag">Region</span>
++        </div>
++        <div className="lab-setup-row">
++          <label>
++            <span>Price min</span>
++            <input
++              type="number"
++              min="0"
++              step="0.01"
++              value={draft.selected_region.price_min_usd}
++              onChange={(event) =>
++                onDraftChange({
++                  selected_region: {
++                    price_min_usd: numberOrCurrent(
++                      event.currentTarget.value,
++                      draft.selected_region.price_min_usd,
++                    ),
++                  },
++                })
++              }
++            />
++          </label>
++          <label>
++            <span>Price max</span>
++            <input
++              type="number"
++              min="0"
++              step="0.01"
++              value={draft.selected_region.price_max_usd}
++              onChange={(event) =>
++                onDraftChange({
++                  selected_region: {
++                    price_max_usd: numberOrCurrent(
++                      event.currentTarget.value,
++                      draft.selected_region.price_max_usd,
++                    ),
++                  },
++                })
++              }
++            />
++          </label>
++        </div>
++      </div>
++    );
++  }
++
++  return (
++    <div className="panel chart" data-testid="region-bet-guided-shell-panel">
++      <div className="panel-head">
++        <div>
++          <h2>Review the Region Bet</h2>
++          <div className="panel-sub">Draft persistence uses the Region Bet contract.</div>
++        </div>
++        <span className="tag teal">Ready</span>
++      </div>
++      <div className="score" aria-label="Region Bet draft summary">
++        <div className="small-panel">
++          <div className="k">Asset</div>
++          <div className="v teal">{snapshot.symbol ?? snapshot.asset_id}</div>
++        </div>
++        <div className="small-panel">
++          <div className="k">Expiry</div>
++          <div className="v">{snapshot.expiry_utc.slice(0, 10)}</div>
++        </div>
++        <div className="small-panel">
++          <div className="k">Region</div>
++          <div className="v amber">
++            {snapshot.selected_region.price_min_usd} to {snapshot.selected_region.price_max_usd}
++          </div>
++        </div>
++      </div>
++      <label>
++        <span>Note</span>
++        <textarea
++          value={draft.user_note ?? ""}
++          onChange={(event) => onDraftChange({ user_note: event.currentTarget.value })}
++        />
++      </label>
++    </div>
++  );
++}
+diff --git a/apps/msos-web/src/lib/regionBetGuidedShell.ts b/apps/msos-web/src/lib/regionBetGuidedShell.ts
+new file mode 100644
+index 0000000..508692a
+--- /dev/null
++++ b/apps/msos-web/src/lib/regionBetGuidedShell.ts
+@@ -0,0 +1,211 @@
++import {
++  isRegionBetContract,
++  newRegionBetId,
++  type RegionBetContract,
++} from "@/lib/regionBet";
++
++export type RegionBetGuidedShellStep = "asset" | "window" | "region" | "review";
++
++export type RegionBetGuidedShellStepDef = {
++  id: RegionBetGuidedShellStep;
++  label: string;
++};
++
++export type RegionBetGuidedShellSnapshot = {
++  asset_id: string;
++  symbol?: string;
++  venue?: string;
++  expiry_utc: string;
++  window_start_utc?: string;
++  window_end_utc?: string;
++  selected_region: RegionBetContract["selected_region"];
++};
++
++export type RegionBetGuidedShellPatch = {
++  asset?: Partial<RegionBetContract["asset"]>;
++  entry?: Partial<RegionBetContract["entry"]>;
++  target?: Partial<RegionBetContract["target"]>;
++  selected_region?: Partial<RegionBetContract["selected_region"]>;
++  market_snapshot?: Partial<RegionBetContract["market_snapshot"]>;
++  risk_constraints?: Partial<RegionBetContract["risk_constraints"]>;
++  user_note?: string;
++};
++
++export const REGION_BET_GUIDED_SHELL_STEPS: RegionBetGuidedShellStepDef[] = [
++  { id: "asset", label: "Asset" },
++  { id: "window", label: "Window" },
++  { id: "region", label: "Region" },
++  { id: "review", label: "Review" },
++];
++
++const DEFAULT_ASSET_ID = "ETH";
++const DEFAULT_VENUE = "Deribit";
++const DEFAULT_SPOT_USD = 3000;
++const DEFAULT_REGION_WIDTH_PCT = 0.08;
++
++function isoDaysFrom(now: Date, days: number): string {
++  const next = new Date(now);
++  next.setUTCDate(next.getUTCDate() + days);
++  next.setUTCHours(16, 0, 0, 0);
++  return next.toISOString();
++}
++
++function finiteOrFallback(value: unknown, fallback: number): number {
++  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
++}
++
++function normalizeDate(value: string | undefined, fallback: string): string {
++  if (!value) return fallback;
++  return Number.isNaN(Date.parse(value)) ? fallback : new Date(value).toISOString();
++}
++
++function normalizeStepIndex(step: RegionBetGuidedShellStep): number {
++  const index = REGION_BET_GUIDED_SHELL_STEPS.findIndex((item) => item.id === step);
++  return index < 0 ? 0 : index;
++}
++
++export function regionBetGuidedShellStepIndex(step: RegionBetGuidedShellStep): number {
++  return normalizeStepIndex(step);
++}
++
++export function nextRegionBetGuidedShellStep(
++  step: RegionBetGuidedShellStep,
++): RegionBetGuidedShellStep {
++  const nextIndex = Math.min(
++    normalizeStepIndex(step) + 1,
++    REGION_BET_GUIDED_SHELL_STEPS.length - 1,
++  );
++  return REGION_BET_GUIDED_SHELL_STEPS[nextIndex].id;
++}
++
++export function previousRegionBetGuidedShellStep(
++  step: RegionBetGuidedShellStep,
++): RegionBetGuidedShellStep {
++  const previousIndex = Math.max(normalizeStepIndex(step) - 1, 0);
++  return REGION_BET_GUIDED_SHELL_STEPS[previousIndex].id;
++}
++
++export function createRegionBetGuidedDraft(
++  seed?: Partial<RegionBetContract> | null,
++  now: Date = new Date(),
++): RegionBetContract {
++  const createdAt = normalizeDate(seed?.lifecycle?.created_at_utc, now.toISOString());
++  const entryTimestamp = normalizeDate(seed?.entry?.timestamp_utc, now.toISOString());
++  const expiry = normalizeDate(seed?.target?.expiry_utc, isoDaysFrom(now, 30));
++  const windowStart = normalizeDate(seed?.target?.window_start_utc, expiry);
++  const windowEnd = normalizeDate(seed?.target?.window_end_utc, expiry);
++  const spot = finiteOrFallback(seed?.entry?.spot_usd, DEFAULT_SPOT_USD);
++  const priceMin = finiteOrFallback(
++    seed?.selected_region?.price_min_usd,
++    Math.round(spot * (1 - DEFAULT_REGION_WIDTH_PCT)),
++  );
++  const priceMax = finiteOrFallback(
++    seed?.selected_region?.price_max_usd,
++    Math.round(spot * (1 + DEFAULT_REGION_WIDTH_PCT)),
++  );
++
++  return {
++    schema_version: 1,
++    id: seed?.id ?? newRegionBetId(),
++    asset: {
++      asset_id: seed?.asset?.asset_id ?? DEFAULT_ASSET_ID,
++      symbol: seed?.asset?.symbol ?? seed?.asset?.asset_id ?? DEFAULT_ASSET_ID,
++      venue: seed?.asset?.venue ?? DEFAULT_VENUE,
++    },
++    entry: {
++      spot_usd: spot,
++      timestamp_utc: entryTimestamp,
++    },
++    selected_region: {
++      time_start_utc: normalizeDate(seed?.selected_region?.time_start_utc, windowStart),
++      time_end_utc: normalizeDate(seed?.selected_region?.time_end_utc, windowEnd),
++      price_min_usd: Math.min(priceMin, priceMax),
++      price_max_usd: Math.max(priceMin, priceMax),
++    },
++    target: {
++      expiry_utc: expiry,
++      window_start_utc: windowStart,
++      window_end_utc: windowEnd,
++    },
++    market_snapshot: {
++      as_of_utc: normalizeDate(seed?.market_snapshot?.as_of_utc, now.toISOString()),
++      source: seed?.market_snapshot?.source ?? "guided_shell",
++      method: seed?.market_snapshot?.method ?? "simulation",
++      implied_probability_pct: seed?.market_snapshot?.implied_probability_pct,
++      implied_move_pct: seed?.market_snapshot?.implied_move_pct,
++    },
++    risk_constraints: {
++      max_loss_usd: seed?.risk_constraints?.max_loss_usd,
++      max_premium_usd: seed?.risk_constraints?.max_premium_usd,
++      position_size_usd: seed?.risk_constraints?.position_size_usd,
++      notes: seed?.risk_constraints?.notes,
++    },
++    selected_expression_ref: seed?.selected_expression_ref ?? null,
++    lifecycle: {
++      status: seed?.lifecycle?.status ?? "draft",
++      created_at_utc: createdAt,
++      updated_at_utc: normalizeDate(seed?.lifecycle?.updated_at_utc, now.toISOString()),
++      closed_at_utc: seed?.lifecycle?.closed_at_utc,
++    },
++    user_note: seed?.user_note,
++  };
++}
++
++export function buildRegionBetGuidedShellSnapshot(
++  regionBet: RegionBetContract,
++): RegionBetGuidedShellSnapshot {
++  return {
++    asset_id: regionBet.asset.asset_id,
++    symbol: regionBet.asset.symbol,
++    venue: regionBet.asset.venue,
++    expiry_utc: regionBet.target.expiry_utc,
++    window_start_utc: regionBet.target.window_start_utc,
++    window_end_utc: regionBet.target.window_end_utc,
++    selected_region: { ...regionBet.selected_region },
++  };
++}
++
++export function applyRegionBetGuidedShellPatch(
++  regionBet: RegionBetContract,
++  patch: RegionBetGuidedShellPatch,
++  now: Date = new Date(),
++): RegionBetContract {
++  const next: RegionBetContract = {
++    ...regionBet,
++    asset: { ...regionBet.asset, ...patch.asset },
++    entry: { ...regionBet.entry, ...patch.entry },
++    target: { ...regionBet.target, ...patch.target },
++    selected_region: { ...regionBet.selected_region, ...patch.selected_region },
++    market_snapshot: { ...regionBet.market_snapshot, ...patch.market_snapshot },
++    risk_constraints: { ...regionBet.risk_constraints, ...patch.risk_constraints },
++    lifecycle: {
++      ...regionBet.lifecycle,
++      status: "draft",
++      updated_at_utc: now.toISOString(),
++    },
++    user_note: patch.user_note ?? regionBet.user_note,
++  };
++  return next;
++}
++
++export function isRegionBetGuidedDraftPersistable(value: unknown): value is RegionBetContract {
++  if (!isRegionBetContract(value)) return false;
++  const region = value.selected_region;
++  const target = value.target;
++  const dateValues = [
++    value.entry.timestamp_utc,
++    region.time_start_utc,
++    region.time_end_utc,
++    target.expiry_utc,
++    target.window_start_utc,
++    target.window_end_utc,
++    value.market_snapshot.as_of_utc,
++  ].filter((item): item is string => typeof item === "string");
++  if (dateValues.some((item) => Number.isNaN(Date.parse(item)))) return false;
++  if (region.price_min_usd >= region.price_max_usd) return false;
++  if (Date.parse(region.time_start_utc) > Date.parse(region.time_end_utc)) return false;
++  if (target.window_start_utc && target.window_end_utc) {
++    return Date.parse(target.window_start_utc) <= Date.parse(target.window_end_utc);
++  }
++  return true;
++}
+diff --git a/tests/test_msos_web_region_bet_guided_shell.py b/tests/test_msos_web_region_bet_guided_shell.py
+new file mode 100644
+index 0000000..4d08679
+--- /dev/null
++++ b/tests/test_msos_web_region_bet_guided_shell.py
+@@ -0,0 +1,87 @@
++"""Region Bet guided shell v1 - product-slice witness."""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++REPO_ROOT = Path(__file__).resolve().parents[1]
++MSOS_WEB = REPO_ROOT / "apps" / "msos-web"
++
++
++def test_region_bet_guided_shell_declares_stepper_and_retained_snapshot() -> None:
++    lib = (MSOS_WEB / "src" / "lib" / "regionBetGuidedShell.ts").read_text(
++        encoding="utf-8"
++    )
++    assert "REGION_BET_GUIDED_SHELL_STEPS" in lib
++    assert '"asset"' in lib
++    assert '"window"' in lib
++    assert '"region"' in lib
++    assert '"review"' in lib
++    assert "buildRegionBetGuidedShellSnapshot" in lib
++    assert "asset_id" in lib
++    assert "expiry_utc" in lib
++    assert "window_start_utc" in lib
++    assert "window_end_utc" in lib
++    assert "selected_region" in lib
++
++
++def test_region_bet_guided_shell_uses_existing_contract_persistence() -> None:
++    shell = (MSOS_WEB / "src" / "components" / "RegionBetGuidedShell.tsx").read_text(
++        encoding="utf-8"
++    )
++    assert "fetchRegionBet" in shell
++    assert "persistRegionBet" in shell
++    assert "REGION_BET_PERSISTENCE_LABEL" in shell
++    assert "createRegionBetGuidedDraft" in shell
++    assert "applyRegionBetGuidedShellPatch" in shell
++    assert "isRegionBetGuidedDraftPersistable" in shell
++
++
++def test_region_bet_guided_shell_panel_preserves_context_across_steps() -> None:
++    panel = (
++        MSOS_WEB / "src" / "components" / "RegionBetGuidedShellPanel.tsx"
++    ).read_text(encoding="utf-8")
++    assert "RegionBetGuidedShellPanel" in panel
++    assert "onDraftChange" in panel
++    assert "snapshot" in panel
++    assert "draft.asset.asset_id" in panel
++    assert "draft.target.expiry_utc" in panel
++    assert "draft.target.window_start_utc" in panel
++    assert "draft.target.window_end_utc" in panel
++    assert "draft.selected_region.price_min_usd" in panel
++    assert "draft.selected_region.price_max_usd" in panel
++
++
++def test_region_bet_guided_shell_fails_closed_before_persistence() -> None:
++    lib = (MSOS_WEB / "src" / "lib" / "regionBetGuidedShell.ts").read_text(
++        encoding="utf-8"
++    )
++    shell = (MSOS_WEB / "src" / "components" / "RegionBetGuidedShell.tsx").read_text(
++        encoding="utf-8"
++    )
++    assert "isRegionBetContract" in lib
++    assert "price_min_usd >= region.price_max_usd" in lib
++    assert "Date.parse(region.time_start_utc) > Date.parse(region.time_end_utc)" in lib
++    assert "setSaveState(\"invalid\")" in shell
++    assert "persistRegionBet(draft)" in shell
++
++
++def test_region_bet_guided_shell_does_not_recreate_future_surfaces() -> None:
++    touched = "\n".join(
++        [
++            (MSOS_WEB / "src" / "lib" / "regionBetGuidedShell.ts").read_text(
++                encoding="utf-8"
++            ),
++            (
++                MSOS_WEB / "src" / "components" / "RegionBetGuidedShell.tsx"
++            ).read_text(encoding="utf-8"),
++            (
++                MSOS_WEB / "src" / "components" / "RegionBetGuidedShellPanel.tsx"
++            ).read_text(encoding="utf-8"),
++        ]
++    )
++    assert "OptionsExpressionFitRankingPanel" not in touched
++    assert "OptionsHorizonComparison" not in touched
++    assert "market compare" not in touched.lower()
++    assert "brokerage" not in touched.lower()
++    assert "order ticket" not in touched.lower()

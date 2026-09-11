@@ -1,0 +1,65 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+          "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+          "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+          "tests/test_msos_web_region_bet_guided_shell.py"
+        ],
+        "metadata": {
+          "output_tail": " not in touched.lower()\n+    assert \"brokerage\" not in touched.lower()\n+    assert \"order ticket\" not in touched.lower()\n\ntokens used\n82,868\nImplemented the Region Bet guided shell slice within the allowed touch set.\n\nChanged:\n- Added [regionBetGuidedShell.ts](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/RegionBet-GuidedShell-Product-Slice002/apps/msos-web/src/lib/regionBetGuidedShell.ts): step definitions, draft creation, snapshot retention, patching, and fail-closed validation.\n- Added [RegionBetGuidedShell.tsx](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/RegionBet-GuidedShell-Product-Slice002/apps/msos-web/src/components/RegionBetGuidedShell.tsx): client stepper shell using `fetchRegionBet` / `persistRegionBet`.\n- Added [RegionBetGuidedShellPanel.tsx](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/RegionBet-GuidedShell-Product-Slice002/apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx): asset, window, region, and review panels.\n- Added focused witness tests in [test_msos_web_region_bet_guided_shell.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/RegionBet-GuidedShell-Product-Slice002/tests/test_msos_web_region_bet_guided_shell.py).\n\nValidation:\n- `pytest tests/test_msos_web_region_bet_guided_shell.py -q` passed: `5 passed`\n- `python -m pytest tests/test_msos_web_region_bet_guided_shell.py tests/test_msos_web_region_bet_contract.py -q` passed: `10 passed`\n- `python scripts/run_pushable_gate.py` blocked before validation: `git diff --name-only origin/main...HEAD` exits 128 because this checkout has no merge-base between `HEAD d5e1ec55...` and `origin/main 8d6c711...`.\n- `npx` TypeScript check could not run: no local `node_modules` compiler, and npm network/cache access is restricted.\n\nNo commit or push performed because this work item explicitly requested workspace changes only and forbids `.git/**` writes.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\workspaces\\RegionBet-GuidedShell-Product-Slice002"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 4 changed path(s)",
+        "task_id": "RegionBet-GuidedShell-Product-Slice002"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "d5e1ec55bea2da0fc4f0192a0b96e0b9c20093e9",
+    "status": "completed"
+  },
+  "completed_at": "2026-09-11T00:06:15.430652+00:00",
+  "job_id": "build-next-ppe-region_bet_guided_shell_v1-RegionBet-GuidedShell-Product-Slice00-c8c154846e050660",
+  "job_sha256": "00bd865ee955bf4359167f21deb55be0e87bc395a44acc9ce3f8cab9e3060f01",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "changed_paths": [
+        "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+        "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+        "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+        "tests/test_msos_web_region_bet_guided_shell.py"
+      ],
+      "complete_patch": true,
+      "lane_id": "RegionBet-GuidedShell-Product-Slice002",
+      "patch_file": "patches/RegionBet-GuidedShell-Product-Slice002.patch",
+      "patch_sha256": "a113c0b25b870717ca51b911f93e62196da6040423c9d96b397e5125e7293409",
+      "task_id": "RegionBet-GuidedShell-Product-Slice002"
+    }
+  ],
+  "publication_enabled": false,
+  "relay": {
+    "canonical_patch_sha256_by_task": {
+      "RegionBet-GuidedShell-Product-Slice002": "a113c0b25b870717ca51b911f93e62196da6040423c9d96b397e5125e7293409"
+    },
+    "canonical_report_role": "relay-corrected-canonical-downstream-report",
+    "complete_patch_reconstruction": true,
+    "machine_id": "DESKTOP-GE39O15",
+    "publication_enabled": false,
+    "relayed_at": "2026-09-11T00:06:26.591475+00:00",
+    "source_report_role": "original-worker-report-noncanonical-for-patch-identity",
+    "source_report_sha256": "d76f5925e02574a83efca38c825ae0ea4b6c7b0c3cafce282ed2a3979c9b1c9c",
+    "version": 1
+  },
+  "requested_by": "capacity-one refill controller",
+  "source": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\queue\\pending\\build-next-ppe-region_bet_guided_shell_v1-RegionBet-GuidedShell-Product-Slice00-c8c154846e050660.yaml",
+  "version": 1
+}

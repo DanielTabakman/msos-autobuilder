@@ -1,0 +1,46 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+          "apps/msos-web/src/components/RegionBetMarketComparePanel.tsx",
+          "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+          "apps/msos-web/src/lib/regionBetMarketCompare.ts",
+          "tests/test_msos_web_region_bet_market_compare.py"
+        ],
+        "metadata": {
+          "output_tail": " Added pure bridge adapter in [regionBetMarketCompare.ts](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/RegionBet-MarketCompare-Product-Slice002/apps/msos-web/src/lib/regionBetMarketCompare.ts:100) that maps the guided draft into `HorizonChartPayload` and calls `buildOptionsHorizonComparisonFromChart`.\n- Added [RegionBetMarketComparePanel.tsx](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/RegionBet-MarketCompare-Product-Slice002/apps/msos-web/src/components/RegionBetMarketComparePanel.tsx:14), embedding the existing `OptionsHorizonComparisonPanel`.\n- Added `compare` between `region` and `review` in [regionBetGuidedShell.ts](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/RegionBet-MarketCompare-Product-Slice002/apps/msos-web/src/lib/regionBetGuidedShell.ts:7) and wired it in [RegionBetGuidedShellPanel.tsx](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/RegionBet-MarketCompare-Product-Slice002/apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx:227).\n- Added focused checks in [test_msos_web_region_bet_market_compare.py](C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/workspaces/RegionBet-MarketCompare-Product-Slice002/tests/test_msos_web_region_bet_market_compare.py:11).\n\nValidation:\n- `python -m pytest tests/test_msos_web_region_bet_market_compare.py tests/test_msos_web_region_bet_guided_shell.py tests/test_msos_web_options_horizon_comparison.py` \u2192 13 passed.\n- `python -m pytest -q --basetemp .pytest-tmp-regionbet ... tests/test_repository_boundaries.py` \u2192 19 passed.\n- `python scripts/check_repository_boundaries.py --repo-root .` \u2192 passed.\n\nNotes:\n- `python scripts/run_pushable_gate.py` could not start because `origin/main...HEAD` has no merge base in this detached/frozen worktree.\n- `npm.cmd run build` could not run because `next` is unavailable; `apps/msos-web/node_modules` is not installed.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\workspaces\\RegionBet-MarketCompare-Product-Slice002"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 5 changed path(s)",
+        "task_id": "RegionBet-MarketCompare-Product-Slice002"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "add15e389d2e51a03d2fc26423f4edc77c11c1a7",
+    "status": "completed"
+  },
+  "completed_at": "2026-09-11T06:51:41.209060+00:00",
+  "job_id": "build-next-ppe-region_bet_market_compare_bridge_v1-RegionBet-MarketCompare-Prod-91113c597b863830",
+  "job_sha256": "683ef70c77e495b4dcf1a68b4397ad2f9ed687b66b58f48aa41528c598cc4a84",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "lane_id": "RegionBet-MarketCompare-Product-Slice002",
+      "patch_file": "patches/RegionBet-MarketCompare-Product-Slice002.patch",
+      "patch_sha256": "34a85678e3d4db6f61bd021ea9f3a52d2b2bf9afd46e9ae550642a1946a082f0",
+      "task_id": "RegionBet-MarketCompare-Product-Slice002"
+    }
+  ],
+  "publication_enabled": false,
+  "requested_by": "capacity-one refill controller",
+  "source": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\queue\\pending\\build-next-ppe-region_bet_market_compare_bridge_v1-RegionBet-MarketCompare-Prod-91113c597b863830.yaml",
+  "version": 1
+}

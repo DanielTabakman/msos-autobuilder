@@ -1,0 +1,221 @@
+{
+  "changed_paths": [
+    "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+    "apps/msos-web/src/components/RegionBetMarketComparePanel.tsx",
+    "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+    "apps/msos-web/src/lib/regionBetMarketCompare.ts",
+    "tests/test_msos_web_region_bet_market_compare.py"
+  ],
+  "checks": [
+    {
+      "argv": [
+        "python",
+        "-c",
+        "import ast\nimport pathlib\npy_paths = ['tests/test_msos_web_region_bet_market_compare.py']\nother_paths = ['apps/msos-web/src/components/RegionBetGuidedShell.tsx', 'apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx', 'apps/msos-web/src/components/RegionBetMarketComparePanel.tsx', 'apps/msos-web/src/lib/regionBetGuidedShell.ts', 'apps/msos-web/src/lib/regionBetMarketCompare.ts']\nfor path in py_paths:\n    ast.parse(pathlib.Path(path).read_text(encoding='utf-8'))\nfor path in other_paths:\n    text = pathlib.Path(path).read_text(encoding='utf-8')\n    if not text.strip():\n        raise SystemExit('empty patched file: ' + path)\n"
+      ],
+      "cwd": ".",
+      "finished_at": "2026-09-11T15:18:44.603802+00:00",
+      "name": "patched-sources-parse",
+      "passed": true,
+      "phase": "check",
+      "required": true,
+      "returncode": 0,
+      "skipped": false,
+      "started_at": "2026-09-11T15:18:44.386803+00:00",
+      "stderr": "",
+      "stdout": "",
+      "timed_out": false
+    }
+  ],
+  "claim_release_handoff": {
+    "allowed_terminal_states": [
+      "abandoned",
+      "failed",
+      "merged",
+      "released",
+      "superseded"
+    ],
+    "authorized_paths": [
+      "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+      "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+      "apps/msos-web/src/components/RegionBetMarketComparePanel.tsx",
+      "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+      "apps/msos-web/src/lib/regionBetMarketCompare.ts",
+      "tests/test_msos_web_region_bet_market_compare.py"
+    ],
+    "bounded_failure_behavior": {
+      "accepted_abandonment": "release as abandoned with founder/owner disposition evidence",
+      "submission_or_publication_failure": "release as failed with bounded failure evidence",
+      "superseded_duplicate": "release as superseded with canonical successor evidence"
+    },
+    "claim_generation": 3,
+    "consumer": "completion-controller",
+    "handoff": "msos-autobuilder.work_admission.claim_release.v1",
+    "immutability": "consumer must match objective_sha256, writer_id and claim_generation before release",
+    "linked_issue": null,
+    "objective_sha256": "cdb3083acfbd98295a4f2ef805ee48bab7da54a4e8f213b8850f95d36c0b77bd",
+    "release_api": "msos_autobuilder.work_admission.release_claim",
+    "repository": "DanielTabakman/Probability-prediction-engine",
+    "verified_completion_terminal_state": "merged",
+    "version": 1,
+    "writer_id": "build-next:build-next-ppe-region_bet_market_compare_bridge_v1-RegionBet-MarketCompare-Prod-91113c597b863830"
+  },
+  "draft": true,
+  "gate_report_sha256": "888ab1b6fbf808b34d69281c71dfc0e266fb6c7c2a7703da5d34bca3b2bf11c2",
+  "job_id": "build-next-ppe-region_bet_market_compare_bridge_v1-revision-1",
+  "main_write_enabled": false,
+  "merge_enabled": false,
+  "pr_number": 5444,
+  "pr_url": "https://github.com/DanielTabakman/Probability-prediction-engine/pull/5444",
+  "product_base_branch": "main",
+  "product_base_head": "add15e389d2e51a03d2fc26423f4edc77c11c1a7",
+  "product_branch": "autobuilder/build-next-ppe-region_bet_market_compare_bridge_v1-revision-1",
+  "product_commit": "415355ac82fdbebff8b6998e44531fd485752a47",
+  "published_at": "2026-09-11T15:18:53.194915+00:00",
+  "source_report_sha256": "bdf4357730a29f71de6207d1b041fab1b5c7ef28bb678f2046cbaeedb85ab77c",
+  "status": "published-draft",
+  "version": 1,
+  "work_admission": {
+    "canonical": null,
+    "claim": {
+      "authorized_paths": [
+        "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+        "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+        "apps/msos-web/src/components/RegionBetMarketComparePanel.tsx",
+        "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+        "apps/msos-web/src/lib/regionBetMarketCompare.ts",
+        "tests/test_msos_web_region_bet_market_compare.py"
+      ],
+      "branch": "build/auto/RegionBet-MarketCompare-Product-Slice002",
+      "claimed_at": "2026-09-11T06:44:07Z",
+      "evidence": {
+        "admission_phase": "build_next.pre_feed_submission",
+        "authorized_paths": [
+          "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+          "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+          "apps/msos-web/src/components/RegionBetMarketComparePanel.tsx",
+          "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+          "apps/msos-web/src/lib/regionBetMarketCompare.ts",
+          "tests/test_msos_web_region_bet_market_compare.py"
+        ],
+        "claim_lifecycle": "active until verified merge, explicit supersession, accepted abandonment, or bounded failure disposition",
+        "classifications": [],
+        "github_duplicate_discovery": {
+          "candidate_count": 0,
+          "repository": "DanielTabakman/Probability-prediction-engine",
+          "searched_issues": true,
+          "searched_pull_requests": true
+        },
+        "job_id": "build-next-ppe-region_bet_market_compare_bridge_v1-RegionBet-MarketCompare-Prod-91113c597b863830",
+        "objective": {
+          "acceptance_contract_sha256": "5791fc9d7ad7d544c60db547e271d11d344e2b9bb6a8c78667c21f178db51f6e",
+          "error_signature": null,
+          "linked_issue": null,
+          "release_identity": null,
+          "repository": "DanielTabakman/Probability-prediction-engine",
+          "stable_key": "5ae3652562f925edc6676a17b2bea6576c2793b3b2dcc4cf6576acb0763ec168",
+          "work_item_id": "region_bet_market_compare_bridge_v1"
+        },
+        "objective_sha256": "cdb3083acfbd98295a4f2ef805ee48bab7da54a4e8f213b8850f95d36c0b77bd",
+        "pipeline_id": "ppe",
+        "source_commit": "add15e389d2e51a03d2fc26423f4edc77c11c1a7",
+        "target_repository": "DanielTabakman/Probability-prediction-engine",
+        "work_item_id": "region_bet_market_compare_bridge_v1"
+      },
+      "generation": 3,
+      "linked_issue": null,
+      "objective_sha256": "cdb3083acfbd98295a4f2ef805ee48bab7da54a4e8f213b8850f95d36c0b77bd",
+      "pr_number": null,
+      "repository": "DanielTabakman/Probability-prediction-engine",
+      "state": "active",
+      "updated_at": "2026-09-11T06:44:07Z",
+      "version": 1,
+      "writer_id": "build-next:build-next-ppe-region_bet_market_compare_bridge_v1-RegionBet-MarketCompare-Prod-91113c597b863830"
+    },
+    "classifications": [],
+    "evidence": {
+      "admission_phase": "controlled_publisher.pre_branch_pr",
+      "authorized_paths": [
+        "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+        "apps/msos-web/src/components/RegionBetMarketComparePanel.tsx",
+        "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+        "apps/msos-web/src/lib/regionBetMarketCompare.ts",
+        "tests/test_msos_web_region_bet_market_compare.py"
+      ],
+      "claim_lifecycle": "active until verified merge, explicit supersession, accepted abandonment, or bounded failure disposition",
+      "claim_path": "C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/state/work-admission/claims/cdb3083acfbd98295a4f2ef805ee48bab7da54a4e8f213b8850f95d36c0b77bd.json",
+      "classifications": [],
+      "existing_claim": {
+        "authorized_paths": [
+          "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+          "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+          "apps/msos-web/src/components/RegionBetMarketComparePanel.tsx",
+          "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+          "apps/msos-web/src/lib/regionBetMarketCompare.ts",
+          "tests/test_msos_web_region_bet_market_compare.py"
+        ],
+        "branch": "build/auto/RegionBet-MarketCompare-Product-Slice002",
+        "claimed_at": "2026-09-11T06:44:07Z",
+        "evidence": {
+          "admission_phase": "build_next.pre_feed_submission",
+          "authorized_paths": [
+            "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+            "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+            "apps/msos-web/src/components/RegionBetMarketComparePanel.tsx",
+            "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+            "apps/msos-web/src/lib/regionBetMarketCompare.ts",
+            "tests/test_msos_web_region_bet_market_compare.py"
+          ],
+          "claim_lifecycle": "active until verified merge, explicit supersession, accepted abandonment, or bounded failure disposition",
+          "classifications": [],
+          "github_duplicate_discovery": {
+            "candidate_count": 0,
+            "repository": "DanielTabakman/Probability-prediction-engine",
+            "searched_issues": true,
+            "searched_pull_requests": true
+          },
+          "job_id": "build-next-ppe-region_bet_market_compare_bridge_v1-RegionBet-MarketCompare-Prod-91113c597b863830",
+          "objective": {
+            "acceptance_contract_sha256": "5791fc9d7ad7d544c60db547e271d11d344e2b9bb6a8c78667c21f178db51f6e",
+            "error_signature": null,
+            "linked_issue": null,
+            "release_identity": null,
+            "repository": "DanielTabakman/Probability-prediction-engine",
+            "stable_key": "5ae3652562f925edc6676a17b2bea6576c2793b3b2dcc4cf6576acb0763ec168",
+            "work_item_id": "region_bet_market_compare_bridge_v1"
+          },
+          "objective_sha256": "cdb3083acfbd98295a4f2ef805ee48bab7da54a4e8f213b8850f95d36c0b77bd",
+          "pipeline_id": "ppe",
+          "source_commit": "add15e389d2e51a03d2fc26423f4edc77c11c1a7",
+          "target_repository": "DanielTabakman/Probability-prediction-engine",
+          "work_item_id": "region_bet_market_compare_bridge_v1"
+        },
+        "generation": 3,
+        "linked_issue": null,
+        "objective_sha256": "cdb3083acfbd98295a4f2ef805ee48bab7da54a4e8f213b8850f95d36c0b77bd",
+        "pr_number": null,
+        "repository": "DanielTabakman/Probability-prediction-engine",
+        "state": "active",
+        "updated_at": "2026-09-11T06:44:07Z",
+        "version": 1,
+        "writer_id": "build-next:build-next-ppe-region_bet_market_compare_bridge_v1-RegionBet-MarketCompare-Prod-91113c597b863830"
+      },
+      "job_id": "build-next-ppe-region_bet_market_compare_bridge_v1-revision-1",
+      "job_yaml": "C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/state/publisher-results-repo/results/DESKTOP-GE39O15/build-next-ppe-region_bet_market_compare_bridge_v1-revision-1/job.yaml",
+      "objective": {
+        "acceptance_contract_sha256": "5791fc9d7ad7d544c60db547e271d11d344e2b9bb6a8c78667c21f178db51f6e",
+        "error_signature": null,
+        "linked_issue": null,
+        "release_identity": null,
+        "repository": "DanielTabakman/Probability-prediction-engine",
+        "stable_key": "5ae3652562f925edc6676a17b2bea6576c2793b3b2dcc4cf6576acb0763ec168",
+        "work_item_id": "region_bet_market_compare_bridge_v1"
+      },
+      "objective_sha256": "cdb3083acfbd98295a4f2ef805ee48bab7da54a4e8f213b8850f95d36c0b77bd",
+      "plan_branch": "autobuilder/build-next-ppe-region_bet_market_compare_bridge_v1-revision-1"
+    },
+    "message": "Existing durable writer claim matches this writer.",
+    "objective_sha256": "cdb3083acfbd98295a4f2ef805ee48bab7da54a4e8f213b8850f95d36c0b77bd",
+    "status": "NEW_WORK_ADMITTED"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "canonical_patch_sha256_by_task": {
+    "RegionBet-GuidedShell-Product-Slice002-revision-1": "8205888e7a880194264b247ad59c3f21c6ef9dd6ad0d3eb4f5c5824c9d887589"
+  },
+  "corrected_report_sha256": "0d2831c1c60915dc199b30e046ab8369d5fc283dd6f9b5ccd5ab5675b7ba545e",
+  "publication_enabled": false,
+  "source_report_sha256": "361c613d8b74706cdb3b3c2ec3d94383f35edfdeaf6706f3456d6b5291d12397",
+  "version": 1
+}

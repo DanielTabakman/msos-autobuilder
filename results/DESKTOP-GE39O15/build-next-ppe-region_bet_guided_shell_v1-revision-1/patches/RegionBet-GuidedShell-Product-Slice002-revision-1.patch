@@ -1,0 +1,690 @@
+diff --git a/apps/msos-web/src/components/RegionBetGuidedShell.tsx b/apps/msos-web/src/components/RegionBetGuidedShell.tsx
+new file mode 100644
+index 0000000..8567fe2
+--- /dev/null
++++ b/apps/msos-web/src/components/RegionBetGuidedShell.tsx
+@@ -0,0 +1,100 @@
++"use client";
++
++import { useEffect, useMemo, useState } from "react";
++
++import { RegionBetGuidedShellPanel } from "@/components/RegionBetGuidedShellPanel";
++import {
++  canPersistRegionBetDraft,
++  defaultRegionBetDraft,
++  mergeRegionBetDraft,
++  type RegionBetGuidedStep,
++} from "@/lib/regionBetGuidedShell";
++import {
++  fetchRegionBet,
++  persistRegionBet,
++  type RegionBetContract,
++} from "@/lib/regionBet";
++
++type RegionBetGuidedShellProps = {
++  initialDraft?: RegionBetContract | null;
++  initialStep?: RegionBetGuidedStep;
++};
++
++export function RegionBetGuidedShell({
++  initialDraft = null,
++  initialStep = "asset",
++}: RegionBetGuidedShellProps) {
++  const fallbackDraft = useMemo(() => defaultRegionBetDraft(), []);
++  const [draft, setDraft] = useState<RegionBetContract>(initialDraft ?? fallbackDraft);
++  const [currentStep, setCurrentStep] = useState<RegionBetGuidedStep>(initialStep);
++  const [hydrated, setHydrated] = useState(Boolean(initialDraft));
++  const [pending, setPending] = useState(false);
++  const [saveMessage, setSaveMessage] = useState<string | null>(null);
++
++  useEffect(() => {
++    let cancelled = false;
++    void (async () => {
++      const saved = await fetchRegionBet();
++      if (cancelled) return;
++      if (saved) {
++        setDraft(saved);
++      }
++      setHydrated(true);
++    })();
++    return () => {
++      cancelled = true;
++    };
++  }, []);
++
++  function updateDraft(next: RegionBetContract) {
++    setDraft(mergeRegionBetDraft(draft, next));
++    setSaveMessage(null);
++  }
++
++  async function saveDraft() {
++    if (!canPersistRegionBetDraft(draft)) {
++      setSaveMessage("Region Bet draft is incomplete.");
++      return;
++    }
++    setPending(true);
++    setSaveMessage(null);
++    const ok = await persistRegionBet(draft);
++    setPending(false);
++    setSaveMessage(ok ? "Region Bet draft saved." : "Saved locally; server sync is unavailable.");
++  }
++
++  return (
++    <>
++      <header className="topline">
++        <div>
++          <div className="crumb">Strategy Lab - Region Bet</div>
++          <h1 className="title">Region Bet builder</h1>
++          <p className="panel-sub planner-intro">
++            Build a paper Region Bet by keeping the asset, expiry window, and selected region
++            together.
++          </p>
++        </div>
++        <div className="tools">
++          <span className="pill" role="status">
++            <span className={hydrated ? "dot" : "dot amber"} aria-hidden="true" />
++            {hydrated ? "Draft ready" : "Loading draft"}
++          </span>
++          <span className="pill">
++            <span className="dot amber" aria-hidden="true" />
++            Simulation only
++          </span>
++        </div>
++      </header>
++
++      <RegionBetGuidedShellPanel
++        draft={draft}
++        currentStep={currentStep}
++        pending={pending}
++        saveMessage={saveMessage}
++        onChange={updateDraft}
++        onStepChange={setCurrentStep}
++        onPersist={() => void saveDraft()}
++      />
++    </>
++  );
++}
+diff --git a/apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx b/apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx
+new file mode 100644
+index 0000000..4a1496e
+--- /dev/null
++++ b/apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx
+@@ -0,0 +1,300 @@
++"use client";
++
++import Link from "next/link";
++
++import {
++  REGION_BET_GUIDED_STEPS,
++  buildRegionBetGuidedStepHref,
++  canPersistRegionBetDraft,
++  regionBetGuidedStepIndex,
++  type RegionBetGuidedStep,
++} from "@/lib/regionBetGuidedShell";
++import { REGION_BET_PERSISTENCE_LABEL, type RegionBetContract } from "@/lib/regionBet";
++
++type RegionBetGuidedShellPanelProps = {
++  draft: RegionBetContract;
++  currentStep: RegionBetGuidedStep;
++  pending: boolean;
++  saveMessage: string | null;
++  onChange: (draft: RegionBetContract) => void;
++  onStepChange: (step: RegionBetGuidedStep) => void;
++  onPersist: () => void;
++};
++
++function toInputDateTime(value: string): string {
++  if (!value) return "";
++  return value.slice(0, 16);
++}
++
++function fromInputDateTime(value: string): string {
++  if (!value) return "";
++  return value.length === 16 ? `${value}:00.000Z` : value;
++}
++
++function parseUsd(value: string, fallback: number): number {
++  const parsed = Number(value);
++  return Number.isFinite(parsed) ? parsed : fallback;
++}
++
++export function RegionBetGuidedShellPanel({
++  draft,
++  currentStep,
++  pending,
++  saveMessage,
++  onChange,
++  onStepChange,
++  onPersist,
++}: RegionBetGuidedShellPanelProps) {
++  const currentIndex = regionBetGuidedStepIndex(currentStep);
++  const previousStep = REGION_BET_GUIDED_STEPS[currentIndex - 1]?.id;
++  const nextStep = REGION_BET_GUIDED_STEPS[currentIndex + 1]?.id;
++  const canPersist = canPersistRegionBetDraft(draft);
++
++  function updateAsset(field: keyof RegionBetContract["asset"], value: string) {
++    onChange({
++      ...draft,
++      asset: {
++        ...draft.asset,
++        [field]: value,
++      },
++    });
++  }
++
++  function updateTarget(field: keyof RegionBetContract["target"], value: string) {
++    onChange({
++      ...draft,
++      target: {
++        ...draft.target,
++        [field]: fromInputDateTime(value),
++      },
++    });
++  }
++
++  function updateSelectedRegion(
++    field: keyof RegionBetContract["selected_region"],
++    value: string,
++  ) {
++    if (field === "price_min_usd" || field === "price_max_usd") {
++      const fallback =
++        field === "price_min_usd"
++          ? draft.selected_region.price_min_usd
++          : draft.selected_region.price_max_usd;
++      onChange({
++        ...draft,
++        selected_region: {
++          ...draft.selected_region,
++          [field]: parseUsd(value, fallback),
++        },
++      });
++      return;
++    }
++    onChange({
++      ...draft,
++      selected_region: {
++        ...draft.selected_region,
++        [field]: fromInputDateTime(value),
++      },
++    });
++  }
++
++  return (
++    <section className="work" aria-label="Region Bet guided shell">
++      <div className="panel ticket">
++        <nav className="workflow-stepper" aria-label="Region Bet workflow">
++          {REGION_BET_GUIDED_STEPS.map((step, index) => {
++            const active = step.id === currentStep;
++            const complete = index < currentIndex;
++            const className = [
++              "workflow-step",
++              active ? "active" : undefined,
++              complete ? "done" : undefined,
++            ]
++              .filter(Boolean)
++              .join(" ");
++            return (
++              <Link
++                key={step.id}
++                href={buildRegionBetGuidedStepHref(step.id, draft)}
++                className={className}
++                aria-current={active ? "step" : undefined}
++                onClick={(event) => {
++                  event.preventDefault();
++                  onStepChange(step.id);
++                }}
++              >
++                <span className="workflow-step-num" aria-hidden="true">
++                  {index + 1}
++                </span>
++                {step.label}
++              </Link>
++            );
++          })}
++        </nav>
++
++        {currentStep === "asset" ? (
++          <div className="route">
++            <div className="best">Step 1</div>
++            <h2>Choose the Region Bet asset</h2>
++            <label className="side-label" htmlFor="region-bet-asset">
++              Asset ID
++            </label>
++            <input
++              id="region-bet-asset"
++              value={draft.asset.asset_id}
++              onChange={(event) => updateAsset("asset_id", event.target.value.trim().toUpperCase())}
++            />
++            <label className="side-label" htmlFor="region-bet-symbol">
++              Symbol
++            </label>
++            <input
++              id="region-bet-symbol"
++              value={draft.asset.symbol ?? ""}
++              onChange={(event) => updateAsset("symbol", event.target.value.trim().toUpperCase())}
++            />
++            <label className="side-label" htmlFor="region-bet-venue">
++              Venue
++            </label>
++            <input
++              id="region-bet-venue"
++              value={draft.asset.venue ?? ""}
++              onChange={(event) => updateAsset("venue", event.target.value)}
++            />
++          </div>
++        ) : null}
++
++        {currentStep === "window" ? (
++          <div className="route">
++            <div className="best">Step 2</div>
++            <h2>Set expiry and target window</h2>
++            <label className="side-label" htmlFor="region-bet-expiry">
++              Expiry
++            </label>
++            <input
++              id="region-bet-expiry"
++              type="datetime-local"
++              value={toInputDateTime(draft.target.expiry_utc)}
++              onChange={(event) => updateTarget("expiry_utc", event.target.value)}
++            />
++            <label className="side-label" htmlFor="region-bet-window-start">
++              Window start
++            </label>
++            <input
++              id="region-bet-window-start"
++              type="datetime-local"
++              value={toInputDateTime(draft.target.window_start_utc ?? "")}
++              onChange={(event) => updateTarget("window_start_utc", event.target.value)}
++            />
++            <label className="side-label" htmlFor="region-bet-window-end">
++              Window end
++            </label>
++            <input
++              id="region-bet-window-end"
++              type="datetime-local"
++              value={toInputDateTime(draft.target.window_end_utc ?? "")}
++              onChange={(event) => updateTarget("window_end_utc", event.target.value)}
++            />
++          </div>
++        ) : null}
++
++        {currentStep === "region" ? (
++          <div className="route">
++            <div className="best">Step 3</div>
++            <h2>Select price-time region</h2>
++            <label className="side-label" htmlFor="region-bet-region-start">
++              Region start
++            </label>
++            <input
++              id="region-bet-region-start"
++              type="datetime-local"
++              value={toInputDateTime(draft.selected_region.time_start_utc)}
++              onChange={(event) => updateSelectedRegion("time_start_utc", event.target.value)}
++            />
++            <label className="side-label" htmlFor="region-bet-region-end">
++              Region end
++            </label>
++            <input
++              id="region-bet-region-end"
++              type="datetime-local"
++              value={toInputDateTime(draft.selected_region.time_end_utc)}
++              onChange={(event) => updateSelectedRegion("time_end_utc", event.target.value)}
++            />
++            <label className="side-label" htmlFor="region-bet-price-min">
++              Price min USD
++            </label>
++            <input
++              id="region-bet-price-min"
++              type="number"
++              value={draft.selected_region.price_min_usd}
++              onChange={(event) => updateSelectedRegion("price_min_usd", event.target.value)}
++            />
++            <label className="side-label" htmlFor="region-bet-price-max">
++              Price max USD
++            </label>
++            <input
++              id="region-bet-price-max"
++              type="number"
++              value={draft.selected_region.price_max_usd}
++              onChange={(event) => updateSelectedRegion("price_max_usd", event.target.value)}
++            />
++          </div>
++        ) : null}
++
++        {currentStep === "review" ? (
++          <div className="route">
++            <div className="best">Step 4</div>
++            <h2>Review Region Bet draft</h2>
++            <div className="line">
++              <span>Asset</span>
++              <strong>{draft.asset.asset_id}</strong>
++            </div>
++            <div className="line">
++              <span>Expiry</span>
++              <strong>{draft.target.expiry_utc}</strong>
++            </div>
++            <div className="line">
++              <span>Window</span>
++              <strong>
++                {draft.target.window_start_utc} to {draft.target.window_end_utc}
++              </strong>
++            </div>
++            <div className="line">
++              <span>Selected region</span>
++              <strong>
++                {draft.selected_region.price_min_usd} to {draft.selected_region.price_max_usd} USD
++              </strong>
++            </div>
++            <button
++              type="button"
++              className="btn slim primary"
++              disabled={pending || !canPersist}
++              onClick={onPersist}
++            >
++              {pending ? "Saving..." : "Save Region Bet draft"}
++            </button>
++            <p className="micro persistence-note">
++              {canPersist ? REGION_BET_PERSISTENCE_LABEL : "Complete the draft before saving."}
++            </p>
++            {saveMessage ? (
++              <p className="micro persistence-note" role="status">
++                {saveMessage}
++              </p>
++            ) : null}
++          </div>
++        ) : null}
++
++        <div className="exec-actions">
++          {previousStep ? (
++            <button type="button" className="btn slim" onClick={() => onStepChange(previousStep)}>
++              Back
++            </button>
++          ) : null}
++          {nextStep ? (
++            <button type="button" className="btn slim primary" onClick={() => onStepChange(nextStep)}>
++              Continue
++            </button>
++          ) : null}
++        </div>
++      </div>
++    </section>
++  );
++}
+diff --git a/apps/msos-web/src/lib/regionBetGuidedShell.ts b/apps/msos-web/src/lib/regionBetGuidedShell.ts
+new file mode 100644
+index 0000000..9b80adf
+--- /dev/null
++++ b/apps/msos-web/src/lib/regionBetGuidedShell.ts
+@@ -0,0 +1,169 @@
++import {
++  isRegionBetContract,
++  newRegionBetId,
++  type RegionBetContract,
++} from "@/lib/regionBet";
++
++export type RegionBetGuidedStep = "asset" | "window" | "region" | "review";
++
++export type RegionBetGuidedStepDefinition = {
++  id: RegionBetGuidedStep;
++  label: string;
++};
++
++export const REGION_BET_GUIDED_STEPS: RegionBetGuidedStepDefinition[] = [
++  { id: "asset", label: "Choose asset" },
++  { id: "window", label: "Set window" },
++  { id: "region", label: "Select region" },
++  { id: "review", label: "Review draft" },
++];
++
++export const REGION_BET_GUIDED_BASE_PATH = "/strategy-lab/region-bet";
++
++export function regionBetGuidedStepIndex(step: RegionBetGuidedStep): number {
++  return REGION_BET_GUIDED_STEPS.findIndex((item) => item.id === step);
++}
++
++function queryParam(value: string | number | undefined): string | null {
++  if (value === undefined || value === "") return null;
++  return String(value);
++}
++
++export function buildRegionBetGuidedStepHref(
++  step: RegionBetGuidedStep,
++  draft?: RegionBetContract | null,
++): string {
++  const params = new URLSearchParams();
++  params.set("step", step);
++  if (draft) {
++    const values: Record<string, string | number | undefined> = {
++      regionBetId: draft.id,
++      asset: draft.asset.asset_id,
++      symbol: draft.asset.symbol,
++      venue: draft.asset.venue,
++      expiry: draft.target.expiry_utc,
++      windowStart: draft.target.window_start_utc,
++      windowEnd: draft.target.window_end_utc,
++      regionTimeStart: draft.selected_region.time_start_utc,
++      regionTimeEnd: draft.selected_region.time_end_utc,
++      priceMin: draft.selected_region.price_min_usd,
++      priceMax: draft.selected_region.price_max_usd,
++    };
++    for (const [key, value] of Object.entries(values)) {
++      const param = queryParam(value);
++      if (param) params.set(key, param);
++    }
++  }
++  return `${REGION_BET_GUIDED_BASE_PATH}?${params.toString()}`;
++}
++
++export function defaultRegionBetDraft(nowIso = new Date().toISOString()): RegionBetContract {
++  const nowMs = Date.parse(nowIso);
++  const safeNowMs = Number.isNaN(nowMs) ? Date.now() : nowMs;
++  const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
++  const expiry = new Date(safeNowMs + oneWeekMs).toISOString();
++  const windowStart = new Date(safeNowMs + oneWeekMs - 6 * 60 * 60 * 1000).toISOString();
++  const windowEnd = expiry;
++  return {
++    schema_version: 1,
++    id: newRegionBetId(),
++    asset: {
++      asset_id: "BTC",
++      symbol: "BTC",
++      venue: "Deribit",
++    },
++    entry: {
++      spot_usd: 65000,
++      timestamp_utc: nowIso,
++    },
++    selected_region: {
++      time_start_utc: windowStart,
++      time_end_utc: windowEnd,
++      price_min_usd: 62000,
++      price_max_usd: 70000,
++    },
++    target: {
++      expiry_utc: expiry,
++      window_start_utc: windowStart,
++      window_end_utc: windowEnd,
++    },
++    market_snapshot: {
++      as_of_utc: nowIso,
++      source: "guided_shell",
++      method: "simulation_draft",
++    },
++    risk_constraints: {},
++    selected_expression_ref: null,
++    lifecycle: {
++      status: "draft",
++      created_at_utc: nowIso,
++      updated_at_utc: nowIso,
++    },
++    user_note: "",
++  };
++}
++
++export function mergeRegionBetDraft(
++  current: RegionBetContract | null | undefined,
++  patch: Partial<RegionBetContract>,
++): RegionBetContract {
++  const base = current ?? defaultRegionBetDraft();
++  const updatedAt = new Date().toISOString();
++  return {
++    ...base,
++    ...patch,
++    asset: {
++      ...base.asset,
++      ...patch.asset,
++    },
++    entry: {
++      ...base.entry,
++      ...patch.entry,
++    },
++    selected_region: {
++      ...base.selected_region,
++      ...patch.selected_region,
++    },
++    target: {
++      ...base.target,
++      ...patch.target,
++    },
++    market_snapshot: {
++      ...base.market_snapshot,
++      ...patch.market_snapshot,
++    },
++    risk_constraints: {
++      ...base.risk_constraints,
++      ...patch.risk_constraints,
++    },
++    lifecycle: {
++      ...base.lifecycle,
++      ...patch.lifecycle,
++      updated_at_utc: updatedAt,
++    },
++  };
++}
++
++function validIsoOrder(start: string | undefined, end: string | undefined): boolean {
++  if (!start || !end) return false;
++  const startMs = Date.parse(start);
++  const endMs = Date.parse(end);
++  return !Number.isNaN(startMs) && !Number.isNaN(endMs) && startMs < endMs;
++}
++
++export function canPersistRegionBetDraft(value: unknown): value is RegionBetContract {
++  if (!isRegionBetContract(value)) return false;
++  const draft = value;
++  const assetId = draft.asset.asset_id.trim();
++  const expiryMs = Date.parse(draft.target.expiry_utc);
++  const region = draft.selected_region;
++  const targetWindowStart = draft.target.window_start_utc ?? region.time_start_utc;
++  const targetWindowEnd = draft.target.window_end_utc ?? draft.target.expiry_utc;
++  return (
++    assetId.length > 0 &&
++    !Number.isNaN(expiryMs) &&
++    validIsoOrder(targetWindowStart, targetWindowEnd) &&
++    validIsoOrder(region.time_start_utc, region.time_end_utc) &&
++    region.price_min_usd < region.price_max_usd
++  );
++}
+diff --git a/tests/test_msos_web_region_bet_guided_shell.py b/tests/test_msos_web_region_bet_guided_shell.py
+new file mode 100644
+index 0000000..5aa557b
+--- /dev/null
++++ b/tests/test_msos_web_region_bet_guided_shell.py
+@@ -0,0 +1,97 @@
++"""Region Bet guided shell v1 - product slice witness."""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++REPO_ROOT = Path(__file__).resolve().parents[1]
++MSOS_WEB = REPO_ROOT / "apps" / "msos-web"
++
++
++def read_web(path: str) -> str:
++    return (MSOS_WEB / path).read_text(encoding="utf-8")
++
++
++def test_guided_shell_helper_defines_ordered_steps_and_stateful_hrefs() -> None:
++    lib = read_web("src/lib/regionBetGuidedShell.ts")
++    assert "export type RegionBetGuidedStep" in lib
++    assert '"asset" | "window" | "region" | "review"' in lib
++    assert "REGION_BET_GUIDED_STEPS" in lib
++    assert "Choose asset" in lib
++    assert "Set window" in lib
++    assert "Select region" in lib
++    assert "Review draft" in lib
++    assert "buildRegionBetGuidedStepHref" in lib
++    assert 'params.set("step", step)' in lib
++    assert "draft.asset.asset_id" in lib
++    assert "draft.target.expiry_utc" in lib
++    assert "draft.target.window_start_utc" in lib
++    assert "draft.selected_region.time_start_utc" in lib
++    assert "draft.selected_region.price_min_usd" in lib
++
++
++def test_guided_shell_fails_closed_before_persisting_invalid_drafts() -> None:
++    lib = read_web("src/lib/regionBetGuidedShell.ts")
++    shell = read_web("src/components/RegionBetGuidedShell.tsx")
++    panel = read_web("src/components/RegionBetGuidedShellPanel.tsx")
++    assert "canPersistRegionBetDraft" in lib
++    assert "isRegionBetContract(value)" in lib
++    assert "assetId.length > 0" in lib
++    assert "region.price_min_usd < region.price_max_usd" in lib
++    assert "validIsoOrder(region.time_start_utc, region.time_end_utc)" in lib
++    assert "validIsoOrder(targetWindowStart, targetWindowEnd)" in lib
++    assert "if (!canPersistRegionBetDraft(draft))" in shell
++    assert "disabled={pending || !canPersist}" in panel
++
++
++def test_guided_shell_uses_region_bet_contract_helpers_not_parallel_schema() -> None:
++    shell = read_web("src/components/RegionBetGuidedShell.tsx")
++    panel = read_web("src/components/RegionBetGuidedShellPanel.tsx")
++    helper = read_web("src/lib/regionBetGuidedShell.ts")
++    assert "fetchRegionBet" in shell
++    assert "persistRegionBet" in shell
++    assert "type RegionBetContract" in shell
++    assert "type RegionBetContract" in panel
++    assert "isRegionBetContract" in helper
++    assert "newRegionBetId" in helper
++    assert "localStorage.setItem" not in shell
++    assert "sessionStorage.setItem" not in shell
++    assert "window.localStorage" not in helper
++
++
++def test_guided_panel_preserves_draft_on_forward_back_navigation() -> None:
++    panel = read_web("src/components/RegionBetGuidedShellPanel.tsx")
++    assert "onStepChange(previousStep)" in panel
++    assert "onStepChange(nextStep)" in panel
++    assert "event.preventDefault()" in panel
++    assert "buildRegionBetGuidedStepHref(step.id, draft)" in panel
++    assert 'currentStep === "asset"' in panel
++    assert 'currentStep === "window"' in panel
++    assert 'currentStep === "region"' in panel
++    assert 'currentStep === "review"' in panel
++    assert "draft.asset.asset_id" in panel
++    assert "draft.target.expiry_utc" in panel
++    assert "draft.target.window_start_utc" in panel
++    assert "draft.selected_region.price_max_usd" in panel
++
++
++def test_guided_shell_does_not_recreate_later_region_bet_surfaces() -> None:
++    touched = "\n".join(
++        [
++            read_web("src/lib/regionBetGuidedShell.ts"),
++            read_web("src/components/RegionBetGuidedShell.tsx"),
++            read_web("src/components/RegionBetGuidedShellPanel.tsx"),
++        ]
++    )
++    forbidden = [
++        "OptionsExpressionFitRankingPanel",
++        "OptionsHorizonComparison",
++        "market compare",
++        "expression ranking",
++        "brokerage",
++        "order ticket",
++        "wallet",
++        "custody",
++    ]
++    for phrase in forbidden:
++        assert phrase.lower() not in touched.lower()

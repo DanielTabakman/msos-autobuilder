@@ -1,0 +1,14 @@
+{
+  "canon_conflict": false,
+  "claim_generation": 2,
+  "claim_writer_id": "build-next:build-next-ppe-region_bet_guided_shell_v1-RegionBet-GuidedShell-Product-Slice00-c8c154846e050660",
+  "evidence_conflict": false,
+  "founder_decision_required": false,
+  "job_id": "build-next-ppe-region_bet_guided_shell_v1-RegionBet-GuidedShell-Product-Slice00-c8c154846e050660",
+  "objective_sha256": "9b7eecb8a6e5df20677aea852fecd46175028bce2a8836b950acd8aaf95de963",
+  "ownership_conflict": false,
+  "pr_number": 5441,
+  "producer": "controlled_publisher",
+  "product_commit": "bf2aca08dd968d16ada718d923d994084e4fd2ae",
+  "version": 1
+}

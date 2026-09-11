@@ -1,0 +1,12 @@
+{
+  "gate_report_sha256": "0a8aba1d5aaa9f182dccc020389e38ccc55d2dc8a4c31b7db599b0465a6cec8e",
+  "job_id": "build-next-ppe-region_bet_guided_shell_v1-RegionBet-GuidedShell-Product-Slice00-c8c154846e050660",
+  "not_applicable_evidence": true,
+  "producer": "controlled_publisher",
+  "product_commit": "bf2aca08dd968d16ada718d923d994084e4fd2ae",
+  "publication_report_sha256": "3a48ad434cf3e8c2789b2b7779ac97d92dc7c6e7c6776f7c53cd0903aa91b14a",
+  "revision_disposition": "not_applicable",
+  "revision_evidence_id": "5ce9565847b2202c34cc8518a28715a3",
+  "revision_evidence_sha256": "1cbbe117875bf5e31344bb20d3f003433f28ec99879bf3247b6a2c8a3fb3b936",
+  "version": 1
+}

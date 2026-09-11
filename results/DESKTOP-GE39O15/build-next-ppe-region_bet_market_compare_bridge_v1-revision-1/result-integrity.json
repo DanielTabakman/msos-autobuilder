@@ -1,0 +1,9 @@
+{
+  "canonical_patch_sha256_by_task": {
+    "RegionBet-MarketCompare-Product-Slice002-revision-1": "30b5c9a5190d07ef1bdde5dbad1f3ea7d82e107b7a7480104b2d772b99d7eb5b"
+  },
+  "corrected_report_sha256": "bdf4357730a29f71de6207d1b041fab1b5c7ef28bb678f2046cbaeedb85ab77c",
+  "publication_enabled": false,
+  "source_report_sha256": "b57ff49ca694d7f71317c046658eba9d25c5b85a362d19c3b1b60cb8e682aee6",
+  "version": 1
+}

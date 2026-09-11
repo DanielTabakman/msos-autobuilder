@@ -1,0 +1,67 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+          "apps/msos-web/src/components/RegionBetMarketComparePanel.tsx",
+          "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+          "apps/msos-web/src/lib/regionBetMarketCompare.ts",
+          "tests/test_msos_web_region_bet_market_compare.py"
+        ],
+        "metadata": {
+          "output_tail": "rketComparePanel.tsx\"\n+            ).read_text(encoding=\"utf-8\"),\n+            (\n+                MSOS_WEB / \"src\" / \"components\" / \"RegionBetGuidedShellPanel.tsx\"\n+            ).read_text(encoding=\"utf-8\"),\n+        ]\n+    )\n+    assert \"OptionsExpressionFitRanking\" not in touched\n+    assert \"expected profit\" not in touched.lower()\n+    assert \"brokerage\" not in touched.lower()\n+    assert \"order ticket\" not in touched.lower()\n\ntokens used\n86,011\nImplemented the Region Bet market-compare bridge slice from the clean checkout, limited to the allowed touch set.\n\nChanged:\n- Added compare step between `region` and `review` in [regionBetGuidedShell.ts](/abs/path/apps/msos-web/src/lib/regionBetGuidedShell.ts)\n- Wired compare rendering in [RegionBetGuidedShellPanel.tsx](/abs/path/apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx)\n- Added the pure bridge in [regionBetMarketCompare.ts](/abs/path/apps/msos-web/src/lib/regionBetMarketCompare.ts)\n- Added the display-only panel in [RegionBetMarketComparePanel.tsx](/abs/path/apps/msos-web/src/components/RegionBetMarketComparePanel.tsx)\n- Added focused witness tests in [test_msos_web_region_bet_market_compare.py](/abs/path/tests/test_msos_web_region_bet_market_compare.py)\n\nValidation:\n- `python -m pytest -q tests/test_msos_web_region_bet_market_compare.py tests/test_msos_web_region_bet_guided_shell.py tests/test_msos_web_options_horizon_comparison.py` passed: `13 passed`\n- `python scripts/check_repository_boundaries.py` passed\n- `python scripts/run_pushable_gate.py` did not reach tests: failed computing `origin/main...HEAD` in this detached checkout\n- Full `python -m pytest -q` could not run in this shell because dependencies like `pandas`, `requests`, and `google` are missing\n- Separate queue audit still reports the original forbidden/control-plane issue: `READY_WITH_TERMINAL_BACKLOG` for `docs/SOP/PHASE_PLANS/options_horizon_comparison_v1_relay.json`\n\nI did not commit, push, publish, or open a PR, per your instruction.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\workspaces\\RegionBet-MarketCompare-Product-Slice002-revision-1"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 5 changed path(s)",
+        "task_id": "RegionBet-MarketCompare-Product-Slice002-revision-1"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "add15e389d2e51a03d2fc26423f4edc77c11c1a7",
+    "status": "completed"
+  },
+  "completed_at": "2026-09-11T14:58:39.171035+00:00",
+  "job_id": "build-next-ppe-region_bet_market_compare_bridge_v1-revision-1",
+  "job_sha256": "f1ee134eacdfcd774942e02e82f42c1094c6527acad3ef8dd8cf9eb9369c56f9",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "changed_paths": [
+        "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+        "apps/msos-web/src/components/RegionBetMarketComparePanel.tsx",
+        "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+        "apps/msos-web/src/lib/regionBetMarketCompare.ts",
+        "tests/test_msos_web_region_bet_market_compare.py"
+      ],
+      "complete_patch": true,
+      "lane_id": "RegionBet-MarketCompare-Product-Slice002-revision-1",
+      "patch_file": "patches/RegionBet-MarketCompare-Product-Slice002-revision-1.patch",
+      "patch_sha256": "30b5c9a5190d07ef1bdde5dbad1f3ea7d82e107b7a7480104b2d772b99d7eb5b",
+      "task_id": "RegionBet-MarketCompare-Product-Slice002-revision-1"
+    }
+  ],
+  "publication_enabled": false,
+  "relay": {
+    "canonical_patch_sha256_by_task": {
+      "RegionBet-MarketCompare-Product-Slice002-revision-1": "30b5c9a5190d07ef1bdde5dbad1f3ea7d82e107b7a7480104b2d772b99d7eb5b"
+    },
+    "canonical_report_role": "relay-corrected-canonical-downstream-report",
+    "complete_patch_reconstruction": true,
+    "machine_id": "DESKTOP-GE39O15",
+    "publication_enabled": false,
+    "relayed_at": "2026-09-11T14:58:53.217350+00:00",
+    "source_report_role": "original-worker-report-noncanonical-for-patch-identity",
+    "source_report_sha256": "b57ff49ca694d7f71317c046658eba9d25c5b85a362d19c3b1b60cb8e682aee6",
+    "version": 1
+  },
+  "requested_by": "MSOS Autobuilder automatic revision loop",
+  "source": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\queue\\pending\\build-next-ppe-region_bet_market_compare_bridge_v1-revision-1.yaml",
+  "version": 1
+}

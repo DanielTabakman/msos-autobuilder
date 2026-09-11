@@ -1,0 +1,321 @@
+diff --git a/apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx b/apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx
+index efc98a5..eef3199 100644
+--- a/apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx
++++ b/apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx
+@@ -4,6 +4,7 @@ import type {
+   RegionBetGuidedShellStep,
+   RegionBetGuidedShellSnapshot,
+ } from "@/lib/regionBetGuidedShell";
++import { RegionBetMarketComparePanel } from "@/components/RegionBetMarketComparePanel";
+ import type { RegionBetContract } from "@/lib/regionBet";
+ 
+ export type RegionBetGuidedAssetOption = {
+@@ -223,6 +224,10 @@ export function RegionBetGuidedShellPanel({
+     );
+   }
+ 
++  if (step === "compare") {
++    return <RegionBetMarketComparePanel snapshot={snapshot} />;
++  }
++
+   return (
+     <div className="panel chart" data-testid="region-bet-guided-shell-panel">
+       <div className="panel-head">
+diff --git a/apps/msos-web/src/components/RegionBetMarketComparePanel.tsx b/apps/msos-web/src/components/RegionBetMarketComparePanel.tsx
+new file mode 100644
+index 0000000..bb4658a
+--- /dev/null
++++ b/apps/msos-web/src/components/RegionBetMarketComparePanel.tsx
+@@ -0,0 +1,92 @@
++"use client";
++
++import { useEffect, useMemo, useState } from "react";
++
++import { OptionsHorizonComparisonPanel } from "@/components/OptionsHorizonComparisonPanel";
++import { fetchHorizonChartPayload, type HorizonChartPayload } from "@/lib/horizonChartPayload";
++import {
++  buildRegionBetMarketCompareFromChart,
++  regionBetMarketCompareFetchParams,
++} from "@/lib/regionBetMarketCompare";
++import type { RegionBetGuidedShellSnapshot } from "@/lib/regionBetGuidedShell";
++
++type RegionBetMarketComparePanelProps = {
++  snapshot: RegionBetGuidedShellSnapshot;
++};
++
++export function RegionBetMarketComparePanel({ snapshot }: RegionBetMarketComparePanelProps) {
++  const [payload, setPayload] = useState<HorizonChartPayload | null>(null);
++  const [loading, setLoading] = useState(true);
++
++  const fetchParams = useMemo(
++    () => regionBetMarketCompareFetchParams(snapshot),
++    [snapshot],
++  );
++
++  useEffect(() => {
++    let cancelled = false;
++    if (!fetchParams) {
++      setPayload(null);
++      setLoading(false);
++      return () => {
++        cancelled = true;
++      };
++    }
++
++    setLoading(true);
++    void fetchHorizonChartPayload(fetchParams).then((nextPayload) => {
++      if (cancelled) return;
++      setPayload(nextPayload);
++      setLoading(false);
++    });
++    return () => {
++      cancelled = true;
++    };
++  }, [fetchParams]);
++
++  const compare = useMemo(
++    () => buildRegionBetMarketCompareFromChart(snapshot, payload),
++    [payload, snapshot],
++  );
++
++  return (
++    <div className="panel chart" data-testid="region-bet-market-compare-panel">
++      <div className="panel-head">
++        <div>
++          <h2>Compare listed windows</h2>
++          <div className="panel-sub">
++            Current Region Bet context, shown against display-only Options Horizon buckets.
++          </div>
++        </div>
++        <span className="tag">Compare</span>
++      </div>
++
++      <div className="score" aria-label="Region Bet compare context">
++        <div className="small-panel">
++          <div className="k">Asset</div>
++          <div className="v teal">{snapshot.symbol ?? snapshot.asset_id}</div>
++        </div>
++        <div className="small-panel">
++          <div className="k">Window</div>
++          <div className="v">{snapshot.expiry_utc.slice(0, 10)}</div>
++        </div>
++        <div className="small-panel">
++          <div className="k">Region</div>
++          <div className="v amber">
++            {snapshot.selected_region.price_min_usd} to {snapshot.selected_region.price_max_usd}
++          </div>
++        </div>
++      </div>
++
++      {loading ? (
++        <p className="micro">Loading listed-window comparison...</p>
++      ) : compare ? (
++        <OptionsHorizonComparisonPanel comparison={compare.comparison} />
++      ) : (
++        <p className="micro">
++          Listed-window comparison is unavailable for this draft. Educational comparison only; not financial advice, not a recommendation, and not order execution.
++        </p>
++      )}
++    </div>
++  );
++}
+diff --git a/apps/msos-web/src/lib/regionBetGuidedShell.ts b/apps/msos-web/src/lib/regionBetGuidedShell.ts
+index 508692a..7b98436 100644
+--- a/apps/msos-web/src/lib/regionBetGuidedShell.ts
++++ b/apps/msos-web/src/lib/regionBetGuidedShell.ts
+@@ -4,7 +4,7 @@ import {
+   type RegionBetContract,
+ } from "@/lib/regionBet";
+ 
+-export type RegionBetGuidedShellStep = "asset" | "window" | "region" | "review";
++export type RegionBetGuidedShellStep = "asset" | "window" | "region" | "compare" | "review";
+ 
+ export type RegionBetGuidedShellStepDef = {
+   id: RegionBetGuidedShellStep;
+@@ -35,6 +35,7 @@ export const REGION_BET_GUIDED_SHELL_STEPS: RegionBetGuidedShellStepDef[] = [
+   { id: "asset", label: "Asset" },
+   { id: "window", label: "Window" },
+   { id: "region", label: "Region" },
++  { id: "compare", label: "Compare" },
+   { id: "review", label: "Review" },
+ ];
+ 
+diff --git a/apps/msos-web/src/lib/regionBetMarketCompare.ts b/apps/msos-web/src/lib/regionBetMarketCompare.ts
+new file mode 100644
+index 0000000..e4876cf
+--- /dev/null
++++ b/apps/msos-web/src/lib/regionBetMarketCompare.ts
+@@ -0,0 +1,87 @@
++import type { HorizonChartPayload } from "@/lib/horizonChartPayload";
++import {
++  buildOptionsHorizonComparisonFromChart,
++  type OptionsHorizonComparisonPayload,
++} from "@/lib/optionsHorizonComparison";
++import type { RegionBetGuidedShellSnapshot } from "@/lib/regionBetGuidedShell";
++
++export type RegionBetMarketComparePayload = {
++  schema_version: 1;
++  kind: "region_bet_market_compare";
++  region_context: {
++    asset_id: string;
++    symbol?: string;
++    venue?: string;
++    expiry_utc: string;
++    window_start_utc?: string;
++    window_end_utc?: string;
++    price_min_usd: number;
++    price_max_usd: number;
++  };
++  comparison: OptionsHorizonComparisonPayload;
++};
++
++function validDate(value: string | undefined): value is string {
++  return typeof value === "string" && !Number.isNaN(Date.parse(value));
++}
++
++function validNumber(value: number): boolean {
++  return Number.isFinite(value);
++}
++
++export function isRegionBetMarketCompareReady(
++  snapshot: RegionBetGuidedShellSnapshot,
++): boolean {
++  const region = snapshot.selected_region;
++  return (
++    snapshot.asset_id.trim().length > 0 &&
++    validDate(snapshot.expiry_utc) &&
++    validDate(region.time_start_utc) &&
++    validDate(region.time_end_utc) &&
++    validNumber(region.price_min_usd) &&
++    validNumber(region.price_max_usd) &&
++    region.price_min_usd < region.price_max_usd &&
++    Date.parse(region.time_start_utc) <= Date.parse(region.time_end_utc)
++  );
++}
++
++export function regionBetMarketCompareFetchParams(
++  snapshot: RegionBetGuidedShellSnapshot,
++): { expiryTs: number } | null {
++  if (!isRegionBetMarketCompareReady(snapshot)) return null;
++  const expiryTs = Math.floor(new Date(snapshot.expiry_utc).getTime() / 1000);
++  return Number.isFinite(expiryTs) ? { expiryTs } : null;
++}
++
++export function buildRegionBetMarketCompareFromChart(
++  snapshot: RegionBetGuidedShellSnapshot,
++  chartPayload: HorizonChartPayload | null,
++): RegionBetMarketComparePayload | null {
++  if (!chartPayload || !isRegionBetMarketCompareReady(snapshot)) return null;
++
++  const mappedPayload: HorizonChartPayload = {
++    ...chartPayload,
++    asset_id: snapshot.asset_id,
++    meta: {
++      ...chartPayload.meta,
++      read_only: true,
++      simulation_only: true,
++    },
++  };
++
++  return {
++    schema_version: 1,
++    kind: "region_bet_market_compare",
++    region_context: {
++      asset_id: snapshot.asset_id,
++      symbol: snapshot.symbol,
++      venue: snapshot.venue,
++      expiry_utc: snapshot.expiry_utc,
++      window_start_utc: snapshot.window_start_utc,
++      window_end_utc: snapshot.window_end_utc,
++      price_min_usd: snapshot.selected_region.price_min_usd,
++      price_max_usd: snapshot.selected_region.price_max_usd,
++    },
++    comparison: buildOptionsHorizonComparisonFromChart(mappedPayload),
++  };
++}
+diff --git a/tests/test_msos_web_region_bet_market_compare.py b/tests/test_msos_web_region_bet_market_compare.py
+new file mode 100644
+index 0000000..a2c03ff
+--- /dev/null
++++ b/tests/test_msos_web_region_bet_market_compare.py
+@@ -0,0 +1,80 @@
++"""Region Bet market-compare bridge v1 product-slice witness."""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++REPO_ROOT = Path(__file__).resolve().parents[1]
++MSOS_WEB = REPO_ROOT / "apps" / "msos-web"
++
++
++def test_region_bet_guided_shell_exposes_compare_step_before_review() -> None:
++    lib = (MSOS_WEB / "src" / "lib" / "regionBetGuidedShell.ts").read_text(
++        encoding="utf-8"
++    )
++    assert 'export type RegionBetGuidedShellStep = "asset" | "window" | "region" | "compare" | "review"' in lib
++    assert '{ id: "region", label: "Region" }' in lib
++    assert '{ id: "compare", label: "Compare" }' in lib
++    assert '{ id: "review", label: "Review" }' in lib
++    assert lib.index('{ id: "region", label: "Region" }') < lib.index(
++        '{ id: "compare", label: "Compare" }'
++    ) < lib.index('{ id: "review", label: "Review" }')
++
++
++def test_region_bet_market_compare_bridge_reuses_options_horizon_comparison() -> None:
++    bridge = (MSOS_WEB / "src" / "lib" / "regionBetMarketCompare.ts").read_text(
++        encoding="utf-8"
++    )
++    assert "buildOptionsHorizonComparisonFromChart" in bridge
++    assert "comparison: buildOptionsHorizonComparisonFromChart(mappedPayload)" in bridge
++    assert "selectedBuckets" not in bridge
++    assert "TARGET_BUCKET_DAYS" not in bridge
++    assert "Math.abs" not in bridge
++
++
++def test_region_bet_market_compare_panel_embeds_existing_table_read_only() -> None:
++    panel = (
++        MSOS_WEB / "src" / "components" / "RegionBetMarketComparePanel.tsx"
++    ).read_text(encoding="utf-8")
++    assert "OptionsHorizonComparisonPanel" in panel
++    assert "fetchHorizonChartPayload(fetchParams)" in panel
++    assert "buildRegionBetMarketCompareFromChart(snapshot, payload)" in panel
++    assert "data-testid=\"region-bet-market-compare-panel\"" in panel
++    assert "not financial advice" in panel
++    assert "not a recommendation" in panel
++    assert "not order execution" in panel
++    assert "button" not in panel.lower()
++    assert "order ticket" not in panel.lower()
++
++
++def test_region_bet_guided_panel_preserves_context_through_compare() -> None:
++    panel = (
++        MSOS_WEB / "src" / "components" / "RegionBetGuidedShellPanel.tsx"
++    ).read_text(encoding="utf-8")
++    assert 'if (step === "compare")' in panel
++    assert "<RegionBetMarketComparePanel snapshot={snapshot} />" in panel
++    assert "draft.target.expiry_utc" in panel
++    assert "draft.target.window_start_utc" in panel
++    assert "draft.target.window_end_utc" in panel
++    assert "draft.selected_region.price_min_usd" in panel
++    assert "draft.selected_region.price_max_usd" in panel
++
++
++def test_region_bet_market_compare_does_not_recreate_parked_surfaces() -> None:
++    touched = "\n".join(
++        [
++            (MSOS_WEB / "src" / "lib" / "regionBetMarketCompare.ts").read_text(
++                encoding="utf-8"
++            ),
++            (
++                MSOS_WEB / "src" / "components" / "RegionBetMarketComparePanel.tsx"
++            ).read_text(encoding="utf-8"),
++            (
++                MSOS_WEB / "src" / "components" / "RegionBetGuidedShellPanel.tsx"
++            ).read_text(encoding="utf-8"),
++        ]
++    )
++    assert "OptionsExpressionFitRanking" not in touched
++    assert "expected profit" not in touched.lower()
++    assert "brokerage" not in touched.lower()
++    assert "order ticket" not in touched.lower()

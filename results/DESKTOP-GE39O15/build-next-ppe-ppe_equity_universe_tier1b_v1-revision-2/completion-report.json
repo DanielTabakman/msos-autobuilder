@@ -8,33 +8,7 @@
     "tests/test_implied_lab_embed_display_boundary.py",
     "tests/test_lab_asset_selection.py"
   ],
-  "checks": {
-    "changes": {
-      "name": "changes",
-      "source": "check_run",
-      "state": "success"
-    },
-    "ci_success": {
-      "name": "ci_success",
-      "source": "check_run",
-      "state": "success"
-    },
-    "docker_entrypoint": {
-      "name": "docker_entrypoint",
-      "source": "check_run",
-      "state": "success"
-    },
-    "msos_web_build": {
-      "name": "msos_web_build",
-      "source": "check_run",
-      "state": "success"
-    },
-    "pytest": {
-      "name": "pytest",
-      "source": "check_run",
-      "state": "success"
-    }
-  },
+  "checks": {},
   "claim_release_handoff": {
     "allowed_terminal_states": [
       "abandoned",
@@ -76,18 +50,18 @@
       "status": "completed"
     }
   ],
-  "completed_at": "2026-09-08T23:30:23.255193+00:00",
+  "completed_at": "2026-09-12T17:52:28.941710+00:00",
   "default_branch": "main",
-  "default_branch_head": "f3c9ef57370e43f436576968d3e1ed30e974e70e",
+  "default_branch_head": "bb1dc239e07bc877b60ffa2194c1229411fbd23e",
   "founder_digest": "Merged automatically\nWork: ppe_equity_universe_tier1b_v1\nPR: 5433\nMerge commit: 58f6566ab57ed96d655fdc797410917e4a8dc07e\nValidation: candidate gate + publication + required checks passed\nCleanup: completed\nDecision required: none",
   "gate_report_sha256": "78afcd2559f9f94a818423383c8410ef5705e8fdad6b83702e06e65296951d68",
   "job_id": "build-next-ppe-ppe_equity_universe_tier1b_v1-revision-2",
   "merge_commit": "58f6566ab57ed96d655fdc797410917e4a8dc07e",
-  "merge_method": "merge",
+  "merge_method": "squash",
   "pr_number": 5433,
   "product_branch": "autobuilder/build-next-ppe-ppe_equity_universe_tier1b_v1-revision-2",
   "publication_report_sha256": "913aff3315a9a154367442a35e2d6be4e20d9a08ba586fe4b45ed4d870222e7f",
-  "recovered_from_status": "cleanup_recorded",
+  "recovered_from_status": "already_merged",
   "review_evidence": {
     "latest_opinionated_reviews": [],
     "review_decision": "",
@@ -107,7 +81,7 @@
     "version": 1
   },
   "status": "merged",
-  "terminal_path": "C:\\Users\\USER\\.msos-autobuilder-merge-witness-20260902\\state\\completion-terminal-work-items\\build-next-ppe-ppe_equity_universe_tier1b_v1-revision-2.json",
+  "terminal_path": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\state\\completion-terminal-work-items\\build-next-ppe-ppe_equity_universe_tier1b_v1-revision-2.json",
   "validated_head": "1c9e166068f230cf70e5b9d597656eff4cef805e",
   "version": 1,
   "work_item_id": "ppe_equity_universe_tier1b_v1"

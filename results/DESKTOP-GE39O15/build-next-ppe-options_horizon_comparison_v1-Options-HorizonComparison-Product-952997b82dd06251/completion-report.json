@@ -1,9 +1,90 @@
 {
   "authority_class": "FOUNDER_DECISION_REQUIRED",
+  "authority_declared_at": "1970-01-01T00:00:00+00:00",
+  "changed_paths": [
+    "apps/msos-web/src/components/OptionsHorizonClient.tsx",
+    "apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx",
+    "apps/msos-web/src/lib/optionsHorizonComparison.ts",
+    "src/engine/options_horizon_comparison.py",
+    "src/viz/options_horizon_comparison_boundary.py",
+    "tests/test_msos_web_options_horizon_comparison.py",
+    "tests/test_options_horizon_comparison.py"
+  ],
+  "checks": {},
+  "claim_release_handoff": {
+    "allowed_terminal_states": [
+      "abandoned",
+      "failed",
+      "merged",
+      "released",
+      "superseded"
+    ],
+    "authorized_paths": [
+      "apps/msos-web/src/components/OptionsHorizonClient.tsx",
+      "apps/msos-web/src/components/OptionsHorizonComparisonPanel.tsx",
+      "apps/msos-web/src/lib/optionsHorizonComparison.ts",
+      "src/engine/options_horizon_comparison.py",
+      "src/viz/options_horizon_comparison_boundary.py",
+      "tests/test_msos_web_options_horizon_comparison.py",
+      "tests/test_options_horizon_comparison.py"
+    ],
+    "bounded_failure_behavior": {
+      "accepted_abandonment": "release as abandoned with founder/owner disposition evidence",
+      "submission_or_publication_failure": "release as failed with bounded failure evidence",
+      "superseded_duplicate": "release as superseded with canonical successor evidence"
+    },
+    "claim_generation": 2,
+    "consumer": "completion-controller",
+    "handoff": "msos-autobuilder.work_admission.claim_release.v1",
+    "immutability": "consumer must match objective_sha256, writer_id and claim_generation before release",
+    "linked_issue": null,
+    "objective_sha256": "22c420a38318a12b5bb307fbc3aa5b063cbc06813d69f95d85aab31455cab2dc",
+    "release_api": "msos_autobuilder.work_admission.release_claim",
+    "repository": "DanielTabakman/Probability-prediction-engine",
+    "verified_completion_terminal_state": "merged",
+    "version": 1,
+    "writer_id": "build-next:build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251"
+  },
+  "cleanup": [
+    {
+      "action": "delete_branch",
+      "branch": "autobuilder/build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251",
+      "status": "completed"
+    }
+  ],
+  "completed_at": "2026-09-12T17:52:17.122815+00:00",
+  "default_branch": "main",
+  "default_branch_head": "bb1dc239e07bc877b60ffa2194c1229411fbd23e",
+  "founder_digest": "Merged automatically\nWork: options_horizon_comparison_v1\nPR: 5427\nMerge commit: f7229e831fd1baeb4df1a7042f31a5a65ade8fd9\nValidation: candidate gate + publication + required checks passed\nCleanup: completed\nDecision required: none",
+  "gate_report_sha256": "5e5a5d13723611a8176d2b3e51c9a38a7d79867a3385927d58f77eeb0f284a32",
   "job_id": "build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251",
-  "merge_performed": false,
-  "reason": "FOUNDER_DECISION_REQUIRED blocks automatic merge",
-  "recorded_at": "2026-09-02T20:33:20.764450+00:00",
-  "status": "escalated",
-  "version": 1
+  "merge_commit": "f7229e831fd1baeb4df1a7042f31a5a65ade8fd9",
+  "merge_method": "squash",
+  "pr_number": 5427,
+  "product_branch": "autobuilder/build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251",
+  "publication_report_sha256": "31ea5012f8eda177d80bbdffc8935c1875d54a28ef2f35e03767c583027cb6b8",
+  "recovered_from_status": "already_merged",
+  "review_evidence": {
+    "latest_opinionated_reviews": [],
+    "review_decision": "",
+    "source": "github_graphql",
+    "unresolved_review_threads": 0
+  },
+  "revision_lineage": {
+    "gate_report_sha256": "5e5a5d13723611a8176d2b3e51c9a38a7d79867a3385927d58f77eeb0f284a32",
+    "job_id": "build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251",
+    "not_applicable_evidence": true,
+    "producer": "controlled_publisher",
+    "product_commit": "59467d5f37fa19af83574f559382f1caa5d30454",
+    "publication_report_sha256": "31ea5012f8eda177d80bbdffc8935c1875d54a28ef2f35e03767c583027cb6b8",
+    "revision_disposition": "not_applicable",
+    "revision_evidence_id": "f47f56809889c170fca3a0a3e606ccda",
+    "revision_evidence_sha256": "fa948d3d8c27e50875cb94da9aec5569d8095eb0e38f3e21a6f5f9f82d78dd3f",
+    "version": 1
+  },
+  "status": "merged",
+  "terminal_path": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\state\\completion-terminal-work-items\\build-next-ppe-options_horizon_comparison_v1-Options-HorizonComparison-Product-952997b82dd06251.json",
+  "validated_head": "59467d5f37fa19af83574f559382f1caa5d30454",
+  "version": 1,
+  "work_item_id": "options_horizon_comparison_v1"
 }

@@ -1,0 +1,86 @@
+{
+  "authority_class": "AUTO_MERGE_WHEN_GREEN",
+  "authority_declared_at": "2026-09-10T23:50:51+00:00",
+  "changed_paths": [
+    "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+    "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+    "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+    "tests/test_msos_web_region_bet_guided_shell.py"
+  ],
+  "checks": {},
+  "claim_release_handoff": {
+    "allowed_terminal_states": [
+      "abandoned",
+      "failed",
+      "merged",
+      "released",
+      "superseded"
+    ],
+    "authorized_paths": [
+      "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+      "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+      "apps/msos-web/src/lib/msosWorkflowStore.ts",
+      "apps/msos-web/src/lib/regionBet.ts",
+      "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+      "tests/test_msos_web_region_bet_guided_shell.py"
+    ],
+    "bounded_failure_behavior": {
+      "accepted_abandonment": "release as abandoned with founder/owner disposition evidence",
+      "submission_or_publication_failure": "release as failed with bounded failure evidence",
+      "superseded_duplicate": "release as superseded with canonical successor evidence"
+    },
+    "claim_generation": 2,
+    "consumer": "completion-controller",
+    "handoff": "msos-autobuilder.work_admission.claim_release.v1",
+    "immutability": "consumer must match objective_sha256, writer_id and claim_generation before release",
+    "linked_issue": null,
+    "objective_sha256": "9b7eecb8a6e5df20677aea852fecd46175028bce2a8836b950acd8aaf95de963",
+    "release_api": "msos_autobuilder.work_admission.release_claim",
+    "repository": "DanielTabakman/Probability-prediction-engine",
+    "verified_completion_terminal_state": "merged",
+    "version": 1,
+    "writer_id": "build-next:build-next-ppe-region_bet_guided_shell_v1-RegionBet-GuidedShell-Product-Slice00-c8c154846e050660"
+  },
+  "cleanup": [
+    {
+      "action": "delete_branch",
+      "branch": "autobuilder/build-next-ppe-region_bet_guided_shell_v1-RegionBet-GuidedShell-Product-Slice00-c8c154846e050660",
+      "status": "completed"
+    }
+  ],
+  "completed_at": "2026-09-12T17:59:48.529383+00:00",
+  "default_branch": "main",
+  "default_branch_head": "bb1dc239e07bc877b60ffa2194c1229411fbd23e",
+  "founder_digest": "Merged automatically\nWork: region_bet_guided_shell_v1\nPR: 5441\nMerge commit: b49f6b06c83ad058fabaa193ce20f631a10805cd\nValidation: candidate gate + publication + required checks passed\nCleanup: completed\nDecision required: none",
+  "gate_report_sha256": "0a8aba1d5aaa9f182dccc020389e38ccc55d2dc8a4c31b7db599b0465a6cec8e",
+  "job_id": "build-next-ppe-region_bet_guided_shell_v1-RegionBet-GuidedShell-Product-Slice00-c8c154846e050660",
+  "merge_commit": "b49f6b06c83ad058fabaa193ce20f631a10805cd",
+  "merge_method": "squash",
+  "pr_number": 5441,
+  "product_branch": "autobuilder/build-next-ppe-region_bet_guided_shell_v1-RegionBet-GuidedShell-Product-Slice00-c8c154846e050660",
+  "publication_report_sha256": "3a48ad434cf3e8c2789b2b7779ac97d92dc7c6e7c6776f7c53cd0903aa91b14a",
+  "recovered_from_status": "already_merged",
+  "review_evidence": {
+    "latest_opinionated_reviews": [],
+    "review_decision": "",
+    "source": "github_graphql",
+    "unresolved_review_threads": 0
+  },
+  "revision_lineage": {
+    "gate_report_sha256": "0a8aba1d5aaa9f182dccc020389e38ccc55d2dc8a4c31b7db599b0465a6cec8e",
+    "job_id": "build-next-ppe-region_bet_guided_shell_v1-RegionBet-GuidedShell-Product-Slice00-c8c154846e050660",
+    "not_applicable_evidence": true,
+    "producer": "controlled_publisher",
+    "product_commit": "bf2aca08dd968d16ada718d923d994084e4fd2ae",
+    "publication_report_sha256": "3a48ad434cf3e8c2789b2b7779ac97d92dc7c6e7c6776f7c53cd0903aa91b14a",
+    "revision_disposition": "not_applicable",
+    "revision_evidence_id": "5ce9565847b2202c34cc8518a28715a3",
+    "revision_evidence_sha256": "1cbbe117875bf5e31344bb20d3f003433f28ec99879bf3247b6a2c8a3fb3b936",
+    "version": 1
+  },
+  "status": "merged",
+  "terminal_path": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\state\\completion-terminal-work-items\\build-next-ppe-region_bet_guided_shell_v1-RegionBet-GuidedShell-Product-Slice00-c8c154846e050660.json",
+  "validated_head": "bf2aca08dd968d16ada718d923d994084e4fd2ae",
+  "version": 1,
+  "work_item_id": "region_bet_guided_shell_v1"
+}

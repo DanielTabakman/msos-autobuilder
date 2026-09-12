@@ -1,9 +1,84 @@
 {
   "authority_class": "FOUNDER_DECISION_REQUIRED",
+  "authority_declared_at": "1970-01-01T00:00:00+00:00",
+  "changed_paths": [
+    "config/assets.yaml",
+    "scripts/witness_asset_catalog.py",
+    "src/viz/embed_display_boundary.py",
+    "tests/test_assets_registry.py",
+    "tests/test_lab_asset_selection.py"
+  ],
+  "checks": {},
+  "claim_release_handoff": {
+    "allowed_terminal_states": [
+      "abandoned",
+      "failed",
+      "merged",
+      "released",
+      "superseded"
+    ],
+    "authorized_paths": [
+      "config/assets.yaml",
+      "scripts/witness_asset_catalog.py",
+      "src/viz/embed_display_boundary.py"
+    ],
+    "bounded_failure_behavior": {
+      "accepted_abandonment": "release as abandoned with founder/owner disposition evidence",
+      "submission_or_publication_failure": "release as failed with bounded failure evidence",
+      "superseded_duplicate": "release as superseded with canonical successor evidence"
+    },
+    "claim_generation": 1,
+    "consumer": "completion-controller",
+    "handoff": "msos-autobuilder.work_admission.claim_release.v1",
+    "immutability": "consumer must match objective_sha256, writer_id and claim_generation before release",
+    "linked_issue": null,
+    "objective_sha256": "ef6817334a32c9b1277ad58b1bbf10f1ef092c1a5a43ee5074452869674461e0",
+    "release_api": "msos_autobuilder.work_admission.release_claim",
+    "repository": "DanielTabakman/Probability-prediction-engine",
+    "verified_completion_terminal_state": "merged",
+    "version": 1,
+    "writer_id": "build-next:build-next-ppe-ppe_commodity_proxy_tier1_v1-PPE-CommProxy-Core-Slice002-367c37e-247a4e337fe56bac"
+  },
+  "cleanup": [
+    {
+      "action": "delete_branch",
+      "branch": "autobuilder/build-next-ppe-commproxy-uso-revision-2",
+      "status": "completed"
+    }
+  ],
+  "completed_at": "2026-09-12T17:45:50.949817+00:00",
+  "default_branch": "main",
+  "default_branch_head": "bb1dc239e07bc877b60ffa2194c1229411fbd23e",
+  "founder_digest": "Merged automatically\nWork: ppe_commodity_proxy_tier1_v1\nPR: 5429\nMerge commit: 8052a3e2cd8d2d80734526b04449307943149510\nValidation: candidate gate + publication + required checks passed\nCleanup: completed\nDecision required: none",
+  "gate_report_sha256": "adb7730ad0ddd9aa01852223fa69aababfe46da905a04ca4333feecbaa58b4b8",
   "job_id": "build-next-ppe-commproxy-uso-revision-2",
-  "merge_performed": false,
-  "reason": "FOUNDER_DECISION_REQUIRED blocks automatic merge",
-  "recorded_at": "2026-09-02T20:32:52.574444+00:00",
-  "status": "escalated",
-  "version": 1
+  "merge_commit": "8052a3e2cd8d2d80734526b04449307943149510",
+  "merge_method": "squash",
+  "pr_number": 5429,
+  "product_branch": "autobuilder/build-next-ppe-commproxy-uso-revision-2",
+  "publication_report_sha256": "d52bcc00abf959197216996021f51543655bf35c964e59910264cae67b1c27dc",
+  "recovered_from_status": "already_merged",
+  "review_evidence": {
+    "latest_opinionated_reviews": [],
+    "review_decision": "",
+    "source": "github_graphql",
+    "unresolved_review_threads": 0
+  },
+  "revision_lineage": {
+    "gate_report_sha256": "adb7730ad0ddd9aa01852223fa69aababfe46da905a04ca4333feecbaa58b4b8",
+    "job_id": "build-next-ppe-commproxy-uso-revision-2",
+    "not_applicable_evidence": true,
+    "producer": "controlled_publisher",
+    "product_commit": "f476b65291e7fc027282fc04dfcacd0740a42801",
+    "publication_report_sha256": "d52bcc00abf959197216996021f51543655bf35c964e59910264cae67b1c27dc",
+    "revision_disposition": "not_applicable",
+    "revision_evidence_id": "13cc6d01291b524868769c469deb412a",
+    "revision_evidence_sha256": "baa45bc3a400cb87a197d3d932f5ecd59e5d04b6b059f11f1a19b40e0426ee7c",
+    "version": 1
+  },
+  "status": "merged",
+  "terminal_path": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\state\\completion-terminal-work-items\\build-next-ppe-commproxy-uso-revision-2.json",
+  "validated_head": "f476b65291e7fc027282fc04dfcacd0740a42801",
+  "version": 1,
+  "work_item_id": "ppe_commodity_proxy_tier1_v1"
 }

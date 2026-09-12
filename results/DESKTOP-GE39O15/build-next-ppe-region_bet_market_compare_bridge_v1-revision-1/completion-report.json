@@ -1,0 +1,87 @@
+{
+  "authority_class": "AUTO_MERGE_WHEN_GREEN",
+  "authority_declared_at": "2026-09-11T06:17:55+00:00",
+  "changed_paths": [
+    "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+    "apps/msos-web/src/components/RegionBetMarketComparePanel.tsx",
+    "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+    "apps/msos-web/src/lib/regionBetMarketCompare.ts",
+    "tests/test_msos_web_region_bet_market_compare.py"
+  ],
+  "checks": {},
+  "claim_release_handoff": {
+    "allowed_terminal_states": [
+      "abandoned",
+      "failed",
+      "merged",
+      "released",
+      "superseded"
+    ],
+    "authorized_paths": [
+      "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+      "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+      "apps/msos-web/src/components/RegionBetMarketComparePanel.tsx",
+      "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+      "apps/msos-web/src/lib/regionBetMarketCompare.ts",
+      "tests/test_msos_web_region_bet_market_compare.py"
+    ],
+    "bounded_failure_behavior": {
+      "accepted_abandonment": "release as abandoned with founder/owner disposition evidence",
+      "submission_or_publication_failure": "release as failed with bounded failure evidence",
+      "superseded_duplicate": "release as superseded with canonical successor evidence"
+    },
+    "claim_generation": 3,
+    "consumer": "completion-controller",
+    "handoff": "msos-autobuilder.work_admission.claim_release.v1",
+    "immutability": "consumer must match objective_sha256, writer_id and claim_generation before release",
+    "linked_issue": null,
+    "objective_sha256": "cdb3083acfbd98295a4f2ef805ee48bab7da54a4e8f213b8850f95d36c0b77bd",
+    "release_api": "msos_autobuilder.work_admission.release_claim",
+    "repository": "DanielTabakman/Probability-prediction-engine",
+    "verified_completion_terminal_state": "merged",
+    "version": 1,
+    "writer_id": "build-next:build-next-ppe-region_bet_market_compare_bridge_v1-RegionBet-MarketCompare-Prod-91113c597b863830"
+  },
+  "cleanup": [
+    {
+      "action": "delete_branch",
+      "branch": "autobuilder/build-next-ppe-region_bet_market_compare_bridge_v1-revision-1",
+      "status": "completed"
+    }
+  ],
+  "completed_at": "2026-09-12T17:59:53.635592+00:00",
+  "default_branch": "main",
+  "default_branch_head": "bb1dc239e07bc877b60ffa2194c1229411fbd23e",
+  "founder_digest": "Merged automatically\nWork: region_bet_market_compare_bridge_v1\nPR: 5444\nMerge commit: d3fbe76fa2f9deb3c5ff0052153f088ea19d63ae\nValidation: candidate gate + publication + required checks passed\nCleanup: completed\nDecision required: none",
+  "gate_report_sha256": "888ab1b6fbf808b34d69281c71dfc0e266fb6c7c2a7703da5d34bca3b2bf11c2",
+  "job_id": "build-next-ppe-region_bet_market_compare_bridge_v1-revision-1",
+  "merge_commit": "d3fbe76fa2f9deb3c5ff0052153f088ea19d63ae",
+  "merge_method": "squash",
+  "pr_number": 5444,
+  "product_branch": "autobuilder/build-next-ppe-region_bet_market_compare_bridge_v1-revision-1",
+  "publication_report_sha256": "4e057f77d494527720d023283e7dbd0479f4f0ee28b93be2b2613093d9760d01",
+  "recovered_from_status": "already_merged",
+  "review_evidence": {
+    "latest_opinionated_reviews": [],
+    "review_decision": "",
+    "source": "github_graphql",
+    "unresolved_review_threads": 0
+  },
+  "revision_lineage": {
+    "gate_report_sha256": "888ab1b6fbf808b34d69281c71dfc0e266fb6c7c2a7703da5d34bca3b2bf11c2",
+    "job_id": "build-next-ppe-region_bet_market_compare_bridge_v1-revision-1",
+    "not_applicable_evidence": true,
+    "producer": "controlled_publisher",
+    "product_commit": "415355ac82fdbebff8b6998e44531fd485752a47",
+    "publication_report_sha256": "4e057f77d494527720d023283e7dbd0479f4f0ee28b93be2b2613093d9760d01",
+    "revision_disposition": "not_applicable",
+    "revision_evidence_id": "599fdfa34bf75f04a8c9183b662bcadd",
+    "revision_evidence_sha256": "599fdfa34bf75f04a8c9183b662bcadd52c1ede6514276aec071a9e2098e71c6",
+    "version": 1
+  },
+  "status": "merged",
+  "terminal_path": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\state\\completion-terminal-work-items\\build-next-ppe-region_bet_market_compare_bridge_v1-revision-1.json",
+  "validated_head": "415355ac82fdbebff8b6998e44531fd485752a47",
+  "version": 1,
+  "work_item_id": "region_bet_market_compare_bridge_v1"
+}

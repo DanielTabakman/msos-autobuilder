@@ -1,0 +1,86 @@
+{
+  "authority_class": "AUTO_MERGE_WHEN_GREEN",
+  "authority_declared_at": "2026-09-07T00:30:00+00:00",
+  "changed_paths": [
+    "config/assets.yaml",
+    "config/assets_tier1_manifest.yaml",
+    "tests/test_assets_registry.py",
+    "tests/test_implied_lab_embed_display_boundary.py",
+    "tests/test_lab_asset_selection.py"
+  ],
+  "checks": {},
+  "claim_release_handoff": {
+    "allowed_terminal_states": [
+      "abandoned",
+      "failed",
+      "merged",
+      "released",
+      "superseded"
+    ],
+    "authorized_paths": [
+      "config/assets.yaml",
+      "config/assets_tier1_manifest.yaml",
+      "tests/test_assets_registry.py",
+      "tests/test_implied_lab_embed_display_boundary.py",
+      "tests/test_lab_asset_selection.py"
+    ],
+    "bounded_failure_behavior": {
+      "accepted_abandonment": "release as abandoned with founder/owner disposition evidence",
+      "submission_or_publication_failure": "release as failed with bounded failure evidence",
+      "superseded_duplicate": "release as superseded with canonical successor evidence"
+    },
+    "claim_generation": 3,
+    "consumer": "completion-controller",
+    "handoff": "msos-autobuilder.work_admission.claim_release.v1",
+    "immutability": "consumer must match objective_sha256, writer_id and claim_generation before release",
+    "linked_issue": null,
+    "objective_sha256": "c2533a0a45a9ba091f301d06385229b971402da798d2b25a55745dbedeef8a90",
+    "release_api": "msos_autobuilder.work_admission.release_claim",
+    "repository": "DanielTabakman/Probability-prediction-engine",
+    "verified_completion_terminal_state": "merged",
+    "version": 1,
+    "writer_id": "build-next:build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568"
+  },
+  "cleanup": [
+    {
+      "action": "delete_branch",
+      "branch": "autobuilder/build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568",
+      "status": "completed"
+    }
+  ],
+  "completed_at": "2026-09-12T17:59:39.188850+00:00",
+  "default_branch": "main",
+  "default_branch_head": "bb1dc239e07bc877b60ffa2194c1229411fbd23e",
+  "founder_digest": "Merged automatically\nWork: ppe_equity_universe_tier1c_v1\nPR: 5434\nMerge commit: b9e0dfa34f4be46c343733706216d6fc5ad61f30\nValidation: candidate gate + publication + required checks passed\nCleanup: completed\nDecision required: none",
+  "gate_report_sha256": "1e8f5195293b01715ddc64dfd5e9ef2e90f9d89d51f4ff06eaa0d379dd9912f5",
+  "job_id": "build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568",
+  "merge_commit": "b9e0dfa34f4be46c343733706216d6fc5ad61f30",
+  "merge_method": "squash",
+  "pr_number": 5434,
+  "product_branch": "autobuilder/build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568",
+  "publication_report_sha256": "05424c986ae7dd07996014b3d909be5e56a7b44d1490a35972c33fb33d9e76c6",
+  "recovered_from_status": "already_merged",
+  "review_evidence": {
+    "latest_opinionated_reviews": [],
+    "review_decision": "",
+    "source": "github_graphql",
+    "unresolved_review_threads": 0
+  },
+  "revision_lineage": {
+    "gate_report_sha256": "1e8f5195293b01715ddc64dfd5e9ef2e90f9d89d51f4ff06eaa0d379dd9912f5",
+    "job_id": "build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568",
+    "not_applicable_evidence": true,
+    "producer": "controlled_publisher",
+    "product_commit": "20508bdab100764c1b54ac5f0b984d6a1e5fc3d7",
+    "publication_report_sha256": "05424c986ae7dd07996014b3d909be5e56a7b44d1490a35972c33fb33d9e76c6",
+    "revision_disposition": "not_applicable",
+    "revision_evidence_id": "be53460e03f763487c80eef45581b3a1",
+    "revision_evidence_sha256": "578ef8044eca497af785f4d8ea434e29a609b29d9470cbd9d9eb4df358527d0f",
+    "version": 1
+  },
+  "status": "merged",
+  "terminal_path": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\state\\completion-terminal-work-items\\build-next-ppe-ppe_equity_universe_tier1c_v1-PPE-EqT1c-Core-Slice002-0e52f5d9e3-626ab57b89b59568.json",
+  "validated_head": "20508bdab100764c1b54ac5f0b984d6a1e5fc3d7",
+  "version": 1,
+  "work_item_id": "ppe_equity_universe_tier1c_v1"
+}

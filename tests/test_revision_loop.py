@@ -13,6 +13,7 @@ from msos_autobuilder.revision_loop import (
     RevisionLoopConfig,
     RevisionLoopError,
     RevisionPlan,
+    _candidate_gate_infrastructure_failure,
     _derive_revision_plan,
     _find_plan,
     build_revision_manifest,
@@ -73,9 +74,7 @@ def _gate_report(*, job_id: str = ROOT_JOB_ID) -> dict[str, object]:
                 "stderr": "outer snapshot_id must match record_header",
             }
         ],
-        "policy_blocks": [
-            "Preserve ppe_frozen_eval_v1 until downstream migration is approved."
-        ],
+        "policy_blocks": ["Preserve ppe_frozen_eval_v1 until downstream migration is approved."],
         "errors": [],
         "patches": [
             {
@@ -178,6 +177,30 @@ def test_build_revision_manifest_rejects_passed_or_unsafe_reports() -> None:
     with pytest.raises(RevisionLoopError, match="product write"):
         build_revision_manifest(wrote_product, _job_yaml(), _plan(), max_revision_depth=3)
 
+    infrastructure = _gate_report()
+    infrastructure["checks"] = []
+    infrastructure["policy_blocks"] = []
+    infrastructure["errors"] = [
+        {
+            "type": "PermissionError",
+            "message": (
+                "[WinError 32] file is being used by another process: "
+                r"C:\host\state\cg-ws\abc\.git\objects\pack\tmp_pack_1"
+            ),
+        }
+    ]
+    assert (
+        _candidate_gate_infrastructure_failure(infrastructure)
+        == "candidate_gate_host_workspace_failure"
+    )
+    with pytest.raises(RevisionLoopError, match="not product revision evidence"):
+        build_revision_manifest(
+            infrastructure,
+            _job_yaml(),
+            _plan(),
+            max_revision_depth=3,
+        )
+
 
 def test_build_revision_manifest_enforces_maximum_depth() -> None:
     report = _gate_report(job_id=f"{TARGET_TASK_ID}-revision-3")
@@ -235,12 +258,7 @@ def test_revision_loop_writes_only_jobs_branch_and_is_repeat_safe(tmp_path: Path
 
     jobs_review = tmp_path / "jobs-review"
     _git(None, "clone", "-q", "--branch", "jobs", str(remote), str(jobs_review))
-    manifest_path = (
-        jobs_review
-        / "jobs"
-        / "approved"
-        / f"{TARGET_TASK_ID}-revision-1.yaml"
-    )
+    manifest_path = jobs_review / "jobs" / "approved" / f"{TARGET_TASK_ID}-revision-1.yaml"
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     assert manifest["approved"] is True
     assert manifest["publication_enabled"] is False
@@ -298,9 +316,7 @@ def test_passed_gate_revision_not_applicable_uses_source_receipt_not_legacy_ledg
     assert receipt["gate_report_sha256"] == hashlib.sha256(gate_path.read_bytes()).hexdigest()
 
     heads = list(
-        (config.host_root / "state" / "revision-evidence" / "heads" / "disposition").rglob(
-            "*.json"
-        )
+        (config.host_root / "state" / "revision-evidence" / "heads" / "disposition").rglob("*.json")
     )
     assert len(heads) == 1
     head = json.loads(heads[0].read_text(encoding="utf-8"))
@@ -340,9 +356,7 @@ def test_revision_loop_job_yaml_parse_failure_records_source_identity(tmp_path: 
         loop.run_once()
 
     marker = json.loads(
-        (config.host_root / "state" / "revision-loop-error.json").read_text(
-            encoding="utf-8"
-        )
+        (config.host_root / "state" / "revision-loop-error.json").read_text(encoding="utf-8")
     )
     assert marker["associated"]["job_id"] == ROOT_JOB_ID
     assert marker["associated"]["source_job_id"] == ROOT_JOB_ID
@@ -372,9 +386,7 @@ def test_revision_loop_ledger_save_failure_records_source_and_revision_identity(
         loop.run_once()
 
     marker = json.loads(
-        (config.host_root / "state" / "revision-loop-error.json").read_text(
-            encoding="utf-8"
-        )
+        (config.host_root / "state" / "revision-loop-error.json").read_text(encoding="utf-8")
     )
     assert marker["associated"]["source_job_id"] == ROOT_JOB_ID
     assert marker["associated"]["revision_job_id"] == f"{TARGET_TASK_ID}-revision-1"
@@ -394,9 +406,7 @@ def test_revision_loop_idle_cycle_writes_success_record(tmp_path: Path) -> None:
     assert loop.run_once() == ()
 
     success = json.loads(
-        (config.host_root / "state" / "revision-service-success.json").read_text(
-            encoding="utf-8"
-        )
+        (config.host_root / "state" / "revision-service-success.json").read_text(encoding="utf-8")
     )
     assert success["service"] == "revision"
     assert success["result"] == "success"
@@ -427,25 +437,72 @@ def test_revision_loop_names_failed_gates_it_declines_for_lack_of_a_plan(
     assert loop.run_once() == ()
 
     state = config.host_root / "state"
-    success = json.loads(
-        (state / "revision-service-success.json").read_text(encoding="utf-8")
-    )
+    success = json.loads((state / "revision-service-success.json").read_text(encoding="utf-8"))
     declined = success["terminal_evidence"]["unplanned_failed_gates"]
     assert [item["source_job_id"] for item in declined] == [ROOT_JOB_ID]
     assert declined[0]["reason"] == "no_matching_revision_plan"
 
-    gate_path = (
-        loop.results.root / "results" / "test-host" / ROOT_JOB_ID / "gate-report.json"
-    )
-    assert declined[0]["gate_report_sha256"] == hashlib.sha256(
-        gate_path.read_bytes()
-    ).hexdigest()
+    gate_path = loop.results.root / "results" / "test-host" / ROOT_JOB_ID / "gate-report.json"
+    assert declined[0]["gate_report_sha256"] == hashlib.sha256(gate_path.read_bytes()).hexdigest()
 
     # Declining is not a service error, and it must not invent a disposition the
     # revision loop never reached.
     assert success["result"] == "success"
     assert not (state / "revision-loop-error.json").exists()
     assert not (state / "revision-evidence").exists()
+
+
+def test_revision_loop_does_not_send_host_file_lock_to_product_worker(
+    tmp_path: Path,
+) -> None:
+    remote = _create_remote(tmp_path)
+    editor = tmp_path / "infra-editor"
+    _git(None, "clone", "-q", "--branch", "results", str(remote), str(editor))
+    _git(editor, "config", "user.email", "test@example.com")
+    _git(editor, "config", "user.name", "Test")
+    gate_path = editor / "results" / "test-host" / ROOT_JOB_ID / "gate-report.json"
+    gate = _gate_report()
+    gate["checks"] = []
+    gate["policy_blocks"] = []
+    gate["errors"] = [
+        {
+            "type": "PermissionError",
+            "message": (
+                "[WinError 5] Access is denied: "
+                r"C:\host\state\cg-ws\abc\.msos-candidate-env\Lib\x.pyd"
+            ),
+        }
+    ]
+    gate_path.write_text(json.dumps(gate, indent=2) + "\n", encoding="utf-8")
+    _git(editor, "add", ".")
+    _git(editor, "commit", "-qm", "record host-owned candidate failure")
+    _git(editor, "push", "-q", "origin", "results")
+
+    config = RevisionLoopConfig(
+        host_root=tmp_path / "host",
+        repo_url=str(remote),
+        machine_id="test-host",
+        poll_seconds=1,
+        plans={ROOT_JOB_ID: _plan()},
+    )
+    loop = RevisionLoop(config)
+    assert loop.run_once() == ()
+
+    state = config.host_root / "state"
+    assert not (state / "revision-loop-seen.json").exists()
+    success = json.loads((state / "revision-service-success.json").read_text(encoding="utf-8"))
+    declined = success["terminal_evidence"]["unplanned_failed_gates"]
+    assert declined == [
+        {
+            "source_job_id": ROOT_JOB_ID,
+            "gate_report_sha256": hashlib.sha256(gate_path.read_bytes()).hexdigest(),
+            "reason": "candidate_gate_host_workspace_failure",
+        }
+    ]
+
+    jobs = tmp_path / "infra-jobs"
+    _git(None, "clone", "-q", "--branch", "jobs", str(remote), str(jobs))
+    assert not list((jobs / "jobs" / "approved").glob("*revision*.yaml"))
 
 
 def test_revision_loop_rejects_mutated_gate_evidence(tmp_path: Path) -> None:
@@ -475,9 +532,7 @@ def test_revision_loop_rejects_mutated_gate_evidence(tmp_path: Path) -> None:
     with pytest.raises(RevisionLoopError, match="changed after revision processing"):
         loop.run_once()
     marker = json.loads(
-        (config.host_root / "state" / "revision-loop-error.json").read_text(
-            encoding="utf-8"
-        )
+        (config.host_root / "state" / "revision-loop-error.json").read_text(encoding="utf-8")
     )
     assert marker["service"] == "revision"
     assert marker["associated"]["job_id"] == ROOT_JOB_ID

@@ -290,8 +290,7 @@ def _derive_revision_plan(job_yaml: Mapping[str, Any]) -> RevisionPlan | None:
     native = founder.get("native_slice")
     contract = job_yaml.get("candidate_validation")
     if not (
-        (isinstance(native, Mapping) and native.get("touch_set"))
-        or isinstance(contract, Mapping)
+        (isinstance(native, Mapping) and native.get("touch_set")) or isinstance(contract, Mapping)
     ):
         return None
     manifest = job_yaml.get("manifest")
@@ -325,7 +324,9 @@ def _failed_evidence(gate_report: Mapping[str, Any]) -> str:
     checks = gate_report.get("checks")
     if not isinstance(checks, list):
         raise RevisionLoopError("gate report checks must be a list")
-    failed_checks = [item for item in checks if isinstance(item, dict) and item.get("passed") is not True]
+    failed_checks = [
+        item for item in checks if isinstance(item, dict) and item.get("passed") is not True
+    ]
     policy_blocks = gate_report.get("policy_blocks", [])
     errors = gate_report.get("errors", [])
     if not isinstance(policy_blocks, list) or not isinstance(errors, list):
@@ -352,6 +353,63 @@ def _failed_evidence(gate_report: Mapping[str, Any]) -> str:
     if not sections:
         raise RevisionLoopError("failed gate report contains no actionable failure evidence")
     return "\n\n".join(sections)
+
+
+def _candidate_gate_infrastructure_failure(
+    gate_report: Mapping[str, Any],
+) -> str | None:
+    """Classify narrow host-owned failures that product code cannot repair."""
+    policy_blocks = gate_report.get("policy_blocks", [])
+    if isinstance(policy_blocks, list) and policy_blocks:
+        return None
+    evidence: list[str] = []
+    checks = gate_report.get("checks", [])
+    if isinstance(checks, list):
+        for check in checks:
+            if not isinstance(check, Mapping) or check.get("passed") is True:
+                continue
+            evidence.append(
+                "\n".join(
+                    (
+                        str(check.get("stdout") or ""),
+                        str(check.get("stderr") or ""),
+                    )
+                )
+            )
+    errors = gate_report.get("errors", [])
+    if isinstance(errors, list):
+        for error in errors:
+            if isinstance(error, Mapping):
+                evidence.append(f"{error.get('type') or ''}: {error.get('message') or ''}")
+    if not evidence:
+        return None
+
+    def is_host_owned_failure(value: str) -> bool:
+        text = value.casefold().replace("/", "\\")
+        lock_or_path_error = any(
+            marker in text
+            for marker in (
+                "winerror 5",
+                "winerror 32",
+                "access is denied",
+                "being used by another process",
+                "sharing violation",
+                "filename or extension is too long",
+            )
+        )
+        host_owned_path = any(
+            marker in text
+            for marker in (
+                ".msos-candidate-env",
+                ".git\\objects\\pack\\tmp_pack",
+                "\\state\\cg-ws\\",
+            )
+        )
+        return lock_or_path_error and host_owned_path
+
+    if all(is_host_owned_failure(value) for value in evidence):
+        return "candidate_gate_host_workspace_failure"
+    return None
 
 
 def _select_lanes(job_yaml: Mapping[str, Any], plan: RevisionPlan) -> tuple[dict[str, Any], ...]:
@@ -403,6 +461,12 @@ def build_revision_manifest(
         raise RevisionLoopError("gate report publication must remain disabled")
     if gate_report.get("product_write_performed", False) is not False:
         raise RevisionLoopError("refusing revision after a reported product write")
+    infrastructure_failure = _candidate_gate_infrastructure_failure(gate_report)
+    if infrastructure_failure is not None:
+        raise RevisionLoopError(
+            "candidate-gate infrastructure failure is not product revision evidence: "
+            f"{infrastructure_failure}"
+        )
 
     source_job_id = _safe_segment(str(gate_report.get("job_id") or ""), fallback="job")
     source_head = str(gate_report.get("source_head") or "").strip()
@@ -618,7 +682,9 @@ class RevisionLoop:
         if destination.exists():
             existing = destination.read_text(encoding="utf-8")
             if existing != text:
-                raise RevisionLoopError(f"revision job already exists with different content: {job_id}")
+                raise RevisionLoopError(
+                    f"revision job already exists with different content: {job_id}"
+                )
             return _run_git(self.jobs.root, "rev-parse", "HEAD").stdout.strip()
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(text, encoding="utf-8", newline="\n")
@@ -654,7 +720,9 @@ class RevisionLoop:
                 if ledger_key in ledger:
                     continue
                 gate_sha = _sha256_file(gate_path)
-                observed_at = str(gate_report.get("finished_at") or gate_report.get("started_at") or "")
+                observed_at = str(
+                    gate_report.get("finished_at") or gate_report.get("started_at") or ""
+                )
                 identity = None
                 try:
                     source_receipt = _revision_not_applicable_receipt_path(
@@ -705,6 +773,16 @@ class RevisionLoop:
                     )
                 continue
             if gate_report.get("status") != "failed":
+                continue
+            infrastructure_failure = _candidate_gate_infrastructure_failure(gate_report)
+            if infrastructure_failure is not None:
+                unplanned_failures.append(
+                    {
+                        "source_job_id": job_id,
+                        "gate_report_sha256": _sha256_file(gate_path),
+                        "reason": infrastructure_failure,
+                    }
+                )
                 continue
             try:
                 job_yaml = yaml.safe_load(job_path.read_text(encoding="utf-8"))

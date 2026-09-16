@@ -11,6 +11,7 @@ import hashlib
 import os
 import shutil
 import stat
+import time
 from pathlib import Path
 
 REVISION_RESULTS_SHORT = "rl-repo"
@@ -20,6 +21,8 @@ CANDIDATE_RESULTS_LEGACY = "candidate-gate-results-repo"
 CANDIDATE_WORKSPACES_SHORT = "cg-ws"
 CANDIDATE_WORKSPACES_LEGACY = "candidate-gate-workspaces"
 TARGET_CHECKOUTS_DIR = "target-checkouts"
+REMOVE_TREE_RETRY_ATTEMPTS = 40
+REMOVE_TREE_RETRY_SECONDS = 0.25
 
 
 def prefer_checkout(state_root: Path, short_name: str, legacy_name: str) -> Path:
@@ -106,15 +109,39 @@ def remove_git_tree(path: Path, *, ignore_errors: bool = False) -> None:
     """
 
     target = Path(path)
-    if not target.exists():
-        return
-    for child in target.rglob("*"):
+    for attempt in range(REMOVE_TREE_RETRY_ATTEMPTS):
+        if not target.exists():
+            return
         try:
-            child.chmod(child.stat().st_mode | stat.S_IWRITE)
-        except OSError:
-            # Leave it to rmtree, which reports or ignores per ignore_errors.
-            continue
-    shutil.rmtree(target, ignore_errors=ignore_errors)
+            for child in target.rglob("*"):
+                try:
+                    child.chmod(child.stat().st_mode | stat.S_IWRITE)
+                except OSError:
+                    # A concurrent process may release or remove the entry between
+                    # discovery and chmod. The bounded whole-tree retry handles it.
+                    continue
+            shutil.rmtree(target)
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt + 1 >= REMOVE_TREE_RETRY_ATTEMPTS:
+                if ignore_errors:
+                    return
+                raise
+            time.sleep(REMOVE_TREE_RETRY_SECONDS)
+        except OSError as exc:
+            # Windows sharing violations may arrive as plain OSError instead of
+            # PermissionError. Only retry the two narrow lock/access codes.
+            if getattr(exc, "winerror", None) not in {5, 32}:
+                if ignore_errors:
+                    return
+                raise
+            if attempt + 1 >= REMOVE_TREE_RETRY_ATTEMPTS:
+                if ignore_errors:
+                    return
+                raise
+            time.sleep(REMOVE_TREE_RETRY_SECONDS)
 
 
 def git_environment() -> dict[str, str]:

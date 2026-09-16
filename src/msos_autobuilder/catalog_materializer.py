@@ -7,6 +7,7 @@ exactly one catalog file to the jobs branch when configured.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -17,7 +18,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .build_next import FeedMutationLock, _prepare_feed_checkout
+from .build_next import (
+    BuildNextError,
+    FeedMutationLock,
+    _prepare_feed_checkout,
+    _select_native_slice,
+)
 from .job_packet import (
     DEFAULT_CATALOG_RELPATH,
     JobPacketError,
@@ -44,11 +50,10 @@ MARKET_COMPARE_WORK_ITEM_ID = "region_bet_market_compare_bridge_v1"
 MARKET_COMPARE_ORDER = 8
 MARKET_COMPARE_RELATED_PR = "DanielTabakman/Probability-prediction-engine#5427"
 RISK_EXPRESSION_ORDER = 9
+PACKET_SPEC_KEY = "autobuilderPacket"
 
 DEFAULT_TARGET_REPOSITORY = "DanielTabakman/Probability-prediction-engine"
-DEFAULT_TARGET_REMOTE_URL = (
-    "https://github.com/DanielTabakman/Probability-prediction-engine.git"
-)
+DEFAULT_TARGET_REMOTE_URL = "https://github.com/DanielTabakman/Probability-prediction-engine.git"
 DEFAULT_ADAPTER = "ppe_operator"
 DEFAULT_VALIDATION = {"profile_id": "ppe-ci-pytest-v1"}
 DEFAULT_AUTHORITY = {
@@ -69,7 +74,20 @@ GUIDED_SHELL_ALLOWED_PATHS: tuple[str, ...] = (
 
 MERGED_COMPLETION_STATUSES = frozenset({"merged"})
 MERGED_LIFECYCLE_DISPOSITIONS = frozenset({"item_terminal_success_merged"})
+RESOLVED_RELATED_PR_DISPOSITIONS = frozenset(
+    {"accepted", "merged", "superseded", "superseded_by_backlog_item"}
+)
+DEFERRED_ITEM_STATUSES = frozenset({"deferred", "skipped"})
+SUPPORTED_JIT_ELIGIBILITY = frozenset(
+    {
+        "blocked_until_predecessor_terminal",
+        "blocked_until_predecessor_and_draft_decision",
+        "buildable_via_autobuilder_catalog",
+        "ready",
+    }
+)
 _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+_SAFE_FILENAME_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$")
 _CATALOG_WRITE_LOCK = threading.Lock()
 _GIT_TIMEOUT_SECONDS = 180
 
@@ -162,32 +180,56 @@ def load_phase_chapter_backlog(path: Path | str | Mapping[str, Any]) -> tuple[Ba
     if not isinstance(items_raw, list):
         raise CatalogMaterializerError("PHASE_CHAPTER_BACKLOG.json items must be a list")
     items: list[BacklogItem] = []
+    seen_orders: set[int] = set()
+    seen_chapters: set[str] = set()
     for entry in items_raw:
         if not isinstance(entry, dict):
             continue
+        if "autobuilderCatalogOrder" not in entry:
+            continue
         order = entry.get("autobuilderCatalogOrder")
         if not isinstance(order, int) or isinstance(order, bool) or order < 1:
-            continue
+            raise CatalogMaterializerError("autobuilderCatalogOrder must be a positive integer")
         chapter_id = str(entry.get("chapterId") or "").strip()
         if not chapter_id:
-            continue
+            raise CatalogMaterializerError(
+                f"Autobuilder catalog order {order} is missing chapterId"
+            )
+        if order in seen_orders:
+            raise CatalogMaterializerError(f"duplicate Autobuilder catalog order: {order}")
+        if chapter_id in seen_chapters:
+            raise CatalogMaterializerError(f"duplicate Autobuilder chapterId: {chapter_id}")
+        depends_on = entry.get("dependsOn") or []
+        related_pull_requests = entry.get("relatedPullRequests") or []
+        if not isinstance(depends_on, list) or not all(
+            isinstance(value, str) and value.strip() for value in depends_on
+        ):
+            raise CatalogMaterializerError(
+                f"dependsOn for {chapter_id} must be a list of non-empty strings"
+            )
+        if len(set(depends_on)) != len(depends_on):
+            raise CatalogMaterializerError(f"dependsOn for {chapter_id} contains duplicates")
+        if not isinstance(related_pull_requests, list) or not all(
+            isinstance(value, str) and value.strip() for value in related_pull_requests
+        ):
+            raise CatalogMaterializerError(
+                f"relatedPullRequests for {chapter_id} must be a list of non-empty strings"
+            )
+        if len(set(related_pull_requests)) != len(related_pull_requests):
+            raise CatalogMaterializerError(
+                f"relatedPullRequests for {chapter_id} contains duplicates"
+            )
+        seen_orders.add(order)
+        seen_chapters.add(chapter_id)
         items.append(
             BacklogItem(
                 chapter_id=chapter_id,
                 order=order,
-                depends_on=tuple(
-                    str(item).strip()
-                    for item in (entry.get("dependsOn") or [])
-                    if str(item).strip()
-                ),
+                depends_on=tuple(value.strip() for value in depends_on),
                 packetization=str(entry.get("packetization") or "").strip(),
                 eligibility=str(entry.get("eligibility") or "").strip(),
                 status=str(entry.get("status") or "").strip(),
-                related_pull_requests=tuple(
-                    str(item).strip()
-                    for item in (entry.get("relatedPullRequests") or [])
-                    if str(item).strip()
-                ),
+                related_pull_requests=tuple(value.strip() for value in related_pull_requests),
                 raw=dict(entry),
             )
         )
@@ -205,15 +247,30 @@ def _proof_is_merged_terminal(proof: Any) -> bool:
         if status in MERGED_COMPLETION_STATUSES:
             return True
         disposition = str(proof.get("item_disposition") or "").strip()
-        if (
-            proof.get("item_terminal") is True
-            and disposition in MERGED_LIFECYCLE_DISPOSITIONS
-        ):
+        if proof.get("item_terminal") is True and disposition in MERGED_LIFECYCLE_DISPOSITIONS:
             return True
         # Explicit non-merged statuses (queued/drafted/open) fail closed.
         if status and status not in MERGED_COMPLETION_STATUSES:
             return False
     return False
+
+
+def _proof_is_merged_for_work_item(proof: Any, work_item_id: str) -> bool:
+    """Require any declared proof identity to agree with the lookup key."""
+    if isinstance(proof, Mapping):
+        declared: set[str] = set()
+        for key in ("work_item_id", "workItemId"):
+            value = str(proof.get(key) or "").strip()
+            if value:
+                declared.add(value)
+        identity = proof.get("attempt_identity")
+        if isinstance(identity, Mapping):
+            value = str(identity.get("work_item_id") or "").strip()
+            if value:
+                declared.add(value)
+        if declared and declared != {work_item_id}:
+            return False
+    return _proof_is_merged_terminal(proof)
 
 
 def is_predecessor_terminal_proof(proof: Any) -> bool:
@@ -242,67 +299,192 @@ def order_is_draft_gated_blocked(
     if not item.related_pull_requests:
         return True
     resolved_map = related_pr_resolved or {}
-    return not all(resolved_map.get(ref) is True for ref in item.related_pull_requests)
+    declared: dict[str, str] = {}
+    raw_resolutions = item.raw.get("relatedPullRequestResolutions")
+    if isinstance(raw_resolutions, Mapping):
+        for ref, value in raw_resolutions.items():
+            if isinstance(value, Mapping):
+                declared[str(ref).strip()] = str(
+                    value.get("disposition") or value.get("status") or ""
+                ).strip()
+            else:
+                declared[str(ref).strip()] = str(value or "").strip()
+    elif isinstance(raw_resolutions, list):
+        for value in raw_resolutions:
+            if not isinstance(value, Mapping):
+                continue
+            ref = str(value.get("ref") or value.get("pullRequest") or "").strip()
+            if ref:
+                declared[ref] = str(value.get("disposition") or value.get("status") or "").strip()
+    return not all(
+        resolved_map.get(ref) is True
+        or declared.get(ref, "").lower() in RESOLVED_RELATED_PR_DISPOSITIONS
+        for ref in item.related_pull_requests
+    )
+
+
+def _has_packet_spec(item: BacklogItem) -> bool:
+    """Return whether PPE supplied a bounded executable packet contract.
+
+    Order 07 retains its original narrow adapter as a compatibility bridge. All
+    later chapters must declare their own paths and acceptance contract in PPE.
+    """
+    if str(item.raw.get("planPath") or "").strip():
+        return True
+    if isinstance(item.raw.get(PACKET_SPEC_KEY), Mapping):
+        return True
+    return item.chapter_id == GUIDED_SHELL_WORK_ITEM_ID
+
+
+def _terminal_proofs(
+    predecessor_terminal: Any,
+    terminal_proofs: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    proofs = dict(terminal_proofs or {})
+    if predecessor_terminal not in (None, False, ""):
+        proofs.setdefault(PREDECESSOR_WORK_ITEM_ID, predecessor_terminal)
+    return proofs
 
 
 def evaluate_jit_eligibility(
     backlog: Sequence[BacklogItem] | Mapping[str, Any] | Path | str,
     *,
-    predecessor_terminal: Any,
+    predecessor_terminal: Any = False,
+    terminal_proofs: Mapping[str, Any] | None = None,
+    exclude_work_item_ids: Sequence[str] = (),
     related_pr_resolved: Mapping[str, bool] | None = None,
 ) -> JitEligibility:
     if isinstance(backlog, (str, Path, Mapping)):
         items = list(load_phase_chapter_backlog(backlog))
     else:
         items = list(backlog)
-    blocked_orders: dict[str, Any] = {}
+    proofs = _terminal_proofs(predecessor_terminal, terminal_proofs)
+    excluded = {str(item).strip() for item in exclude_work_item_ids if str(item).strip()}
+    decisions: dict[str, Any] = {}
+    blocked_orders: dict[str, Any] = {
+        str(item.order): {
+            "chapter_id": item.chapter_id,
+            "eligibility": item.eligibility,
+            "related_pull_requests": list(item.related_pull_requests),
+            "resolved": not order_is_draft_gated_blocked(
+                items,
+                item.order,
+                related_pr_resolved=related_pr_resolved,
+            ),
+        }
+        for item in items
+        if item.order in {MARKET_COMPARE_ORDER, RISK_EXPRESSION_ORDER}
+    }
+    first_pending: BacklogItem | None = None
+
     for item in items:
-        if item.order in {MARKET_COMPARE_ORDER, RISK_EXPRESSION_ORDER}:
-            blocked_orders[str(item.order)] = {
-                "chapter_id": item.chapter_id,
-                "eligibility": item.eligibility,
-                "related_pull_requests": list(item.related_pull_requests),
-                "resolved": not order_is_draft_gated_blocked(
-                    items, item.order, related_pr_resolved=related_pr_resolved
-                ),
-            }
+        if item.packetization != "just_in_time":
+            continue
+        if first_pending is None:
+            first_pending = item
+        related_resolved = not order_is_draft_gated_blocked(
+            items,
+            item.order,
+            related_pr_resolved=related_pr_resolved,
+        )
+        decision: dict[str, Any] = {
+            "chapter_id": item.chapter_id,
+            "order": item.order,
+            "status": item.status,
+            "eligibility": item.eligibility,
+            "depends_on": list(item.depends_on),
+            "related_pull_requests": list(item.related_pull_requests),
+            "related_pull_requests_resolved": related_resolved,
+            "packet_spec_present": _has_packet_spec(item),
+        }
+        proof = proofs.get(item.chapter_id)
+        if _proof_is_merged_for_work_item(proof, item.chapter_id):
+            decision["decision"] = "completed"
+            decisions[item.chapter_id] = decision
+            continue
+        if item.chapter_id in excluded:
+            # An exclusion prevents duplicate work. It does not prove success for
+            # dependants; only an exact merged completion may do that.
+            decision["decision"] = "excluded_without_merged_proof"
+            decisions[item.chapter_id] = decision
+            continue
+        if item.status.strip().lower() in DEFERRED_ITEM_STATUSES or item.eligibility.startswith(
+            "deferred_"
+        ):
+            decision["decision"] = "deferred"
+            decisions[item.chapter_id] = decision
+            continue
+        if item.eligibility not in SUPPORTED_JIT_ELIGIBILITY:
+            decision["decision"] = "blocked_unsupported_eligibility"
+            decisions[item.chapter_id] = decision
+            continue
+        unmet = [
+            dep
+            for dep in item.depends_on
+            if not _proof_is_merged_for_work_item(proofs.get(dep), dep)
+        ]
+        if unmet:
+            decision["decision"] = "blocked_dependencies"
+            decision["unmet_dependencies"] = unmet
+            decisions[item.chapter_id] = decision
+            continue
+        if not related_resolved:
+            decision["decision"] = "blocked_related_pull_request_decision"
+            decisions[item.chapter_id] = decision
+            continue
+        if not _has_packet_spec(item):
+            decision["decision"] = "blocked_packet_spec_missing"
+            decisions[item.chapter_id] = decision
+            continue
+
+        decision["decision"] = "eligible"
+        decisions[item.chapter_id] = decision
+        reason = "dependencies_terminal"
+        if item.chapter_id == GUIDED_SHELL_WORK_ITEM_ID:
+            reason = "predecessor_terminal"
+        return JitEligibility(
+            status="eligible",
+            reason=reason,
+            work_item_id=item.chapter_id,
+            order=item.order,
+            evidence={"items": decisions, "blocked_orders": blocked_orders},
+        )
+
     guided = next(
         (item for item in items if item.chapter_id == GUIDED_SHELL_WORK_ITEM_ID),
         None,
     )
+    reason = "no_eligible_jit_item"
+    work_item_id = first_pending.chapter_id if first_pending else None
+    order = first_pending.order if first_pending else None
+    guided_complete = bool(
+        guided
+        and _proof_is_merged_for_work_item(
+            proofs.get(guided.chapter_id), guided.chapter_id
+        )
+    )
     if guided is None:
-        return JitEligibility(
-            status="skipped",
-            reason="guided_shell_missing_from_backlog",
-            evidence={"blocked_orders": blocked_orders},
-        )
-    if guided.packetization != "just_in_time":
-        return JitEligibility(
-            status="skipped",
-            reason="guided_shell_not_just_in_time",
-            evidence={"blocked_orders": blocked_orders},
-        )
-    if not is_predecessor_terminal_proof(predecessor_terminal):
-        return JitEligibility(
-            status="skipped",
-            reason="predecessor_not_terminal",
-            work_item_id=guided.chapter_id,
-            order=guided.order,
-            evidence={"blocked_orders": blocked_orders},
-        )
-    for dep in guided.depends_on:
-        if dep != PREDECESSOR_WORK_ITEM_ID:
-            return JitEligibility(
-                status="skipped",
-                reason=f"unsupported_dependency:{dep}",
-                evidence={"blocked_orders": blocked_orders},
-            )
+        reason = "guided_shell_missing_from_backlog"
+    elif guided.packetization != "just_in_time":
+        reason = "guided_shell_not_just_in_time"
+        work_item_id = guided.chapter_id
+        order = guided.order
+    elif not guided_complete and guided.chapter_id in excluded:
+        reason = "work_item_excluded"
+        work_item_id = guided.chapter_id
+        order = guided.order
+    elif not guided_complete and not _proof_is_merged_for_work_item(
+        proofs.get(PREDECESSOR_WORK_ITEM_ID), PREDECESSOR_WORK_ITEM_ID
+    ):
+        reason = "predecessor_not_terminal"
+        work_item_id = guided.chapter_id
+        order = guided.order
     return JitEligibility(
-        status="eligible",
-        reason="predecessor_terminal",
-        work_item_id=guided.chapter_id,
-        order=guided.order,
-        evidence={"blocked_orders": blocked_orders},
+        status="skipped",
+        reason=reason,
+        work_item_id=work_item_id,
+        order=order,
+        evidence={"items": decisions, "blocked_orders": blocked_orders},
     )
 
 
@@ -430,6 +612,298 @@ def author_guided_shell_packet(
     return packet
 
 
+def catalog_filename_for_item(item: BacklogItem) -> str:
+    if not _SAFE_FILENAME_ID_RE.fullmatch(item.chapter_id):
+        raise CatalogMaterializerError(
+            f"backlog chapter id is unsafe for a catalog filename: {item.chapter_id!r}"
+        )
+    return f"{item.order:02d}-{item.chapter_id}.json"
+
+
+def _required_packet_text(spec: Mapping[str, Any], key: str) -> str:
+    value = spec.get(key)
+    text = str(value or "").strip()
+    if not isinstance(value, str) or not text:
+        raise CatalogMaterializerError(f"{PACKET_SPEC_KEY}.{key} is required")
+    return text
+
+
+def _required_packet_string_list(spec: Mapping[str, Any], key: str) -> list[str]:
+    value = spec.get(key)
+    if not isinstance(value, list) or not value:
+        raise CatalogMaterializerError(f"{PACKET_SPEC_KEY}.{key} must be a non-empty list")
+    normalized = [str(item).strip() for item in value]
+    if any(not item for item in normalized) or len(set(normalized)) != len(normalized):
+        raise CatalogMaterializerError(
+            f"{PACKET_SPEC_KEY}.{key} contains empty or duplicate values"
+        )
+    return normalized
+
+
+def _attach_merge_authority(
+    packet: dict[str, Any],
+    item: BacklogItem,
+    *,
+    packet_spec: Mapping[str, Any] | None = None,
+) -> None:
+    raw = item.raw.get("autobuilderMergeAuthority")
+    if raw in (None, "") and packet_spec is not None:
+        raw = packet_spec.get("mergeAuthority")
+    if raw in (None, ""):
+        return
+    if not isinstance(raw, Mapping):
+        raise CatalogMaterializerError("autobuilder merge authority must be an object")
+    packet["merge_authority"] = {
+        "class": str(raw.get("class") or raw.get("authorityClass") or "").strip(),
+        "declared_at": str(raw.get("declaredAt") or raw.get("declared_at") or "").strip(),
+    }
+
+
+def _validate_authored_packet(
+    packet: dict[str, Any],
+    item: BacklogItem,
+    *,
+    allow_test_local_source_remote: bool,
+) -> dict[str, Any]:
+    try:
+        parse_approved_job_packet(
+            packet,
+            source_path=catalog_filename_for_item(item),
+            allow_test_local_source_remote=allow_test_local_source_remote,
+        )
+    except JobPacketError as exc:
+        raise CatalogMaterializerError(
+            f"invalid JIT packet contract for {item.chapter_id}: {exc}"
+        ) from exc
+    return packet
+
+
+def author_backlog_packet(
+    *,
+    item: BacklogItem,
+    frozen_commit: str,
+    target_remote_url: str,
+    dependency_source_sha256: str,
+    target_repository: str = DEFAULT_TARGET_REPOSITORY,
+    allow_test_local_source_remote: bool = False,
+    phase_plan: Mapping[str, Any] | None = None,
+    phase_plan_path: str | None = None,
+    prerequisite_evidence: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Author one executable packet from the frozen PPE backlog contract."""
+    objective = str(item.raw.get("reason") or "").strip()
+    if not objective:
+        raise CatalogMaterializerError(f"eligible backlog item {item.chapter_id} has no objective")
+    commit = frozen_commit.lower()
+    if not _COMMIT_RE.fullmatch(commit):
+        raise CatalogMaterializerError("frozen_commit must be a 40-character SHA")
+
+    if phase_plan is not None:
+        declared_path = str(item.raw.get("planPath") or "").strip()
+        plan_path = str(phase_plan_path or declared_path).strip()
+        if not plan_path or (declared_path and plan_path != declared_path):
+            raise CatalogMaterializerError(f"phase plan identity conflicts for {item.chapter_id}")
+        try:
+            native = _select_native_slice(dict(phase_plan))
+        except BuildNextError as exc:
+            raise CatalogMaterializerError(
+                f"invalid frozen phase plan for {item.chapter_id}: {exc}"
+            ) from exc
+        max_attempts = native.raw_slice.get("maxAttempts", 2)
+        if (
+            not isinstance(max_attempts, int)
+            or isinstance(max_attempts, bool)
+            or max_attempts < 1
+            or max_attempts > 3
+        ):
+            raise CatalogMaterializerError(
+                f"phase plan maxAttempts for {item.chapter_id} must be an integer from 1 to 3"
+            )
+        acceptance = phase_plan.get("acceptanceCriteria")
+        if item.chapter_id != GUIDED_SHELL_WORK_ITEM_ID and (
+            not isinstance(acceptance, list)
+            or not acceptance
+            or not all(isinstance(value, str) and value.strip() for value in acceptance)
+        ):
+            raise CatalogMaterializerError(
+                f"phase plan for {item.chapter_id} requires acceptanceCriteria"
+            )
+        raw_slice = dict(native.raw_slice)
+        raw_slice["objective"] = objective
+        raw_slice["backlogSource"] = f"{BACKLOG_RELPATH}#{item.chapter_id}"
+        if isinstance(acceptance, list) and acceptance:
+            raw_slice["acceptanceCriteria"] = [value.strip() for value in acceptance]
+        packet: dict[str, Any] = {
+            "version": 1,
+            "pipeline_id": "ppe",
+            "work_item_id": item.chapter_id,
+            "order": item.order,
+            "eligible": True,
+            "target_repository": target_repository,
+            "target_source_commit": commit,
+            "target_remote_url": target_remote_url,
+            "adapter": DEFAULT_ADAPTER,
+            "allowed_paths": list(native.touch_set),
+            "native_slice": {
+                "slice_id": native.slice_id,
+                "build_branch": native.build_branch,
+                "layer_preset": native.layer_preset,
+                "worker_mode": native.worker_mode,
+                "declared_plane": native.declared_plane,
+                "touch_set": list(native.touch_set),
+                "sequence_index": native.sequence_index,
+                "total_slices": native.total_slices,
+                "previous_slices": list(native.previous_slices),
+                "following_slices": list(native.following_slices),
+                "raw_slice": raw_slice,
+            },
+            "phase_plan": plan_path,
+            "prerequisites": dict(prerequisite_evidence or {}),
+            "dependency_source_sha256": dependency_source_sha256,
+            "authority": dict(DEFAULT_AUTHORITY),
+            "validation": dict(DEFAULT_VALIDATION),
+        }
+        if native.sprint_spec_path:
+            packet["native_slice"]["sprint_spec_path"] = native.sprint_spec_path
+        if native.selection_record:
+            packet["native_slice"]["selection_record"] = native.selection_record
+        _attach_merge_authority(packet, item)
+        return _validate_authored_packet(
+            packet,
+            item,
+            allow_test_local_source_remote=allow_test_local_source_remote,
+        )
+
+    raw_spec = item.raw.get(PACKET_SPEC_KEY)
+    if not isinstance(raw_spec, Mapping):
+        if item.chapter_id != GUIDED_SHELL_WORK_ITEM_ID:
+            raise CatalogMaterializerError(
+                f"eligible backlog item {item.chapter_id} lacks {PACKET_SPEC_KEY}"
+            )
+        objective = str(item.raw.get("reason") or "").strip()
+        packet = author_guided_shell_packet(
+            frozen_commit=frozen_commit,
+            target_remote_url=target_remote_url,
+            dependency_source_sha256=dependency_source_sha256,
+            target_repository=target_repository,
+            allow_test_local_source_remote=allow_test_local_source_remote,
+            objective=objective or None,
+        )
+        _attach_merge_authority(packet, item)
+        return _validate_authored_packet(
+            packet,
+            item,
+            allow_test_local_source_remote=allow_test_local_source_remote,
+        )
+
+    spec = dict(raw_spec)
+    if spec.get("version") != 1:
+        raise CatalogMaterializerError(f"{PACKET_SPEC_KEY}.version must be 1")
+    paths = _required_packet_string_list(spec, "allowedPaths")
+    acceptance = _required_packet_string_list(spec, "acceptanceCriteria")
+    slice_id = _required_packet_text(spec, "sliceId")
+    layer_preset = _required_packet_text(spec, "layerPreset")
+    build_branch = str(spec.get("buildBranch") or f"build/auto/{slice_id}").strip()
+    if not build_branch:
+        raise CatalogMaterializerError(f"{PACKET_SPEC_KEY}.buildBranch is empty")
+    declared_plane = str(spec.get("declaredPlane") or "PRODUCT-PLANE").strip()
+    if declared_plane != "PRODUCT-PLANE":
+        raise CatalogMaterializerError(f"{PACKET_SPEC_KEY}.declaredPlane must be PRODUCT-PLANE")
+    max_attempts = spec.get("maxAttempts", 2)
+    if (
+        not isinstance(max_attempts, int)
+        or isinstance(max_attempts, bool)
+        or max_attempts < 1
+        or max_attempts > 3
+    ):
+        raise CatalogMaterializerError(
+            f"{PACKET_SPEC_KEY}.maxAttempts must be an integer from 1 to 3"
+        )
+    raw_slice: dict[str, Any] = {
+        "sliceId": slice_id,
+        "layerPreset": layer_preset,
+        "buildBranch": build_branch,
+        "declaredPlane": declared_plane,
+        "implementationStatus": "PENDING",
+        "workerMode": str(spec.get("workerMode") or "local-agent").strip(),
+        "susMinutes": int(spec.get("susMinutes", 90)),
+        "hardMinutes": int(spec.get("hardMinutes", 240)),
+        "maxAttempts": max_attempts,
+        "touchSet": list(paths),
+        "objective": objective,
+        "acceptanceCriteria": acceptance,
+        "backlogSource": f"{BACKLOG_RELPATH}#{item.chapter_id}",
+    }
+    canon_ref = str(item.raw.get("canonRef") or "").strip()
+    if canon_ref:
+        raw_slice["canonRef"] = canon_ref
+
+    packet: dict[str, Any] = {
+        "version": 1,
+        "pipeline_id": "ppe",
+        "work_item_id": item.chapter_id,
+        "order": item.order,
+        "eligible": True,
+        "target_repository": target_repository,
+        "target_source_commit": commit,
+        "target_remote_url": target_remote_url,
+        "adapter": str(spec.get("adapter") or DEFAULT_ADAPTER).strip(),
+        "allowed_paths": list(paths),
+        "native_slice": {
+            "slice_id": slice_id,
+            "build_branch": build_branch,
+            "layer_preset": layer_preset,
+            "worker_mode": raw_slice["workerMode"],
+            "declared_plane": declared_plane,
+            "touch_set": list(paths),
+            "sequence_index": 0,
+            "total_slices": 1,
+            "previous_slices": [],
+            "following_slices": [],
+            "raw_slice": raw_slice,
+        },
+        "prerequisites": {
+            "version": 1,
+            "read_only": True,
+            "source": "ppe_approved_backlog_jit",
+            "evidence": {
+                "frozen_target_commit": commit,
+                "target_remote_url": target_remote_url,
+                "backlog_chapter_id": item.chapter_id,
+                "depends_on": list(item.depends_on),
+                "related_pull_requests": list(item.related_pull_requests),
+                "related_pull_request_resolutions": item.raw.get(
+                    "relatedPullRequestResolutions", []
+                ),
+                "packetization": item.packetization,
+            },
+        },
+        "dependency_source_sha256": dependency_source_sha256,
+        "authority": dict(DEFAULT_AUTHORITY),
+        "validation": dict(spec.get("validation") or DEFAULT_VALIDATION),
+    }
+    phase_plan = str(spec.get("phasePlan") or item.raw.get("planPath") or "").strip()
+    if phase_plan:
+        packet["phase_plan"] = phase_plan
+    sprint_spec = str(spec.get("sprintSpecPath") or "").strip()
+    if sprint_spec:
+        packet["native_slice"]["sprint_spec_path"] = sprint_spec
+        raw_slice["sprintSpecPath"] = sprint_spec
+    selection_record = str(
+        spec.get("selectionRecord") or item.raw.get("selectionRecord") or ""
+    ).strip()
+    if selection_record:
+        packet["native_slice"]["selection_record"] = selection_record
+        raw_slice["selectionRecord"] = selection_record
+
+    _attach_merge_authority(packet, item, packet_spec=spec)
+    return _validate_authored_packet(
+        packet,
+        item,
+        allow_test_local_source_remote=allow_test_local_source_remote,
+    )
+
+
 def write_packet_to_catalog_dir(
     catalog_dir: Path,
     packet: Mapping[str, Any],
@@ -467,9 +941,7 @@ def write_packet_to_catalog_dir(
                     packet_sha256=parsed.packet_sha256,
                     frozen_commit=parsed.target_source_commit,
                 )
-            raise CatalogMaterializerError(
-                f"conflicting_catalog_packet already exists: {filename}"
-            )
+            raise CatalogMaterializerError(f"conflicting_catalog_packet already exists: {filename}")
         for path in sorted(catalog_dir.glob("*.json")):
             try:
                 other = json.loads(path.read_text(encoding="utf-8"))
@@ -481,10 +953,7 @@ def write_packet_to_catalog_dir(
                 raise CatalogMaterializerError(
                     f"conflicting_catalog_packet order {parsed.order} at {path.name}"
                 )
-            if (
-                other.get("work_item_id") == parsed.work_item_id
-                and path.name != filename
-            ):
+            if other.get("work_item_id") == parsed.work_item_id and path.name != filename:
                 raise CatalogMaterializerError(
                     f"conflicting_catalog_packet work_item_id at {path.name}"
                 )
@@ -518,9 +987,121 @@ def _dependency_digest(ppe_repo: Path | None, commit: str) -> str:
     return canonical_dependency_source_sha256(_frozen_blob(ppe_repo, commit, "requirements.txt"))
 
 
+def _safe_frozen_path(value: Any, label: str) -> str:
+    text = str(value or "").strip().replace("\\", "/")
+    path = Path(text)
+    if not text or path.is_absolute() or ".." in path.parts:
+        raise CatalogMaterializerError(f"{label} must be a safe relative path")
+    return path.as_posix()
+
+
+def _frozen_phase_plan_inputs(
+    ppe_repo: Path | None,
+    commit: str,
+    item: BacklogItem,
+) -> tuple[dict[str, Any], str, dict[str, Any]] | None:
+    raw_path = item.raw.get("planPath")
+    if raw_path in (None, ""):
+        return None
+    plan_path = _safe_frozen_path(raw_path, "backlog planPath")
+    try:
+        plan = json.loads(_frozen_blob(ppe_repo, commit, plan_path))
+    except (ValueError, UnicodeError) as exc:
+        raise CatalogMaterializerError(
+            f"invalid frozen phase plan {plan_path} at {commit}"
+        ) from exc
+    if not isinstance(plan, dict):
+        raise CatalogMaterializerError(f"frozen phase plan must be an object: {plan_path}")
+    plan_name = str(plan.get("name") or "").strip()
+    product_scope = plan.get("productScope")
+    stable_id = ""
+    if isinstance(product_scope, Mapping):
+        stable_id = str(product_scope.get("stableId") or "").strip()
+    if plan_name != item.chapter_id and stable_id != item.chapter_id:
+        raise CatalogMaterializerError(
+            f"frozen phase plan identity does not match {item.chapter_id}"
+        )
+
+    try:
+        native = _select_native_slice(plan)
+    except BuildNextError as exc:
+        raise CatalogMaterializerError(
+            f"invalid frozen phase plan for {item.chapter_id}: {exc}"
+        ) from exc
+    slices = [value for value in plan.get("slices") or [] if isinstance(value, dict)]
+    statuses: list[dict[str, Any]] = []
+    for value in slices[: native.sequence_index]:
+        slice_id = str(value.get("sliceId") or "").strip()
+        if not slice_id:
+            continue
+        statuses.append(
+            {
+                "slice_id": slice_id,
+                "status": str(value.get("implementationStatus") or "").strip().lower(),
+                "non_blocking": bool(value.get("nonBlocking") or value.get("non_blocking")),
+            }
+        )
+    for status in statuses:
+        if status["status"] not in {"complete", "completed"} and not status["non_blocking"]:
+            raise CatalogMaterializerError(
+                f"frozen phase plan has an unmet blocking prerequisite slice: {status['slice_id']}"
+            )
+
+    source_paths = [plan_path]
+    for value in (
+        plan.get("sprintSpecPath"),
+        plan.get("selectionRecord"),
+        plan.get("evidenceStatusPath"),
+    ):
+        if value not in (None, ""):
+            normalized = _safe_frozen_path(value, "phase-plan source path")
+            if normalized not in source_paths:
+                source_paths.append(normalized)
+    source_files: list[dict[str, Any]] = []
+    for source_path in source_paths:
+        blob = _frozen_blob(ppe_repo, commit, source_path)
+        blob_sha = _git(ppe_repo, "rev-parse", f"{commit}:{source_path}")
+        source_files.append(
+            {
+                "path": source_path,
+                "exists": True,
+                "git_commit": commit,
+                "blob_sha": blob_sha,
+                "sha256": hashlib.sha256(blob).hexdigest(),
+            }
+        )
+
+    evidence: dict[str, Any] = {
+        "frozen_target_commit": commit,
+        "phase_plan": plan_path,
+        "phase_plan_blob_sha": source_files[0]["blob_sha"],
+        "backlog_chapter_id": item.chapter_id,
+        "depends_on": list(item.depends_on),
+        "related_pull_requests": list(item.related_pull_requests),
+        "related_pull_request_resolutions": item.raw.get("relatedPullRequestResolutions", []),
+        "packetization": item.packetization,
+        "source_files": source_files,
+    }
+    if statuses:
+        evidence["control_slice"] = {
+            "slice_id": statuses[0]["slice_id"],
+            "implementationStatus": str(statuses[0]["status"]).upper(),
+            "nonBlocking": statuses[0]["non_blocking"],
+        }
+    prerequisites = {
+        "version": 1,
+        "read_only": True,
+        "source": "ppe_native_read_only",
+        "evidence": evidence,
+        "statuses": statuses,
+    }
+    return plan, plan_path, prerequisites
+
+
 def _publish_packet_to_jobs(
     *,
     packet: Mapping[str, Any],
+    filename: str,
     feed_repo_url: str,
     jobs_branch: str,
     catalog_path: str,
@@ -542,18 +1123,20 @@ def _publish_packet_to_jobs(
         submit=False,
     )
     lock_root = (
-        checkout_root
-        or Path(tempfile.gettempdir()) / "msos-autobuilder-build-next-feed"
-    ).expanduser().resolve()
+        (checkout_root or Path(tempfile.gettempdir()) / "msos-autobuilder-build-next-feed")
+        .expanduser()
+        .resolve()
+    )
     with FeedMutationLock(lock_root.with_suffix(".catalog.lock")):
         checkout = _prepare_feed_checkout(bn)
         catalog = checkout / catalog_path
         result = write_packet_to_catalog_dir(
             catalog,
             packet,
+            filename=filename,
             allow_test_local_source_remote=allow_test_local_source_remote,
         )
-        relative = Path(catalog_path) / GUIDED_SHELL_CATALOG_FILENAME
+        relative = Path(catalog_path) / filename
         if result.status == "created":
             _git(checkout, "add", "--", relative.as_posix())
             changed = subprocess.run(
@@ -566,7 +1149,10 @@ def _publish_packet_to_jobs(
                     checkout,
                     "commit",
                     "-m",
-                    "Add 07-region_bet_guided_shell_v1 catalog packet via JIT materializer.",
+                    (
+                        f"Add {result.order:02d}-{result.work_item_id} catalog "
+                        "packet via JIT materializer."
+                    ),
                 )
                 commit = _git(checkout, "rev-parse", "HEAD")
                 _git(checkout, "push", "origin", f"HEAD:{jobs_branch}")
@@ -580,16 +1166,19 @@ def _publish_packet_to_jobs(
                     frozen_commit=result.frozen_commit,
                     feed_commit=commit,
                 )
-        feed_commit = _git(
-            checkout,
-            "log",
-            "-n",
-            "1",
-            "--format=%H",
-            "--",
-            relative.as_posix(),
-            accepted=(0, 1),
-        ) or None
+        feed_commit = (
+            _git(
+                checkout,
+                "log",
+                "-n",
+                "1",
+                "--format=%H",
+                "--",
+                relative.as_posix(),
+                accepted=(0, 1),
+            )
+            or None
+        )
         return MaterializeResult(
             status=result.status,
             reason=result.reason,
@@ -602,11 +1191,16 @@ def _publish_packet_to_jobs(
         )
 
 
-def materialize_guided_shell_packet(
+def materialize_next_backlog_packet(
     *,
     backlog: Sequence[BacklogItem] | Mapping[str, Any] | Path | str,
     ppe_repo: Path | None = None,
     predecessor_terminal: Any = False,
+    terminal_proofs: Mapping[str, Any] | None = None,
+    exclude_work_item_ids: Sequence[str] = (),
+    host_root: Path | None = None,
+    results_root: Path | None = None,
+    generation: Mapping[str, Any] | None = None,
     catalog_dir: Path | None = None,
     publish_to_jobs: bool = False,
     feed_repo_url: str = "",
@@ -620,29 +1214,6 @@ def materialize_guided_shell_packet(
     frozen_commit: str | None = None,
     related_pr_resolved: Mapping[str, bool] | None = None,
 ) -> MaterializeResult:
-    eligibility = evaluate_jit_eligibility(
-        backlog,
-        predecessor_terminal=predecessor_terminal,
-        related_pr_resolved=related_pr_resolved,
-    )
-    if eligibility.status != "eligible":
-        return MaterializeResult(
-            status="skipped",
-            reason=eligibility.reason,
-            work_item_id=eligibility.work_item_id,
-            order=eligibility.order,
-            evidence=eligibility.evidence,
-        )
-
-    if publish_to_jobs and not str(feed_repo_url or "").strip():
-        raise CatalogMaterializerError(
-            "JIT catalog materialization requires feed_repo_url when publish_to_jobs=True"
-        )
-    if not publish_to_jobs and catalog_dir is None:
-        raise CatalogMaterializerError(
-            "JIT catalog materialization requires catalog_dir or publish_to_jobs config"
-        )
-
     commit, remote = freeze_ppe_main_sha(
         ppe_repo=ppe_repo,
         target_repository=target_repository,
@@ -664,40 +1235,72 @@ def materialize_guided_shell_packet(
         if not isinstance(frozen_backlog, Mapping):
             raise CatalogMaterializerError("frozen chapter backlog must be an object")
         backlog = frozen_backlog
-        eligibility = evaluate_jit_eligibility(
-            frozen_backlog,
-            predecessor_terminal=predecessor_terminal,
-            related_pr_resolved=related_pr_resolved,
-        )
-        if eligibility.status != "eligible":
-            return MaterializeResult(
-                status="skipped",
-                reason=eligibility.reason,
-                work_item_id=eligibility.work_item_id,
-                order=eligibility.order,
-                frozen_commit=commit,
-                evidence=eligibility.evidence,
-            )
     items = (
         load_phase_chapter_backlog(backlog)
         if isinstance(backlog, (str, Path, Mapping))
-        else backlog
+        else tuple(backlog)
     )
-    selected_item = next(item for item in items if item.chapter_id == GUIDED_SHELL_WORK_ITEM_ID)
-    objective = str(selected_item.raw.get("reason") or "").strip()
-    if not objective:
-        raise CatalogMaterializerError("guided shell backlog objective is missing")
-    packet = author_guided_shell_packet(
+    proofs = dict(terminal_proofs or {})
+    if predecessor_terminal not in (None, False, ""):
+        proofs.setdefault(PREDECESSOR_WORK_ITEM_ID, predecessor_terminal)
+    relevant_ids = {
+        value for item in items for value in (item.chapter_id, *item.depends_on) if value
+    }
+    for work_item_id in sorted(relevant_ids):
+        if work_item_id in proofs:
+            continue
+        proof = resolve_work_item_terminal_proof(
+            work_item_id=work_item_id,
+            host_root=host_root,
+            results_root=results_root,
+            generation=generation,
+        )
+        if proof is not False:
+            proofs[work_item_id] = proof
+
+    eligibility = evaluate_jit_eligibility(
+        items,
+        predecessor_terminal=predecessor_terminal,
+        terminal_proofs=proofs,
+        exclude_work_item_ids=exclude_work_item_ids,
+        related_pr_resolved=related_pr_resolved,
+    )
+    if eligibility.status != "eligible":
+        return MaterializeResult(
+            status="skipped",
+            reason=eligibility.reason,
+            work_item_id=eligibility.work_item_id,
+            order=eligibility.order,
+            frozen_commit=commit,
+            evidence=eligibility.evidence,
+        )
+    if publish_to_jobs and not str(feed_repo_url or "").strip():
+        raise CatalogMaterializerError(
+            "JIT catalog materialization requires feed_repo_url when publish_to_jobs=True"
+        )
+    if not publish_to_jobs and catalog_dir is None:
+        raise CatalogMaterializerError(
+            "JIT catalog materialization requires catalog_dir or publish_to_jobs config"
+        )
+
+    selected_item = next(item for item in items if item.chapter_id == eligibility.work_item_id)
+    plan_inputs = _frozen_phase_plan_inputs(ppe_repo, commit, selected_item)
+    packet = author_backlog_packet(
+        item=selected_item,
         frozen_commit=commit,
         target_remote_url=remote,
         dependency_source_sha256=_dependency_digest(ppe_repo, commit),
         target_repository=target_repository,
         allow_test_local_source_remote=allow_test_local_source_remote,
-        objective=objective,
+        phase_plan=plan_inputs[0] if plan_inputs else None,
+        phase_plan_path=plan_inputs[1] if plan_inputs else None,
+        prerequisite_evidence=plan_inputs[2] if plan_inputs else None,
     )
+    filename = catalog_filename_for_item(selected_item)
     if publish_to_jobs:
         return _publish_packet_to_jobs(
             packet=packet,
+            filename=filename,
             feed_repo_url=feed_repo_url,
             jobs_branch=jobs_branch,
             catalog_path=catalog_path,
@@ -708,6 +1311,7 @@ def materialize_guided_shell_packet(
     result = write_packet_to_catalog_dir(
         catalog_dir,
         packet,
+        filename=filename,
         allow_test_local_source_remote=allow_test_local_source_remote,
     )
     return MaterializeResult(
@@ -718,7 +1322,45 @@ def materialize_guided_shell_packet(
         packet_path=result.packet_path,
         packet_sha256=result.packet_sha256,
         frozen_commit=commit,
-        evidence={"blocked_orders": (eligibility.evidence or {}).get("blocked_orders")},
+        evidence=eligibility.evidence,
+    )
+
+
+def materialize_guided_shell_packet(
+    *,
+    backlog: Sequence[BacklogItem] | Mapping[str, Any] | Path | str,
+    ppe_repo: Path | None = None,
+    predecessor_terminal: Any = False,
+    catalog_dir: Path | None = None,
+    publish_to_jobs: bool = False,
+    feed_repo_url: str = "",
+    jobs_branch: str = "jobs",
+    catalog_path: str = DEFAULT_CATALOG_RELPATH,
+    checkout_root: Path | None = None,
+    target_repository: str = DEFAULT_TARGET_REPOSITORY,
+    target_remote_url: str = DEFAULT_TARGET_REMOTE_URL,
+    allow_test_local_source_remote: bool = False,
+    fetch_remote: bool = True,
+    frozen_commit: str | None = None,
+    related_pr_resolved: Mapping[str, bool] | None = None,
+) -> MaterializeResult:
+    """Compatibility wrapper for the original order-07 materializer API."""
+    return materialize_next_backlog_packet(
+        backlog=backlog,
+        ppe_repo=ppe_repo,
+        predecessor_terminal=predecessor_terminal,
+        catalog_dir=catalog_dir,
+        publish_to_jobs=publish_to_jobs,
+        feed_repo_url=feed_repo_url,
+        jobs_branch=jobs_branch,
+        catalog_path=catalog_path,
+        checkout_root=checkout_root,
+        target_repository=target_repository,
+        target_remote_url=target_remote_url,
+        allow_test_local_source_remote=allow_test_local_source_remote,
+        fetch_remote=fetch_remote,
+        frozen_commit=frozen_commit,
+        related_pr_resolved=related_pr_resolved,
     )
 
 
@@ -731,9 +1373,7 @@ def _scan_completion_reports(results_root: Path, work_item_id: str) -> list[dict
             payload = _read_json_mapping(path)
         except CatalogMaterializerError:
             continue
-        report_work = str(
-            payload.get("work_item_id") or payload.get("workItemId") or ""
-        ).strip()
+        report_work = str(payload.get("work_item_id") or payload.get("workItemId") or "").strip()
         if report_work != work_item_id:
             continue
         matches.append({"status": str(payload.get("status") or "").strip().lower(), **payload})
@@ -765,7 +1405,7 @@ def _scan_lifecycle_snapshots(host_root: Path, work_item_id: str) -> list[dict[s
     return matches
 
 
-def resolve_predecessor_terminal_proof(
+def resolve_work_item_terminal_proof(
     *,
     work_item_id: str = PREDECESSOR_WORK_ITEM_ID,
     predecessor_proof: Any = None,
@@ -807,6 +1447,24 @@ def resolve_predecessor_terminal_proof(
             ):
                 return snapshot
     return False
+
+
+def resolve_predecessor_terminal_proof(
+    *,
+    work_item_id: str = PREDECESSOR_WORK_ITEM_ID,
+    predecessor_proof: Any = None,
+    host_root: Path | None = None,
+    results_root: Path | None = None,
+    generation: Mapping[str, Any] | None = None,
+) -> Any:
+    """Compatibility name for exact work-item terminal proof resolution."""
+    return resolve_work_item_terminal_proof(
+        work_item_id=work_item_id,
+        predecessor_proof=predecessor_proof,
+        host_root=host_root,
+        results_root=results_root,
+        generation=generation,
+    )
 
 
 def ensure_jit_catalog_for_refill(
@@ -875,29 +1533,13 @@ def ensure_jit_catalog_for_refill(
             evidence={"selected_work_item_id": selected.work_item_id},
         )
 
-    if GUIDED_SHELL_WORK_ITEM_ID in exclude_work_item_ids:
-        return MaterializeResult(
-            status="skipped",
-            reason="work_item_excluded",
-            work_item_id=GUIDED_SHELL_WORK_ITEM_ID,
-            order=GUIDED_SHELL_ORDER,
-        )
-    if any(packet.work_item_id == GUIDED_SHELL_WORK_ITEM_ID for packet in catalog):
-        # Existing nonselectable packets retain their immutable eligibility.
-        return MaterializeResult(
-            status="skipped",
-            reason="catalog_packet_not_eligible",
-            work_item_id=GUIDED_SHELL_WORK_ITEM_ID,
-            order=GUIDED_SHELL_ORDER,
-        )
-
     proof = resolve_predecessor_terminal_proof(
         predecessor_proof=predecessor_proof,
         host_root=host_root,
         results_root=results_root,
         generation=generation,
     )
-    if not is_predecessor_terminal_proof(proof):
+    if not is_predecessor_terminal_proof(proof) and backlog_path is None and ppe_repo is None:
         return MaterializeResult(
             status="skipped",
             reason="predecessor_not_terminal",
@@ -910,18 +1552,27 @@ def ensure_jit_catalog_for_refill(
     elif ppe_repo is not None:
         backlog = ppe_repo.expanduser().resolve() / BACKLOG_RELPATH
         if not Path(backlog).is_file():
-            raise CatalogMaterializerError(
-                f"JIT eligible but backlog missing at {backlog}"
+            # A source checkout without the optional backlog contract cannot
+            # establish JIT eligibility. Preserve normal UNFILLED handling;
+            # fail closed only after an item has actually been proven eligible.
+            return MaterializeResult(
+                status="skipped",
+                reason="backlog_unavailable",
+                evidence={"path": str(backlog)},
             )
     else:
         raise CatalogMaterializerError(
             "JIT eligible but ppe_repo/backlog_path missing for catalog materialization"
         )
 
-    return materialize_guided_shell_packet(
+    return materialize_next_backlog_packet(
         backlog=backlog,
         ppe_repo=ppe_repo,
         predecessor_terminal=proof,
+        exclude_work_item_ids=exclude_work_item_ids,
+        host_root=host_root,
+        results_root=results_root,
+        generation=generation,
         catalog_dir=packet_root,
         publish_to_jobs=publish_to_jobs and packet_root is None,
         feed_repo_url=feed_repo_url,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -74,10 +75,7 @@ def _init_bare_results_remote(path: Path, *, branch: str = "results") -> Path:
 
 def _long_isolated_host_root(tmp_path: Path) -> Path:
     return (
-        tmp_path
-        / "Users"
-        / "USER"
-        / ".msos-autobuilder-pilot-issue119-4336d74-20260806T0514Z-a"
+        tmp_path / "Users" / "USER" / ".msos-autobuilder-pilot-issue119-4336d74-20260806T0514Z-a"
     ).resolve()
 
 
@@ -95,17 +93,13 @@ def _nested_patch(checkout: Path) -> Path:
     )
 
 
-PILOT_STATE = (
-    r"C:\Users\USER\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\state"
-)
+PILOT_STATE = r"C:\Users\USER\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\state"
 PILOT_JOB_ID = (
     "build-next-ppe-options_horizon_comparison_v1"
     "-Options-HorizonComparison-Product-952997b82dd06251"
 )
 # The extension whose load actually failed, relative to the workspace root.
-NATIVE_EXTENSION = (
-    r"\.msos-candidate-env\Lib\site-packages\cryptography\hazmat\bindings\_rust.pyd"
-)
+NATIVE_EXTENSION = r"\.msos-candidate-env\Lib\site-packages\cryptography\hazmat\bindings\_rust.pyd"
 
 
 def test_candidate_workspace_keeps_native_extensions_under_max_path() -> None:
@@ -174,6 +168,40 @@ def test_remove_git_tree_tolerates_a_missing_path(tmp_path: Path) -> None:
     remove_git_tree(absent)
     remove_git_tree(absent, ignore_errors=True)
     assert not absent.exists()
+
+
+def test_remove_git_tree_retries_transient_windows_file_lock(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "locked.pyd").write_bytes(b"native extension")
+    real_rmtree = shutil.rmtree
+    calls = 0
+
+    def transient_lock(path: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            error = PermissionError(13, "file is being used by another process", path)
+            error.winerror = 32
+            raise error
+        real_rmtree(path)
+
+    monkeypatch.setattr(
+        "msos_autobuilder.windows_git_checkout.shutil.rmtree",
+        transient_lock,
+    )
+    monkeypatch.setattr(
+        "msos_autobuilder.windows_git_checkout.time.sleep",
+        lambda _seconds: None,
+    )
+
+    remove_git_tree(workspace)
+
+    assert calls == 3
+    assert not workspace.exists()
 
 
 def test_prefer_checkout_defaults_to_short_and_reuses_legacy(tmp_path: Path) -> None:
@@ -254,9 +282,9 @@ def test_revision_loop_prefers_short_results_checkout_on_long_host_root(
     legacy_nested = _nested_patch(host_root / "state" / REVISION_RESULTS_LEGACY)
     short_nested = _nested_patch(loop.results.root)
     assert len(str(short_nested)) < len(str(legacy_nested))
-    assert len(str(legacy_nested)) - len(str(short_nested)) == len(
-        REVISION_RESULTS_LEGACY
-    ) - len(REVISION_RESULTS_SHORT)
+    assert len(str(legacy_nested)) - len(str(short_nested)) == len(REVISION_RESULTS_LEGACY) - len(
+        REVISION_RESULTS_SHORT
+    )
 
     loop.results.prepare()
     assert (loop.results.root / ".git").exists()
@@ -309,9 +337,9 @@ def test_candidate_gate_prefers_short_results_checkout_on_long_host_root(
     legacy_nested = _nested_patch(host_root / "state" / CANDIDATE_RESULTS_LEGACY)
     short_nested = _nested_patch(branch.checkout)
     assert len(str(short_nested)) < len(str(legacy_nested))
-    assert len(str(legacy_nested)) - len(str(short_nested)) == len(
-        CANDIDATE_RESULTS_LEGACY
-    ) - len(CANDIDATE_RESULTS_SHORT)
+    assert len(str(legacy_nested)) - len(str(short_nested)) == len(CANDIDATE_RESULTS_LEGACY) - len(
+        CANDIDATE_RESULTS_SHORT
+    )
 
     branch.prepare()
     assert (branch.checkout / ".git").exists()

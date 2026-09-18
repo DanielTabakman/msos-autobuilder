@@ -1,0 +1,9 @@
+{
+  "canonical_patch_sha256_by_task": {
+    "RegionBet-PayoffSave-Product-Slice002": "098fb0f792c79a2656fe1df891ce835fef53f19355a622232e5d4958d6bdfc67"
+  },
+  "corrected_report_sha256": "833e64174f4b2551c9e3e3c7afa10f946c13a7b5cfd2d08a219ab80646db7742",
+  "publication_enabled": false,
+  "source_report_sha256": "edc454b437fb3213562a37c02802b15e0533f7558838b20f73fc5fce9fc8778c",
+  "version": 1
+}

@@ -1,0 +1,729 @@
+diff --git a/apps/msos-web/src/app/api/theses/region-bet/route.ts b/apps/msos-web/src/app/api/theses/region-bet/route.ts
+index cc8c07b..0183a76 100644
+--- a/apps/msos-web/src/app/api/theses/region-bet/route.ts
++++ b/apps/msos-web/src/app/api/theses/region-bet/route.ts
+@@ -35,11 +35,20 @@ export async function PUT(request: Request) {
+     if (!regionBet) {
+       return NextResponse.json({ error: "missing region bet" }, { status: 400 });
+     }
+-    const saved = await upsertRegionBet(regionBet, identity.email);
++    const saved = await upsertRegionBet(regionBet, identity.email, {
++      confirmPayoff: body?.confirmPayoff === true,
++    });
+     return NextResponse.json({ regionBet: saved });
+   } catch (err) {
+     const message = err instanceof Error ? err.message : "failed to save region bet";
+-    const status = message.includes("invalid region bet") ? 400 : 500;
++    const status =
++      message.includes("invalid region bet") ||
++      message.includes("explicit payoff confirmation required") ||
++      message.includes("active region bet requires") ||
++      message.includes("active region bet has malformed") ||
++      message.includes("frozen entry snapshot is immutable")
++        ? 400
++        : 500;
+     console.error("region-bet PUT failed", err);
+     return NextResponse.json({ error: message }, { status });
+   }
+diff --git a/apps/msos-web/src/components/RegionBetGuidedShell.tsx b/apps/msos-web/src/components/RegionBetGuidedShell.tsx
+index 710657d..475fbfc 100644
+--- a/apps/msos-web/src/components/RegionBetGuidedShell.tsx
++++ b/apps/msos-web/src/components/RegionBetGuidedShell.tsx
+@@ -24,6 +24,7 @@ import {
+   persistRegionBet,
+   type RegionBetContract,
+ } from "@/lib/regionBet";
++import { confirmRegionBetPayoff } from "@/lib/regionBetPayoff";
+ 
+ const DEFAULT_ASSET_OPTIONS: RegionBetGuidedAssetOption[] = [
+   { asset_id: "ETH", symbol: "ETH", venue: "Deribit", spot_usd: 3000 },
+@@ -31,7 +32,7 @@ const DEFAULT_ASSET_OPTIONS: RegionBetGuidedAssetOption[] = [
+   { asset_id: "NVDA", symbol: "NVDA", venue: "equity options chain", spot_usd: 120 },
+ ];
+ 
+-type SaveState = "idle" | "saving" | "saved" | "invalid" | "offline";
++type SaveState = "idle" | "saving" | "saved" | "confirmed" | "invalid" | "offline";
+ 
+ type RegionBetGuidedShellProps = {
+   initialRegionBet?: RegionBetContract | null;
+@@ -84,6 +85,18 @@ export function RegionBetGuidedShell({
+     return true;
+   }, [draft]);
+ 
++  const confirmPayoff = useCallback(async () => {
++    const confirmed = confirmRegionBetPayoff(draft, { confirmed: true });
++    if (!confirmed) {
++      setSaveState("invalid");
++      return;
++    }
++    setSaveState("saving");
++    const saved = await persistRegionBet(confirmed, { confirmPayoff: true });
++    setDraft(confirmed);
++    setSaveState(saved ? "confirmed" : "offline");
++  }, [draft]);
++
+   const goPrevious = useCallback(() => {
+     setStep((current) => previousRegionBetGuidedShellStep(current));
+   }, []);
+@@ -102,8 +115,10 @@ export function RegionBetGuidedShell({
+       ? "Saving draft..."
+       : saveState === "saved"
+         ? REGION_BET_PERSISTENCE_LABEL
++        : saveState === "confirmed"
++          ? "Active paper Region Bet saved with a frozen entry snapshot."
+         : saveState === "invalid"
+-          ? "Draft needs a valid asset, window, and price region before saving."
++          ? "Draft needs a valid region, selected paper expression, and explicit confirmation."
+           : saveState === "offline"
+             ? "Saved locally; server sync will retry from the Region Bet contract."
+             : hydrated
+@@ -155,6 +170,8 @@ export function RegionBetGuidedShell({
+         snapshot={snapshot}
+         assetOptions={assetOptions}
+         onDraftChange={updateDraft}
++        onConfirmPayoff={confirmPayoff}
++        payoffSaveStatus={saveState === "confirmed" ? "saved" : saveState}
+       />
+ 
+       <div className="panel outcome">
+diff --git a/apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx b/apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx
+index 978ba72..c1484ed 100644
+--- a/apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx
++++ b/apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx
+@@ -6,6 +6,10 @@ import type {
+   RegionBetGuidedShellPatch,
+ } from "@/lib/regionBetGuidedShell";
+ import { RegionBetMarketComparePanel } from "@/components/RegionBetMarketComparePanel";
++import {
++  RegionBetPayoffSavePanel,
++  type RegionBetPayoffSaveStatus,
++} from "@/components/RegionBetPayoffSavePanel";
+ import { RegionBetRiskExpressionPanel } from "@/components/RegionBetRiskExpressionPanel";
+ import type { RegionBetContract } from "@/lib/regionBet";
+ 
+@@ -22,6 +26,8 @@ type RegionBetGuidedShellPanelProps = {
+   snapshot: RegionBetGuidedShellSnapshot;
+   assetOptions: RegionBetGuidedAssetOption[];
+   onDraftChange: (patch: RegionBetGuidedShellPatch) => void;
++  onConfirmPayoff: () => void;
++  payoffSaveStatus: RegionBetPayoffSaveStatus;
+ };
+ 
+ function datetimeValue(value: string | undefined): string {
+@@ -48,6 +54,8 @@ export function RegionBetGuidedShellPanel({
+   snapshot,
+   assetOptions,
+   onDraftChange,
++  onConfirmPayoff,
++  payoffSaveStatus,
+ }: RegionBetGuidedShellPanelProps) {
+   if (step === "asset") {
+     return (
+@@ -259,6 +267,11 @@ export function RegionBetGuidedShellPanel({
+         </label>
+       </div>
+       <RegionBetRiskExpressionPanel draft={draft} onDraftChange={onDraftChange} />
++      <RegionBetPayoffSavePanel
++        draft={draft}
++        status={payoffSaveStatus}
++        onConfirmPayoff={onConfirmPayoff}
++      />
+     </>
+   );
+ }
+diff --git a/apps/msos-web/src/components/RegionBetPayoffSavePanel.tsx b/apps/msos-web/src/components/RegionBetPayoffSavePanel.tsx
+new file mode 100644
+index 0000000..ccf8049
+--- /dev/null
++++ b/apps/msos-web/src/components/RegionBetPayoffSavePanel.tsx
+@@ -0,0 +1,120 @@
++"use client";
++
++import { useMemo, useState } from "react";
++
++import type { RegionBetContract } from "@/lib/regionBet";
++import {
++  buildRegionBetPayoffExplanation,
++  canConfirmRegionBetPayoff,
++} from "@/lib/regionBetPayoff";
++
++export type RegionBetPayoffSaveStatus = "idle" | "saving" | "saved" | "invalid" | "offline";
++
++type RegionBetPayoffSavePanelProps = {
++  draft: RegionBetContract;
++  status: RegionBetPayoffSaveStatus;
++  onConfirmPayoff: () => void;
++};
++
++export function RegionBetPayoffSavePanel({
++  draft,
++  status,
++  onConfirmPayoff,
++}: RegionBetPayoffSavePanelProps) {
++  const [confirmed, setConfirmed] = useState(false);
++  const explanation = useMemo(() => buildRegionBetPayoffExplanation(draft), [draft]);
++  const canConfirm = confirmed && canConfirmRegionBetPayoff(draft);
++  const frozen = draft.frozen_entry_snapshot;
++  const statusCopy =
++    status === "saving"
++      ? "Saving active paper Region Bet..."
++      : status === "saved"
++        ? "Active paper Region Bet saved with a frozen entry snapshot."
++        : status === "invalid"
++          ? "Select a paper expression and confirm the payoff explanation before activation."
++          : status === "offline"
++            ? "Saved locally; server sync can retry from this Region Bet contract."
++            : frozen
++              ? "Frozen entry snapshot is attached to this monitorable paper Region Bet."
++              : "Draft remains editable until you confirm the payoff explanation.";
++
++  return (
++    <div className="panel chart" data-testid="region-bet-payoff-save-panel">
++      <div className="panel-head">
++        <div>
++          <h2>Payoff explanation and save</h2>
++          <div className="panel-sub">
++            Confirmation freezes the entry snapshot for monitoring. Paper only.
++          </div>
++        </div>
++        <span className="tag teal">Confirm</span>
++      </div>
++
++      {explanation ? (
++        <>
++          <div className="decision-strip">
++            <div>
++              <strong>{explanation.headline}</strong>
++              <p>{explanation.payoff_copy}</p>
++            </div>
++          </div>
++          <div aria-label="Payoff scenarios">
++            {explanation.scenario_copy.map((scenario) => (
++              <div className="option-row dimmed" key={scenario.id}>
++                <div>
++                  <h3>{scenario.label}</h3>
++                  <p>{scenario.copy}</p>
++                </div>
++              </div>
++            ))}
++          </div>
++          <p className="micro">{explanation.limitation}</p>
++        </>
++      ) : (
++        <p className="micro">
++          Choose a paper expression before saving an active monitorable Region Bet.
++        </p>
++      )}
++
++      {frozen ? (
++        <div className="score" aria-label="Frozen entry snapshot">
++          <div className="small-panel">
++            <div className="k">Entry spot</div>
++            <div className="v teal">{frozen.entry.spot_usd}</div>
++          </div>
++          <div className="small-panel">
++            <div className="k">Observed</div>
++            <div className="v">{frozen.market_snapshot.as_of_utc.slice(0, 10)}</div>
++          </div>
++          <div className="small-panel">
++            <div className="k">Expression</div>
++            <div className="v amber">{frozen.selected_expression_ref.expression_id}</div>
++          </div>
++        </div>
++      ) : null}
++
++      <label>
++        <input
++          type="checkbox"
++          checked={confirmed}
++          onChange={(event) => setConfirmed(event.currentTarget.checked)}
++        />
++        <span>I confirm this paper payoff explanation and want to save it for monitoring.</span>
++      </label>
++
++      <div className="decision-strip">
++        <div>
++          <strong>{statusCopy}</strong>
++        </div>
++        <button
++          type="button"
++          className="btn slim primary"
++          disabled={!canConfirm || status === "saving"}
++          onClick={onConfirmPayoff}
++        >
++          Confirm and save
++        </button>
++      </div>
++    </div>
++  );
++}
+diff --git a/apps/msos-web/src/lib/msosWorkflowStore.ts b/apps/msos-web/src/lib/msosWorkflowStore.ts
+index b5b9da5..47fedd5 100644
+--- a/apps/msos-web/src/lib/msosWorkflowStore.ts
++++ b/apps/msos-web/src/lib/msosWorkflowStore.ts
+@@ -4,7 +4,12 @@ import { randomUUID } from "crypto";
+ 
+ import type { ExpressionRecord, PaperTradeStatus } from "@/lib/expressionPersistence";
+ import type { HorizonRegionIntent } from "@/lib/horizonRegion";
+-import { isRegionBetContract, type RegionBetContract } from "@/lib/regionBet";
++import {
++  isRegionBetContract,
++  type PersistRegionBetOptions,
++  type RegionBetContract,
++} from "@/lib/regionBet";
++import { canConfirmRegionBetPayoff, regionBetFrozenSnapshotKey } from "@/lib/regionBetPayoff";
+ import type { ThesisRecord } from "@/lib/thesisPersistence";
+ import { normalizeOwnerEmail } from "@/lib/msosIdentityCore";
+ import { scopeOwnerId } from "@/lib/msosSession";
+@@ -665,6 +670,7 @@ export async function getCurrentRegionBet(ownerEmail: string): Promise<StoredReg
+ export async function upsertRegionBet(
+   regionBet: RegionBetContract,
+   ownerEmail: string,
++  options: PersistRegionBetOptions = {},
+ ): Promise<StoredRegionBet> {
+   if (!isRegionBetContract(regionBet)) {
+     throw new Error("invalid region bet");
+@@ -680,6 +686,26 @@ export async function upsertRegionBet(
+           (row) => row.id === pointers.regionBetId && regionBetOwnerMatches(row, ownerEmail),
+         )
+       : undefined);
++  const incomingMonitorable =
++    regionBet.lifecycle.status === "active" || regionBet.lifecycle.status === "monitoring";
++  const existingMonitorable =
++    existing?.lifecycle.status === "active" || existing?.lifecycle.status === "monitoring";
++  if (incomingMonitorable && !regionBet.frozen_entry_snapshot) {
++    throw new Error("active region bet requires a frozen entry snapshot");
++  }
++  if (incomingMonitorable && !canConfirmRegionBetPayoff(regionBet)) {
++    throw new Error("active region bet has malformed payoff confirmation input");
++  }
++  if (incomingMonitorable && !existingMonitorable && options.confirmPayoff !== true) {
++    throw new Error("explicit payoff confirmation required");
++  }
++  if (
++    existing?.frozen_entry_snapshot &&
++    regionBetFrozenSnapshotKey(existing.frozen_entry_snapshot) !==
++      regionBetFrozenSnapshotKey(regionBet.frozen_entry_snapshot)
++  ) {
++    throw new Error("frozen entry snapshot is immutable");
++  }
+   const owner = scopeOwnerId(ownerEmail) ?? normalizeOwnerEmail(ownerEmail);
+   const next: StoredRegionBet = {
+     ...regionBet,
+diff --git a/apps/msos-web/src/lib/regionBet.ts b/apps/msos-web/src/lib/regionBet.ts
+index 1309ac5..ef4e1cb 100644
+--- a/apps/msos-web/src/lib/regionBet.ts
++++ b/apps/msos-web/src/lib/regionBet.ts
+@@ -45,6 +45,37 @@ export type RegionBetContract = {
+     expression_id: string;
+     source?: string;
+   } | null;
++  frozen_entry_snapshot?: {
++    confirmed_at_utc: string;
++    entry: {
++      spot_usd: number;
++      timestamp_utc: string;
++    };
++    market_snapshot: {
++      as_of_utc: string;
++      source?: string;
++      method?: string;
++      implied_probability_pct?: number;
++      implied_move_pct?: number;
++    };
++    risk_constraints: {
++      max_loss_usd?: number;
++      max_premium_usd?: number;
++      position_size_usd?: number;
++      payoff_preference?: string;
++      notes?: string;
++    };
++    selected_region: {
++      time_start_utc: string;
++      time_end_utc: string;
++      price_min_usd: number;
++      price_max_usd: number;
++    };
++    selected_expression_ref: {
++      expression_id: string;
++      source?: string;
++    };
++  };
+   lifecycle: {
+     status: RegionBetStatus;
+     created_at_utc: string;
+@@ -54,6 +85,10 @@ export type RegionBetContract = {
+   user_note?: string;
+ };
+ 
++export type PersistRegionBetOptions = {
++  confirmPayoff?: boolean;
++};
++
+ export const REGION_BET_STORAGE_KEY = "msos.region.bet.v1";
+ 
+ export const REGION_BET_PERSISTENCE_LABEL =
+@@ -88,6 +123,58 @@ function isRegionBetStatus(value: unknown): value is RegionBetStatus {
+   );
+ }
+ 
++function isRegionBetFrozenEntrySnapshot(
++  value: unknown,
++): value is NonNullable<RegionBetContract["frozen_entry_snapshot"]> {
++  if (!value || typeof value !== "object") return false;
++  const row = value as Record<string, unknown>;
++  const entry = row.entry;
++  const marketSnapshot = row.market_snapshot;
++  const riskConstraints = row.risk_constraints;
++  const selectedRegion = row.selected_region;
++  const expressionRef = row.selected_expression_ref;
++  if (
++    !entry ||
++    typeof entry !== "object" ||
++    !marketSnapshot ||
++    typeof marketSnapshot !== "object" ||
++    !riskConstraints ||
++    typeof riskConstraints !== "object" ||
++    !selectedRegion ||
++    typeof selectedRegion !== "object" ||
++    !expressionRef ||
++    typeof expressionRef !== "object"
++  ) {
++    return false;
++  }
++  const entryRow = entry as Record<string, unknown>;
++  const marketSnapshotRow = marketSnapshot as Record<string, unknown>;
++  const riskRow = riskConstraints as Record<string, unknown>;
++  const selectedRegionRow = selectedRegion as Record<string, unknown>;
++  const expressionRow = expressionRef as Record<string, unknown>;
++  return (
++    typeof row.confirmed_at_utc === "string" &&
++    isFiniteNumber(entryRow.spot_usd) &&
++    typeof entryRow.timestamp_utc === "string" &&
++    typeof marketSnapshotRow.as_of_utc === "string" &&
++    isOptionalString(marketSnapshotRow.source) &&
++    isOptionalString(marketSnapshotRow.method) &&
++    isOptionalFiniteNumber(marketSnapshotRow.implied_probability_pct) &&
++    isOptionalFiniteNumber(marketSnapshotRow.implied_move_pct) &&
++    isOptionalFiniteNumber(riskRow.max_loss_usd) &&
++    isOptionalFiniteNumber(riskRow.max_premium_usd) &&
++    isOptionalFiniteNumber(riskRow.position_size_usd) &&
++    isOptionalString(riskRow.payoff_preference) &&
++    isOptionalString(riskRow.notes) &&
++    typeof selectedRegionRow.time_start_utc === "string" &&
++    typeof selectedRegionRow.time_end_utc === "string" &&
++    isFiniteNumber(selectedRegionRow.price_min_usd) &&
++    isFiniteNumber(selectedRegionRow.price_max_usd) &&
++    typeof expressionRow.expression_id === "string" &&
++    isOptionalString(expressionRow.source)
++  );
++}
++
+ export function isRegionBetContract(value: unknown): value is RegionBetContract {
+   if (!value || typeof value !== "object") return false;
+   const row = value as Record<string, unknown>;
+@@ -158,6 +245,8 @@ export function isRegionBetContract(value: unknown): value is RegionBetContract
+     isOptionalString(riskRow.payoff_preference) &&
+     isOptionalString(riskRow.notes) &&
+     expressionRefValid &&
++    (row.frozen_entry_snapshot === undefined ||
++      isRegionBetFrozenEntrySnapshot(row.frozen_entry_snapshot)) &&
+     isRegionBetStatus(lifecycleRow.status) &&
+     typeof lifecycleRow.created_at_utc === "string" &&
+     typeof lifecycleRow.updated_at_utc === "string" &&
+@@ -209,7 +298,10 @@ export async function fetchRegionBet(): Promise<RegionBetContract | null> {
+   }
+ }
+ 
+-export async function persistRegionBet(regionBet: RegionBetContract): Promise<boolean> {
++export async function persistRegionBet(
++  regionBet: RegionBetContract,
++  options: PersistRegionBetOptions = {},
++): Promise<boolean> {
+   saveRegionBet(regionBet);
+   if (typeof window === "undefined") return true;
+   try {
+@@ -217,7 +309,7 @@ export async function persistRegionBet(regionBet: RegionBetContract): Promise<bo
+       method: "PUT",
+       headers: { "Content-Type": "application/json" },
+       credentials: "include",
+-      body: JSON.stringify({ regionBet }),
++      body: JSON.stringify({ regionBet, confirmPayoff: options.confirmPayoff === true }),
+     });
+     return response.ok;
+   } catch {
+diff --git a/apps/msos-web/src/lib/regionBetPayoff.ts b/apps/msos-web/src/lib/regionBetPayoff.ts
+new file mode 100644
+index 0000000..2c77b61
+--- /dev/null
++++ b/apps/msos-web/src/lib/regionBetPayoff.ts
+@@ -0,0 +1,174 @@
++import type { RegionBetContract } from "@/lib/regionBet";
++import { isRegionBetGuidedDraftPersistable } from "@/lib/regionBetGuidedShell";
++
++export const REGION_BET_PAYOFF_LIMITATION =
++  "Paper-only Region Bet explanation. This is not financial advice, not a recommendation, and not order execution.";
++
++export type RegionBetPayoffScenario = {
++  id: "inside_region" | "below_region" | "above_region";
++  label: string;
++  copy: string;
++};
++
++export type RegionBetPayoffExplanation = {
++  schema_version: 1;
++  expression_id: string;
++  headline: string;
++  payoff_copy: string;
++  scenario_copy: RegionBetPayoffScenario[];
++  limitation: string;
++};
++
++export type RegionBetPayoffConfirmation = {
++  confirmed: boolean;
++};
++
++function dollars(value: number): string {
++  return `$${value.toLocaleString("en-US", {
++    maximumFractionDigits: 2,
++    minimumFractionDigits: Number.isInteger(value) ? 0 : 2,
++  })}`;
++}
++
++function shortDate(value: string): string {
++  const parsed = new Date(value);
++  if (Number.isNaN(parsed.getTime())) return value;
++  return parsed.toISOString().slice(0, 10);
++}
++
++function expressionLabel(regionBet: RegionBetContract): string {
++  return regionBet.selected_expression_ref?.expression_id.trim() || "unselected expression";
++}
++
++export function buildRegionBetPayoffExplanation(
++  regionBet: RegionBetContract,
++): RegionBetPayoffExplanation | null {
++  const expression = regionBet.selected_expression_ref;
++  if (!expression?.expression_id.trim()) return null;
++  const region = regionBet.selected_region;
++  const symbol = regionBet.asset.symbol ?? regionBet.asset.asset_id;
++  const range = `${dollars(region.price_min_usd)} to ${dollars(region.price_max_usd)}`;
++  const window = `${shortDate(region.time_start_utc)} through ${shortDate(region.time_end_utc)}`;
++  const maxLoss = regionBet.risk_constraints.max_loss_usd;
++  const premium = regionBet.risk_constraints.max_premium_usd;
++  const limits = [
++    typeof maxLoss === "number" && Number.isFinite(maxLoss)
++      ? `max loss ${dollars(maxLoss)}`
++      : null,
++    typeof premium === "number" && Number.isFinite(premium)
++      ? `premium budget ${dollars(premium)}`
++      : null,
++    regionBet.risk_constraints.payoff_preference
++      ? `preference ${regionBet.risk_constraints.payoff_preference}`
++      : null,
++  ]
++    .filter(Boolean)
++    .join(", ");
++
++  return {
++    schema_version: 1,
++    expression_id: expression.expression_id,
++    headline: `${expression.expression_id} maps ${symbol} to the selected paper region.`,
++    payoff_copy: `${expression.expression_id} is saved as a paper expression for ${symbol}. The target region is ${range} during ${window}${limits ? ` with ${limits}` : ""}.`,
++    scenario_copy: [
++      {
++        id: "inside_region",
++        label: "Inside region",
++        copy: `If ${symbol} is inside ${range} during the selected window, this paper expression is the saved monitor object for that thesis.`,
++      },
++      {
++        id: "below_region",
++        label: "Below region",
++        copy: `If ${symbol} is below ${dollars(region.price_min_usd)}, the monitor records that the market finished outside the lower edge of the selected region.`,
++      },
++      {
++        id: "above_region",
++        label: "Above region",
++        copy: `If ${symbol} is above ${dollars(region.price_max_usd)}, the monitor records that the market finished outside the upper edge of the selected region.`,
++      },
++    ],
++    limitation: REGION_BET_PAYOFF_LIMITATION,
++  };
++}
++
++export function buildRegionBetFrozenEntrySnapshot(
++  regionBet: RegionBetContract,
++  confirmedAtUtc: string,
++): NonNullable<RegionBetContract["frozen_entry_snapshot"]> | null {
++  const expression = regionBet.selected_expression_ref;
++  if (!expression?.expression_id.trim()) return null;
++  return {
++    confirmed_at_utc: confirmedAtUtc,
++    entry: {
++      spot_usd: regionBet.entry.spot_usd,
++      timestamp_utc: regionBet.entry.timestamp_utc,
++    },
++    market_snapshot: {
++      as_of_utc: regionBet.market_snapshot.as_of_utc,
++      source: regionBet.market_snapshot.source,
++      method: regionBet.market_snapshot.method,
++      implied_probability_pct: regionBet.market_snapshot.implied_probability_pct,
++      implied_move_pct: regionBet.market_snapshot.implied_move_pct,
++    },
++    risk_constraints: {
++      max_loss_usd: regionBet.risk_constraints.max_loss_usd,
++      max_premium_usd: regionBet.risk_constraints.max_premium_usd,
++      position_size_usd: regionBet.risk_constraints.position_size_usd,
++      payoff_preference: regionBet.risk_constraints.payoff_preference,
++      notes: regionBet.risk_constraints.notes,
++    },
++    selected_region: {
++      time_start_utc: regionBet.selected_region.time_start_utc,
++      time_end_utc: regionBet.selected_region.time_end_utc,
++      price_min_usd: regionBet.selected_region.price_min_usd,
++      price_max_usd: regionBet.selected_region.price_max_usd,
++    },
++    selected_expression_ref: {
++      expression_id: expression.expression_id,
++      source: expression.source,
++    },
++  };
++}
++
++export function canConfirmRegionBetPayoff(regionBet: RegionBetContract): boolean {
++  const constraints = regionBet.risk_constraints;
++  return (
++    isRegionBetGuidedDraftPersistable(regionBet) &&
++    Boolean(regionBet.selected_expression_ref?.expression_id.trim()) &&
++    typeof constraints.max_loss_usd === "number" &&
++    Number.isFinite(constraints.max_loss_usd) &&
++    constraints.max_loss_usd > 0 &&
++    typeof constraints.max_premium_usd === "number" &&
++    Number.isFinite(constraints.max_premium_usd) &&
++    constraints.max_premium_usd > 0 &&
++    constraints.max_premium_usd <= constraints.max_loss_usd &&
++    Boolean(constraints.payoff_preference?.trim()) &&
++    Boolean(buildRegionBetPayoffExplanation(regionBet))
++  );
++}
++
++export function confirmRegionBetPayoff(
++  regionBet: RegionBetContract,
++  confirmation: RegionBetPayoffConfirmation,
++  now: Date = new Date(),
++): RegionBetContract | null {
++  if (!confirmation.confirmed || !canConfirmRegionBetPayoff(regionBet)) return null;
++  const confirmedAt = now.toISOString();
++  const frozen = buildRegionBetFrozenEntrySnapshot(regionBet, confirmedAt);
++  if (!frozen) return null;
++  return {
++    ...regionBet,
++    frozen_entry_snapshot: frozen,
++    lifecycle: {
++      ...regionBet.lifecycle,
++      status: "active",
++      updated_at_utc: confirmedAt,
++    },
++  };
++}
++
++export function regionBetFrozenSnapshotKey(
++  snapshot: RegionBetContract["frozen_entry_snapshot"],
++): string {
++  return JSON.stringify(snapshot ?? null);
++}
+diff --git a/tests/test_msos_web_region_bet_payoff_save.py b/tests/test_msos_web_region_bet_payoff_save.py
+new file mode 100644
+index 0000000..2d247c3
+--- /dev/null
++++ b/tests/test_msos_web_region_bet_payoff_save.py
+@@ -0,0 +1,89 @@
++"""Region Bet payoff/save v1 product-slice witness."""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++REPO_ROOT = Path(__file__).resolve().parents[1]
++MSOS_WEB = REPO_ROOT / "apps" / "msos-web"
++
++
++def _read(relative: str) -> str:
++    return (MSOS_WEB / relative).read_text(encoding="utf-8")
++
++
++def test_region_bet_payoff_copy_is_deterministic_and_paper_only() -> None:
++    lib = _read("src/lib/regionBetPayoff.ts")
++    assert "buildRegionBetPayoffExplanation" in lib
++    assert '"inside_region"' in lib
++    assert '"below_region"' in lib
++    assert '"above_region"' in lib
++    assert "regionBet.selected_expression_ref" in lib
++    assert "new Date(value)" in lib
++    explanation_body = lib.split("export function buildRegionBetPayoffExplanation", 1)[
++        1
++    ].split("export function buildRegionBetFrozenEntrySnapshot", 1)[0]
++    assert "new Date()" not in explanation_body
++    assert "Math.random" not in explanation_body
++    assert "not financial advice" in lib
++    assert "not a recommendation" in lib
++    assert "not order execution" in lib
++    assert "broker" not in lib.lower()
++    assert "order ticket" not in lib.lower()
++
++
++def test_confirmation_freezes_required_entry_snapshot_fields() -> None:
++    contract = _read("src/lib/regionBet.ts")
++    payoff = _read("src/lib/regionBetPayoff.ts")
++    for field in (
++        "confirmed_at_utc",
++        "entry",
++        "spot_usd",
++        "timestamp_utc",
++        "market_snapshot",
++        "as_of_utc",
++        "risk_constraints",
++        "selected_region",
++        "selected_expression_ref",
++    ):
++        assert field in contract
++        assert field in payoff
++    assert "buildRegionBetFrozenEntrySnapshot" in payoff
++    assert "status: \"active\"" in payoff
++    assert "confirmed: boolean" in payoff
++
++
++def test_guided_shell_requires_explicit_payoff_confirmation_for_activation() -> None:
++    shell = _read("src/components/RegionBetGuidedShell.tsx")
++    panel = _read("src/components/RegionBetPayoffSavePanel.tsx")
++    guided_panel = _read("src/components/RegionBetGuidedShellPanel.tsx")
++    assert "confirmRegionBetPayoff(draft, { confirmed: true })" in shell
++    assert "persistRegionBet(confirmed, { confirmPayoff: true })" in shell
++    assert "RegionBetPayoffSavePanel" in guided_panel
++    assert "I confirm this paper payoff explanation" in panel
++    assert "disabled={!canConfirm || status === \"saving\"}" in panel
++    assert "Confirm and save" in panel
++    assert "Save draft" in shell
++
++
++def test_api_and_store_reject_unconfirmed_or_mutated_active_region_bets() -> None:
++    store = _read("src/lib/msosWorkflowStore.ts")
++    route = _read("src/app/api/theses/region-bet/route.ts")
++    client = _read("src/lib/regionBet.ts")
++    assert "confirmPayoff?: boolean" in client
++    assert "body: JSON.stringify({ regionBet, confirmPayoff: options.confirmPayoff === true })" in client
++    assert "confirmPayoff: body?.confirmPayoff === true" in route
++    assert "explicit payoff confirmation required" in store
++    assert "active region bet requires a frozen entry snapshot" in store
++    assert "active region bet has malformed payoff confirmation input" in store
++    assert "frozen entry snapshot is immutable" in store
++    assert "regionBetFrozenSnapshotKey(existing.frozen_entry_snapshot)" in store
++
++
++def test_restore_contract_accepts_frozen_snapshot_and_preserves_owner_scope() -> None:
++    contract = _read("src/lib/regionBet.ts")
++    store = _read("src/lib/msosWorkflowStore.ts")
++    assert "isRegionBetFrozenEntrySnapshot(row.frozen_entry_snapshot)" in contract
++    assert "ownerEmail: owner" in store
++    assert "regionBetOwnerMatches(row, ownerEmail)" in store
++    assert "regionBetId: next.id" in store

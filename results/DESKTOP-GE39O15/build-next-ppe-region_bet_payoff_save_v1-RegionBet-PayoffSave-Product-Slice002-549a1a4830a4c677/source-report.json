@@ -1,0 +1,49 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [
+          "apps/msos-web/src/app/api/theses/region-bet/route.ts",
+          "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+          "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+          "apps/msos-web/src/components/RegionBetPayoffSavePanel.tsx",
+          "apps/msos-web/src/lib/msosWorkflowStore.ts",
+          "apps/msos-web/src/lib/regionBet.ts",
+          "apps/msos-web/src/lib/regionBetPayoff.ts",
+          "tests/test_msos_web_region_bet_payoff_save.py"
+        ],
+        "metadata": {
+          "output_tail": "ot)\" in store\n+\n+\n+def test_restore_contract_accepts_frozen_snapshot_and_preserves_owner_scope() -> None:\n+    contract = _read(\"src/lib/regionBet.ts\")\n+    store = _read(\"src/lib/msosWorkflowStore.ts\")\n+    assert \"isRegionBetFrozenEntrySnapshot(row.frozen_entry_snapshot)\" in contract\n+    assert \"ownerEmail: owner\" in store\n+    assert \"regionBetOwnerMatches(row, ownerEmail)\" in store\n+    assert \"regionBetId: next.id\" in store\n\ntokens used\n126,823\nImplemented the bounded Region Bet payoff/save product slice within the allowed touch set.\n\nWhat changed:\n- Added deterministic payoff/scenario copy in `apps/msos-web/src/lib/regionBetPayoff.ts`.\n- Added explicit confirmation flow and frozen entry snapshot generation.\n- Extended `RegionBetContract` validation for `frozen_entry_snapshot`.\n- Wired the guided review step to a new `RegionBetPayoffSavePanel`.\n- Updated API/store persistence so active monitorable Region Bets require `confirmPayoff: true`, valid payoff inputs, and an immutable frozen snapshot.\n- Added focused witness tests in `tests/test_msos_web_region_bet_payoff_save.py`.\n\nValidation run:\n- `python -m pytest tests/test_msos_web_region_bet_payoff_save.py` passed: 5 passed.\n- `python -m pytest tests/test_msos_web_region_bet_guided_shell.py tests/test_msos_web_region_bet_market_compare.py tests/test_msos_web_region_bet_payoff_save.py` passed: 15 passed.\n- `python -m ruff check scripts tests` passed.\n- `python scripts/verify_msos_web_build.py --witness-only` passed.\n- `python scripts/check_repository_boundaries.py --repo-root .` passed.\n- `python scripts/run_pushable_gate.py` could not run in automatic diff mode because this detached source worktree has no merge base for `origin/main...HEAD`.\n- `npx.cmd tsc --noEmit` could not run because there is no local `node_modules` and npm registry/cache access is blocked.\n\nCurrent changed paths are only the allowed implementation/test paths. No commit, push, smoke, closeout, queue, or control-plane updates were performed.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\workspaces\\RegionBet-PayoffSave-Product-Slice002"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 8 changed path(s)",
+        "task_id": "RegionBet-PayoffSave-Product-Slice002"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "745d8b8755ec80bd6ef6ddbbce5dd3cde476c6c5",
+    "status": "completed"
+  },
+  "completed_at": "2026-09-18T00:19:47.381669+00:00",
+  "job_id": "build-next-ppe-region_bet_payoff_save_v1-RegionBet-PayoffSave-Product-Slice002-549a1a4830a4c677",
+  "job_sha256": "e3ae5761afdefe4d00fe9df6b3fea00dc09d0002f44ab4ead6a0d2118daf09e3",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "lane_id": "RegionBet-PayoffSave-Product-Slice002",
+      "patch_file": "patches/RegionBet-PayoffSave-Product-Slice002.patch",
+      "patch_sha256": "0f756a88e08ab21714ad0de6236fc6d787246f919a7c397553981e3fbd92e288",
+      "task_id": "RegionBet-PayoffSave-Product-Slice002"
+    }
+  ],
+  "publication_enabled": false,
+  "requested_by": "capacity-one refill controller",
+  "source": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\queue\\pending\\build-next-ppe-region_bet_payoff_save_v1-RegionBet-PayoffSave-Product-Slice002-549a1a4830a4c677.yaml",
+  "version": 1
+}

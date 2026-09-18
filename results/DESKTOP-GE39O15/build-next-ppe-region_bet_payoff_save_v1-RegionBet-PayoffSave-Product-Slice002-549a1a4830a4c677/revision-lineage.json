@@ -1,0 +1,12 @@
+{
+  "gate_report_sha256": "be6f6f4c98714cbf32e56b020cd606c073ebfdc40a61cc3968a6e91b442ede9d",
+  "job_id": "build-next-ppe-region_bet_payoff_save_v1-RegionBet-PayoffSave-Product-Slice002-549a1a4830a4c677",
+  "not_applicable_evidence": true,
+  "producer": "controlled_publisher",
+  "product_commit": "553ffd036baf2bddb093d302ef57e4c3ccc6d8cb",
+  "publication_report_sha256": "003ee431fe4588280075de393b31f59f96689ed7518564c4a047e96f06866795",
+  "revision_disposition": "not_applicable",
+  "revision_evidence_id": "26488456c7141eb92f08f4da43a8e41a",
+  "revision_evidence_sha256": "1854a06e90a306cb50e3a3fb766ab4074c06a98c5329252214b052bd9afe33a0",
+  "version": 1
+}

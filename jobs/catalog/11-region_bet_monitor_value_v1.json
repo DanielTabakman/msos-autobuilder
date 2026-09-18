@@ -1,0 +1,142 @@
+{
+  "version": 1,
+  "pipeline_id": "ppe",
+  "work_item_id": "region_bet_monitor_value_v1",
+  "order": 11,
+  "eligible": true,
+  "target_repository": "DanielTabakman/Probability-prediction-engine",
+  "target_source_commit": "17d9a1fca48fcaca72bf11cde2b9a3ff305babaa",
+  "target_remote_url": "https://github.com/DanielTabakman/Probability-prediction-engine.git",
+  "adapter": "ppe_operator",
+  "allowed_paths": [
+    "apps/msos-web/src/lib/regionBet.ts",
+    "apps/msos-web/src/lib/regionBetMonitor.ts",
+    "apps/msos-web/src/lib/monitorHistoryFeed.ts",
+    "apps/msos-web/src/components/RegionBetMonitorCard.tsx",
+    "apps/msos-web/src/components/MonitorContent.tsx",
+    "apps/msos-web/src/app/api/monitor/feed/route.ts",
+    "tests/test_msos_web_region_bet_monitor_value.py"
+  ],
+  "native_slice": {
+    "slice_id": "RegionBet-MonitorValue-Product-Slice002",
+    "build_branch": "build/auto/RegionBet-MonitorValue-Product-Slice002",
+    "layer_preset": "MSOS_UI",
+    "worker_mode": "local-agent",
+    "declared_plane": "PRODUCT-PLANE",
+    "touch_set": [
+      "apps/msos-web/src/lib/regionBet.ts",
+      "apps/msos-web/src/lib/regionBetMonitor.ts",
+      "apps/msos-web/src/lib/monitorHistoryFeed.ts",
+      "apps/msos-web/src/components/RegionBetMonitorCard.tsx",
+      "apps/msos-web/src/components/MonitorContent.tsx",
+      "apps/msos-web/src/app/api/monitor/feed/route.ts",
+      "tests/test_msos_web_region_bet_monitor_value.py"
+    ],
+    "sequence_index": 1,
+    "total_slices": 3,
+    "previous_slices": [
+      "RegionBet-MonitorValue-Control-Slice001"
+    ],
+    "following_slices": [
+      "RegionBet-MonitorValue-Closeout-Slice003"
+    ],
+    "sprint_spec_path": "docs/SOP/SPRINT_REGION_BET_MONITOR_VALUE_V1.md",
+    "selection_record": "docs/SOP/POST_REGION_BET_MONITOR_VALUE_V1_SELECTION.md",
+    "raw_slice": {
+      "sliceId": "RegionBet-MonitorValue-Product-Slice002",
+      "layerPreset": "MSOS_UI",
+      "sprintSpecPath": "docs/SOP/SPRINT_REGION_BET_MONITOR_VALUE_V1.md",
+      "buildBranch": "build/auto/RegionBet-MonitorValue-Product-Slice002",
+      "declaredPlane": "PRODUCT-PLANE",
+      "implementationStatus": "PENDING",
+      "workerMode": "local-agent",
+      "susMinutes": 90,
+      "hardMinutes": 240,
+      "maxAttempts": 2,
+      "touchSet": [
+        "apps/msos-web/src/lib/regionBet.ts",
+        "apps/msos-web/src/lib/regionBetMonitor.ts",
+        "apps/msos-web/src/lib/monitorHistoryFeed.ts",
+        "apps/msos-web/src/components/RegionBetMonitorCard.tsx",
+        "apps/msos-web/src/components/MonitorContent.tsx",
+        "apps/msos-web/src/app/api/monitor/feed/route.ts",
+        "tests/test_msos_web_region_bet_monitor_value.py"
+      ]
+    }
+  },
+  "phase_plan": "docs/SOP/PHASE_PLANS/region_bet_monitor_value_v1_relay.json",
+  "prerequisites": {
+    "version": 1,
+    "read_only": true,
+    "source": "ppe_native_read_only",
+    "evidence": {
+      "frozen_target_commit": "17d9a1fca48fcaca72bf11cde2b9a3ff305babaa",
+      "target_remote_url": "https://github.com/DanielTabakman/Probability-prediction-engine.git",
+      "phase_plan": "docs/SOP/PHASE_PLANS/region_bet_monitor_value_v1_relay.json",
+      "phase_plan_blob_sha": "2339d488d0e0a75f2d25c6307224b83c46360e04",
+      "control_slice": {
+        "slice_id": "RegionBet-MonitorValue-Control-Slice001",
+        "implementationStatus": "COMPLETE",
+        "nonBlocking": true
+      },
+      "source_files": [
+        {
+          "path": "docs/SOP/PHASE_PLANS/region_bet_monitor_value_v1_relay.json",
+          "exists": true,
+          "git_commit": "17d9a1fca48fcaca72bf11cde2b9a3ff305babaa",
+          "blob_sha": "2339d488d0e0a75f2d25c6307224b83c46360e04",
+          "sha256": "67aad1416c03582c5c22226adb2e80f32f163a7ee8033542f2fcb733149ba276"
+        },
+        {
+          "path": "docs/SOP/SPRINT_REGION_BET_MONITOR_VALUE_V1.md",
+          "exists": true,
+          "git_commit": "17d9a1fca48fcaca72bf11cde2b9a3ff305babaa",
+          "blob_sha": "c8d77f0a2dff6d242b75fd64b9b1a935f6b56ebf",
+          "sha256": "e7c35281f668de077bf9bee249dc8f485fae3b249cca11fcdc1de67216f1ca79"
+        },
+        {
+          "path": "docs/SOP/POST_REGION_BET_MONITOR_VALUE_V1_SELECTION.md",
+          "exists": true,
+          "git_commit": "17d9a1fca48fcaca72bf11cde2b9a3ff305babaa",
+          "blob_sha": "f894406e1454c928ca8c4ae8c2fe3b1de1c580a1",
+          "sha256": "f43655605fddc42a96fb030e63b12b445936ffcfe392a1f50c4a70fbbc77dc39"
+        },
+        {
+          "path": "docs/SOP/REGION_BET_MONITOR_VALUE_V1_EVIDENCE_STATUS.md",
+          "exists": true,
+          "git_commit": "17d9a1fca48fcaca72bf11cde2b9a3ff305babaa",
+          "blob_sha": "32296ded6d1b526badeeaad2a49be4bb9efe1b57",
+          "sha256": "7df425b92ef79a9c31937be8cdc238851c9539264f2723f6587f6f084628b25c"
+        },
+        {
+          "path": "docs/SOP/ACTIVE_PHASE_MANIFEST.json",
+          "exists": true,
+          "git_commit": "17d9a1fca48fcaca72bf11cde2b9a3ff305babaa",
+          "blob_sha": "501cc06b6cc5dbd40b10204e201ec5bd2cbfbc18",
+          "sha256": "7c8ec60bae202559e9dd658b0eb48915ee5e6f13eb1b2f8eafeacad615e36948"
+        }
+      ]
+    },
+    "statuses": [
+      {
+        "slice_id": "RegionBet-MonitorValue-Control-Slice001",
+        "status": "complete",
+        "non_blocking": true
+      }
+    ]
+  },
+  "dependency_source_sha256": "47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394",
+  "authority": {
+    "publication_enabled": false,
+    "merge_enabled": false,
+    "product_main_write_enabled": false
+  },
+  "validation": {
+    "profile_id": "ppe-ci-pytest-v1"
+  },
+  "merge_authority": {
+    "class": "AUTO_MERGE_WHEN_GREEN",
+    "declared_at": "2026-09-18T01:42:45+00:00"
+  },
+  "work_item_source_sha256_v1": "b7f3361dc68138ac5a1bdd92926bfdb39d1b23c26dbe0ab18181fee1a33bcef5"
+}

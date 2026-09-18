@@ -1,0 +1,242 @@
+{
+  "changed_paths": [
+    "apps/msos-web/src/app/api/theses/region-bet/route.ts",
+    "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+    "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+    "apps/msos-web/src/components/RegionBetPayoffSavePanel.tsx",
+    "apps/msos-web/src/lib/msosWorkflowStore.ts",
+    "apps/msos-web/src/lib/regionBet.ts",
+    "apps/msos-web/src/lib/regionBetPayoff.ts",
+    "tests/test_msos_web_region_bet_payoff_save.py"
+  ],
+  "checks": [
+    {
+      "argv": [
+        "python",
+        "-c",
+        "import ast\nimport pathlib\npy_paths = ['tests/test_msos_web_region_bet_payoff_save.py']\nother_paths = ['apps/msos-web/src/lib/regionBet.ts', 'apps/msos-web/src/lib/regionBetGuidedShell.ts', 'apps/msos-web/src/lib/regionBetPayoff.ts', 'apps/msos-web/src/lib/msosWorkflowStore.ts', 'apps/msos-web/src/components/RegionBetGuidedShell.tsx', 'apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx', 'apps/msos-web/src/components/RegionBetPayoffSavePanel.tsx', 'apps/msos-web/src/app/api/theses/region-bet/route.ts']\nfor path in py_paths:\n    ast.parse(pathlib.Path(path).read_text(encoding='utf-8'))\nfor path in other_paths:\n    text = pathlib.Path(path).read_text(encoding='utf-8')\n    if not text.strip():\n        raise SystemExit('empty patched file: ' + path)\n"
+      ],
+      "cwd": ".",
+      "finished_at": "2026-09-18T00:26:37.925817+00:00",
+      "name": "patched-sources-parse",
+      "passed": true,
+      "phase": "check",
+      "required": true,
+      "returncode": 0,
+      "skipped": false,
+      "started_at": "2026-09-18T00:26:37.538141+00:00",
+      "stderr": "",
+      "stdout": "",
+      "timed_out": false
+    }
+  ],
+  "claim_release_handoff": {
+    "allowed_terminal_states": [
+      "abandoned",
+      "failed",
+      "merged",
+      "released",
+      "superseded"
+    ],
+    "authorized_paths": [
+      "apps/msos-web/src/app/api/theses/region-bet/route.ts",
+      "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+      "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+      "apps/msos-web/src/components/RegionBetPayoffSavePanel.tsx",
+      "apps/msos-web/src/lib/msosWorkflowStore.ts",
+      "apps/msos-web/src/lib/regionBet.ts",
+      "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+      "apps/msos-web/src/lib/regionBetPayoff.ts",
+      "tests/test_msos_web_region_bet_payoff_save.py"
+    ],
+    "bounded_failure_behavior": {
+      "accepted_abandonment": "release as abandoned with founder/owner disposition evidence",
+      "submission_or_publication_failure": "release as failed with bounded failure evidence",
+      "superseded_duplicate": "release as superseded with canonical successor evidence"
+    },
+    "claim_generation": 1,
+    "consumer": "completion-controller",
+    "handoff": "msos-autobuilder.work_admission.claim_release.v1",
+    "immutability": "consumer must match objective_sha256, writer_id and claim_generation before release",
+    "linked_issue": null,
+    "objective_sha256": "53b3a894cf0a60cca00ea5da4d62552ec74f14f466d8894ceec5110e1eaad31f",
+    "release_api": "msos_autobuilder.work_admission.release_claim",
+    "repository": "DanielTabakman/Probability-prediction-engine",
+    "verified_completion_terminal_state": "merged",
+    "version": 1,
+    "writer_id": "build-next:build-next-ppe-region_bet_payoff_save_v1-RegionBet-PayoffSave-Product-Slice002-549a1a4830a4c677"
+  },
+  "draft": true,
+  "gate_report_sha256": "be6f6f4c98714cbf32e56b020cd606c073ebfdc40a61cc3968a6e91b442ede9d",
+  "job_id": "build-next-ppe-region_bet_payoff_save_v1-RegionBet-PayoffSave-Product-Slice002-549a1a4830a4c677",
+  "main_write_enabled": false,
+  "merge_enabled": false,
+  "pr_number": 5473,
+  "pr_url": "https://github.com/DanielTabakman/Probability-prediction-engine/pull/5473",
+  "product_base_branch": "main",
+  "product_base_head": "745d8b8755ec80bd6ef6ddbbce5dd3cde476c6c5",
+  "product_branch": "autobuilder/build-next-ppe-region_bet_payoff_save_v1-RegionBet-PayoffSave-Product-Slice002-549a1a4830a4c677",
+  "product_commit": "553ffd036baf2bddb093d302ef57e4c3ccc6d8cb",
+  "published_at": "2026-09-18T00:26:46.566673+00:00",
+  "source_report_sha256": "833e64174f4b2551c9e3e3c7afa10f946c13a7b5cfd2d08a219ab80646db7742",
+  "status": "published-draft",
+  "version": 1,
+  "work_admission": {
+    "canonical": null,
+    "claim": {
+      "authorized_paths": [
+        "apps/msos-web/src/app/api/theses/region-bet/route.ts",
+        "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+        "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+        "apps/msos-web/src/components/RegionBetPayoffSavePanel.tsx",
+        "apps/msos-web/src/lib/msosWorkflowStore.ts",
+        "apps/msos-web/src/lib/regionBet.ts",
+        "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+        "apps/msos-web/src/lib/regionBetPayoff.ts",
+        "tests/test_msos_web_region_bet_payoff_save.py"
+      ],
+      "branch": "build/auto/RegionBet-PayoffSave-Product-Slice002",
+      "claimed_at": "2026-09-18T00:05:23Z",
+      "evidence": {
+        "admission_phase": "build_next.pre_feed_submission",
+        "authorized_paths": [
+          "apps/msos-web/src/app/api/theses/region-bet/route.ts",
+          "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+          "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+          "apps/msos-web/src/components/RegionBetPayoffSavePanel.tsx",
+          "apps/msos-web/src/lib/msosWorkflowStore.ts",
+          "apps/msos-web/src/lib/regionBet.ts",
+          "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+          "apps/msos-web/src/lib/regionBetPayoff.ts",
+          "tests/test_msos_web_region_bet_payoff_save.py"
+        ],
+        "claim_lifecycle": "active until verified merge, explicit supersession, accepted abandonment, or bounded failure disposition",
+        "classifications": [],
+        "github_duplicate_discovery": {
+          "candidate_count": 0,
+          "repository": "DanielTabakman/Probability-prediction-engine",
+          "searched_issues": true,
+          "searched_pull_requests": true
+        },
+        "job_id": "build-next-ppe-region_bet_payoff_save_v1-RegionBet-PayoffSave-Product-Slice002-549a1a4830a4c677",
+        "objective": {
+          "acceptance_contract_sha256": "07e0f72008de1e606b2c22e33ff81ab870e87d74af7b58b7f844a0a136cf5188",
+          "error_signature": null,
+          "linked_issue": null,
+          "release_identity": null,
+          "repository": "DanielTabakman/Probability-prediction-engine",
+          "stable_key": "0b1af3a126b2fa099a21742c00d0af3282f2481b7e3b8424be289e8cbab794ee",
+          "work_item_id": "region_bet_payoff_save_v1"
+        },
+        "objective_sha256": "53b3a894cf0a60cca00ea5da4d62552ec74f14f466d8894ceec5110e1eaad31f",
+        "pipeline_id": "ppe",
+        "source_commit": "745d8b8755ec80bd6ef6ddbbce5dd3cde476c6c5",
+        "target_repository": "DanielTabakman/Probability-prediction-engine",
+        "work_item_id": "region_bet_payoff_save_v1"
+      },
+      "generation": 1,
+      "linked_issue": null,
+      "objective_sha256": "53b3a894cf0a60cca00ea5da4d62552ec74f14f466d8894ceec5110e1eaad31f",
+      "pr_number": null,
+      "repository": "DanielTabakman/Probability-prediction-engine",
+      "state": "active",
+      "updated_at": "2026-09-18T00:05:23Z",
+      "version": 1,
+      "writer_id": "build-next:build-next-ppe-region_bet_payoff_save_v1-RegionBet-PayoffSave-Product-Slice002-549a1a4830a4c677"
+    },
+    "classifications": [],
+    "evidence": {
+      "admission_phase": "controlled_publisher.pre_branch_pr",
+      "authorized_paths": [
+        "apps/msos-web/src/app/api/theses/region-bet/route.ts",
+        "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+        "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+        "apps/msos-web/src/components/RegionBetPayoffSavePanel.tsx",
+        "apps/msos-web/src/lib/msosWorkflowStore.ts",
+        "apps/msos-web/src/lib/regionBet.ts",
+        "apps/msos-web/src/lib/regionBetPayoff.ts",
+        "tests/test_msos_web_region_bet_payoff_save.py"
+      ],
+      "claim_lifecycle": "active until verified merge, explicit supersession, accepted abandonment, or bounded failure disposition",
+      "claim_path": "C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/state/work-admission/claims/53b3a894cf0a60cca00ea5da4d62552ec74f14f466d8894ceec5110e1eaad31f.json",
+      "classifications": [],
+      "existing_claim": {
+        "authorized_paths": [
+          "apps/msos-web/src/app/api/theses/region-bet/route.ts",
+          "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+          "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+          "apps/msos-web/src/components/RegionBetPayoffSavePanel.tsx",
+          "apps/msos-web/src/lib/msosWorkflowStore.ts",
+          "apps/msos-web/src/lib/regionBet.ts",
+          "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+          "apps/msos-web/src/lib/regionBetPayoff.ts",
+          "tests/test_msos_web_region_bet_payoff_save.py"
+        ],
+        "branch": "build/auto/RegionBet-PayoffSave-Product-Slice002",
+        "claimed_at": "2026-09-18T00:05:23Z",
+        "evidence": {
+          "admission_phase": "build_next.pre_feed_submission",
+          "authorized_paths": [
+            "apps/msos-web/src/app/api/theses/region-bet/route.ts",
+            "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+            "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+            "apps/msos-web/src/components/RegionBetPayoffSavePanel.tsx",
+            "apps/msos-web/src/lib/msosWorkflowStore.ts",
+            "apps/msos-web/src/lib/regionBet.ts",
+            "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+            "apps/msos-web/src/lib/regionBetPayoff.ts",
+            "tests/test_msos_web_region_bet_payoff_save.py"
+          ],
+          "claim_lifecycle": "active until verified merge, explicit supersession, accepted abandonment, or bounded failure disposition",
+          "classifications": [],
+          "github_duplicate_discovery": {
+            "candidate_count": 0,
+            "repository": "DanielTabakman/Probability-prediction-engine",
+            "searched_issues": true,
+            "searched_pull_requests": true
+          },
+          "job_id": "build-next-ppe-region_bet_payoff_save_v1-RegionBet-PayoffSave-Product-Slice002-549a1a4830a4c677",
+          "objective": {
+            "acceptance_contract_sha256": "07e0f72008de1e606b2c22e33ff81ab870e87d74af7b58b7f844a0a136cf5188",
+            "error_signature": null,
+            "linked_issue": null,
+            "release_identity": null,
+            "repository": "DanielTabakman/Probability-prediction-engine",
+            "stable_key": "0b1af3a126b2fa099a21742c00d0af3282f2481b7e3b8424be289e8cbab794ee",
+            "work_item_id": "region_bet_payoff_save_v1"
+          },
+          "objective_sha256": "53b3a894cf0a60cca00ea5da4d62552ec74f14f466d8894ceec5110e1eaad31f",
+          "pipeline_id": "ppe",
+          "source_commit": "745d8b8755ec80bd6ef6ddbbce5dd3cde476c6c5",
+          "target_repository": "DanielTabakman/Probability-prediction-engine",
+          "work_item_id": "region_bet_payoff_save_v1"
+        },
+        "generation": 1,
+        "linked_issue": null,
+        "objective_sha256": "53b3a894cf0a60cca00ea5da4d62552ec74f14f466d8894ceec5110e1eaad31f",
+        "pr_number": null,
+        "repository": "DanielTabakman/Probability-prediction-engine",
+        "state": "active",
+        "updated_at": "2026-09-18T00:05:23Z",
+        "version": 1,
+        "writer_id": "build-next:build-next-ppe-region_bet_payoff_save_v1-RegionBet-PayoffSave-Product-Slice002-549a1a4830a4c677"
+      },
+      "job_id": "build-next-ppe-region_bet_payoff_save_v1-RegionBet-PayoffSave-Product-Slice002-549a1a4830a4c677",
+      "job_yaml": "C:/Users/USER/.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c/state/publisher-results-repo/results/DESKTOP-GE39O15/build-next-ppe-region_bet_payoff_save_v1-RegionBet-PayoffSave-Product-Slice002-549a1a4830a4c677/job.yaml",
+      "objective": {
+        "acceptance_contract_sha256": "07e0f72008de1e606b2c22e33ff81ab870e87d74af7b58b7f844a0a136cf5188",
+        "error_signature": null,
+        "linked_issue": null,
+        "release_identity": null,
+        "repository": "DanielTabakman/Probability-prediction-engine",
+        "stable_key": "0b1af3a126b2fa099a21742c00d0af3282f2481b7e3b8424be289e8cbab794ee",
+        "work_item_id": "region_bet_payoff_save_v1"
+      },
+      "objective_sha256": "53b3a894cf0a60cca00ea5da4d62552ec74f14f466d8894ceec5110e1eaad31f",
+      "plan_branch": "autobuilder/build-next-ppe-region_bet_payoff_save_v1-RegionBet-PayoffSave-Product-Slice002-549a1a4830a4c677"
+    },
+    "message": "Existing durable writer claim matches this writer.",
+    "objective_sha256": "53b3a894cf0a60cca00ea5da4d62552ec74f14f466d8894ceec5110e1eaad31f",
+    "status": "NEW_WORK_ADMITTED"
+  }
+}

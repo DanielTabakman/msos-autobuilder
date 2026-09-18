@@ -1,0 +1,9 @@
+{
+  "authority_class": "AUTO_MERGE_WHEN_GREEN",
+  "job_id": "build-next-ppe-region_bet_payoff_save_v1-RegionBet-PayoffSave-Product-Slice002-549a1a4830a4c677",
+  "merge_performed": false,
+  "reason": "published pull request is closed without merge; do not mark ready or merge",
+  "recorded_at": "2026-09-18T01:38:09.255012+00:00",
+  "status": "escalated",
+  "version": 1
+}

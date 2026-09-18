@@ -1,0 +1,148 @@
+{
+  "version": 1,
+  "pipeline_id": "ppe",
+  "work_item_id": "region_bet_payoff_save_v1",
+  "order": 10,
+  "eligible": true,
+  "target_repository": "DanielTabakman/Probability-prediction-engine",
+  "target_source_commit": "745d8b8755ec80bd6ef6ddbbce5dd3cde476c6c5",
+  "target_remote_url": "https://github.com/DanielTabakman/Probability-prediction-engine.git",
+  "adapter": "ppe_operator",
+  "allowed_paths": [
+    "apps/msos-web/src/lib/regionBet.ts",
+    "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+    "apps/msos-web/src/lib/regionBetPayoff.ts",
+    "apps/msos-web/src/lib/msosWorkflowStore.ts",
+    "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+    "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+    "apps/msos-web/src/components/RegionBetPayoffSavePanel.tsx",
+    "apps/msos-web/src/app/api/theses/region-bet/route.ts",
+    "tests/test_msos_web_region_bet_payoff_save.py"
+  ],
+  "native_slice": {
+    "slice_id": "RegionBet-PayoffSave-Product-Slice002",
+    "build_branch": "build/auto/RegionBet-PayoffSave-Product-Slice002",
+    "layer_preset": "MSOS_UI",
+    "worker_mode": "local-agent",
+    "declared_plane": "PRODUCT-PLANE",
+    "touch_set": [
+      "apps/msos-web/src/lib/regionBet.ts",
+      "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+      "apps/msos-web/src/lib/regionBetPayoff.ts",
+      "apps/msos-web/src/lib/msosWorkflowStore.ts",
+      "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+      "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+      "apps/msos-web/src/components/RegionBetPayoffSavePanel.tsx",
+      "apps/msos-web/src/app/api/theses/region-bet/route.ts",
+      "tests/test_msos_web_region_bet_payoff_save.py"
+    ],
+    "sequence_index": 1,
+    "total_slices": 3,
+    "previous_slices": [
+      "RegionBet-PayoffSave-Control-Slice001"
+    ],
+    "following_slices": [
+      "RegionBet-PayoffSave-Closeout-Slice003"
+    ],
+    "sprint_spec_path": "docs/SOP/SPRINT_REGION_BET_PAYOFF_SAVE_V1.md",
+    "selection_record": "docs/SOP/POST_REGION_BET_PAYOFF_SAVE_V1_SELECTION.md",
+    "raw_slice": {
+      "sliceId": "RegionBet-PayoffSave-Product-Slice002",
+      "layerPreset": "MSOS_UI",
+      "sprintSpecPath": "docs/SOP/SPRINT_REGION_BET_PAYOFF_SAVE_V1.md",
+      "buildBranch": "build/auto/RegionBet-PayoffSave-Product-Slice002",
+      "declaredPlane": "PRODUCT-PLANE",
+      "implementationStatus": "PENDING",
+      "workerMode": "local-agent",
+      "susMinutes": 120,
+      "hardMinutes": 300,
+      "maxAttempts": 2,
+      "touchSet": [
+        "apps/msos-web/src/lib/regionBet.ts",
+        "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+        "apps/msos-web/src/lib/regionBetPayoff.ts",
+        "apps/msos-web/src/lib/msosWorkflowStore.ts",
+        "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+        "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+        "apps/msos-web/src/components/RegionBetPayoffSavePanel.tsx",
+        "apps/msos-web/src/app/api/theses/region-bet/route.ts",
+        "tests/test_msos_web_region_bet_payoff_save.py"
+      ]
+    }
+  },
+  "phase_plan": "docs/SOP/PHASE_PLANS/region_bet_payoff_save_v1_relay.json",
+  "prerequisites": {
+    "version": 1,
+    "read_only": true,
+    "source": "ppe_native_read_only",
+    "evidence": {
+      "frozen_target_commit": "745d8b8755ec80bd6ef6ddbbce5dd3cde476c6c5",
+      "target_remote_url": "https://github.com/DanielTabakman/Probability-prediction-engine.git",
+      "phase_plan": "docs/SOP/PHASE_PLANS/region_bet_payoff_save_v1_relay.json",
+      "phase_plan_blob_sha": "e5ab81f174971b29f7b284e459c3b0e5678aaa6b",
+      "control_slice": {
+        "slice_id": "RegionBet-PayoffSave-Control-Slice001",
+        "implementationStatus": "COMPLETE",
+        "nonBlocking": true
+      },
+      "source_files": [
+        {
+          "path": "docs/SOP/PHASE_PLANS/region_bet_payoff_save_v1_relay.json",
+          "exists": true,
+          "git_commit": "745d8b8755ec80bd6ef6ddbbce5dd3cde476c6c5",
+          "blob_sha": "e5ab81f174971b29f7b284e459c3b0e5678aaa6b",
+          "sha256": "64b2cb23f402c9b2be07628fbd23a861ff0de552b01d79030e767e1d01c079a2"
+        },
+        {
+          "path": "docs/SOP/SPRINT_REGION_BET_PAYOFF_SAVE_V1.md",
+          "exists": true,
+          "git_commit": "745d8b8755ec80bd6ef6ddbbce5dd3cde476c6c5",
+          "blob_sha": "20364d95241decfaf394b2fb6e63f069f6941286",
+          "sha256": "e9a729de13a25b7ea3adee7bf6c55b9fbd96e9103a782e25d7f3f4de829cdbd8"
+        },
+        {
+          "path": "docs/SOP/POST_REGION_BET_PAYOFF_SAVE_V1_SELECTION.md",
+          "exists": true,
+          "git_commit": "745d8b8755ec80bd6ef6ddbbce5dd3cde476c6c5",
+          "blob_sha": "9362137f64400c4ba620872367d601d30275077b",
+          "sha256": "88703a7f2e9e5ba3e41d702e47a58deaa5a4ec0d7bdb0aa653121b696173ef5f"
+        },
+        {
+          "path": "docs/SOP/REGION_BET_PAYOFF_SAVE_V1_EVIDENCE_STATUS.md",
+          "exists": true,
+          "git_commit": "745d8b8755ec80bd6ef6ddbbce5dd3cde476c6c5",
+          "blob_sha": "375137ca38ca1d30d5b93d4b6cc23d49be0c39ea",
+          "sha256": "7c44573e66ae05122cbb13c47ed2c8f010c40d7313f7d2f6cf4055e35c8ee240"
+        },
+        {
+          "path": "docs/SOP/ACTIVE_PHASE_MANIFEST.json",
+          "exists": true,
+          "git_commit": "745d8b8755ec80bd6ef6ddbbce5dd3cde476c6c5",
+          "blob_sha": "4976998c0cb71b69eecd5739e6b999180a96b4a8",
+          "sha256": "b45b75150ed46be9e2eb7cf40e0b3c03e8c12fb94c18eb6dc6d38c354595dbc9"
+        }
+      ]
+    },
+    "statuses": [
+      {
+        "slice_id": "RegionBet-PayoffSave-Control-Slice001",
+        "status": "complete",
+        "non_blocking": true
+      }
+    ]
+  },
+  "dependency_source_sha256": "47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394",
+  "authority": {
+    "publication_enabled": false,
+    "merge_enabled": false,
+    "product_main_write_enabled": false
+  },
+  "validation": {
+    "profile_id": "ppe-ci-pytest-v1"
+  },
+  "merge_authority": {
+    "class": "AUTO_MERGE_WHEN_GREEN",
+    "declared_at": "2026-09-18T00:04:31+00:00"
+  },
+  "work_item_source_sha256_v1": "556ff4ca2035fdb2eeb8f7ef3c8be0878baa8c1920cf184e68746f0e5edf861a"
+}

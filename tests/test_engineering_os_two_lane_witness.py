@@ -12,6 +12,9 @@ def test_two_lane_witness_is_non_publishing_and_bounded() -> None:
     assert 'codex.max_concurrency >= 2' in text
     assert 'active_running", "active_queued", "feed_awaiting_import' in text
     assert 'status -ne "UNFILLED"' in text
+    assert "Get-CimInstance Win32_Process" in text
+    assert "max_concurrent_matching_codex_processes" in text
+    assert "overlap_proven" in text
 
     ui = "docs/ENGINEERING_OS/MSOS_UI_SURFACE_INVENTORY_V1.md"
     api = "docs/API/MSOS_CAPABILITY_CATALOG_V1.md"

@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
+from datetime import UTC, datetime
 from collections.abc import Callable, Mapping
 from enum import StrEnum
 from pathlib import Path
@@ -204,28 +206,39 @@ class CodexCliBackend:
 
         initial_head = _git(workspace, "rev-parse", "HEAD")
         command = self.command_for(task, workspace)
+        started_at = datetime.now(UTC)
+        started_monotonic = time.monotonic()
         try:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 list(command),
                 cwd=workspace,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
                 shell=False,
-                timeout=self.capabilities.timeout_seconds,
                 env=self.environment,
-                check=False,
             )
-        except subprocess.TimeoutExpired as exc:
-            raise CodexHostError(
-                f"Codex lane {task.lane.lane_id!r} timed out after "
-                f"{self.capabilities.timeout_seconds}s"
-            ) from exc
+            try:
+                stdout, stderr = proc.communicate(
+                    timeout=self.capabilities.timeout_seconds
+                )
+            except subprocess.TimeoutExpired as exc:
+                proc.kill()
+                proc.communicate()
+                raise CodexHostError(
+                    f"Codex lane {task.lane.lane_id!r} timed out after "
+                    f"{self.capabilities.timeout_seconds}s"
+                ) from exc
+        except CodexHostError:
+            raise
         except OSError as exc:
             raise CodexHostError(f"Codex could not start: {exc}") from exc
 
-        output = _bounded_output(proc.stdout, proc.stderr, limit=2000)
+        finished_at = datetime.now(UTC)
+        duration_seconds = max(0.0, time.monotonic() - started_monotonic)
+        output = _bounded_output(stdout, stderr, limit=2000)
         if proc.returncode != 0:
             raise CodexHostError(f"Codex exited {proc.returncode}: {output}")
         if _git(workspace, "rev-parse", "HEAD") != initial_head:
@@ -235,6 +248,10 @@ class CodexCliBackend:
         assert_changed_paths_allowed(task.lane, changed_paths)
         metadata = (
             ("returncode", str(proc.returncode)),
+            ("process_id", str(proc.pid)),
+            ("started_at", started_at.isoformat()),
+            ("finished_at", finished_at.isoformat()),
+            ("duration_seconds", f"{duration_seconds:.6f}"),
             ("sandbox_mode", self.sandbox_mode.value),
             ("workspace", str(workspace)),
             ("output_tail", output),

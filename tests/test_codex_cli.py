@@ -134,6 +134,14 @@ def test_execute_records_process_identity_and_timing(tmp_path: Path, monkeypatch
         lambda *args, **kwargs: (True, "logged in"),
     )
     monkeypatch.setattr(
+        "msos_autobuilder.backends.codex_cli._git",
+        lambda _workspace, *args: "fixture-head" if args[:2] == ("rev-parse", "HEAD") else "",
+    )
+    monkeypatch.setattr(
+        "msos_autobuilder.backends.codex_cli._changed_paths",
+        lambda _workspace: (),
+    )
+    monkeypatch.setattr(
         "msos_autobuilder.backends.codex_cli.subprocess.Popen",
         FakeProcess,
     )

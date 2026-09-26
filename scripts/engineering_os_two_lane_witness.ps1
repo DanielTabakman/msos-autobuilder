@@ -234,6 +234,57 @@ if (Test-Path -LiteralPath $destination) {
 }
 Move-Item -LiteralPath $temp -Destination $destination
 
+# The installed pilot release predates embedded Codex PID/timing metadata. Prove
+# actual overlap externally by observing only Codex command lines that contain
+# one of this witness's unique lane/workspace IDs. This is read-only observation.
+$observedMaxConcurrent = 0
+$observedSamples = New-Object System.Collections.Generic.List[object]
+$observationStarted = [DateTimeOffset]::UtcNow
+$observationDeadline = (Get-Date).AddSeconds(180)
+while ((Get-Date) -lt $observationDeadline) {
+    $matches = @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -match '^codex(?:\.exe)?$' -and
+            (
+                [string]$_.CommandLine -like '*engos-ui-surface-inventory-v1*' -or
+                [string]$_.CommandLine -like '*engos-api-capability-catalog-v1*'
+            )
+        } |
+        Select-Object ProcessId, Name, CommandLine
+    )
+    if ($matches.Count -gt $observedMaxConcurrent) {
+        $observedMaxConcurrent = $matches.Count
+        [void]$observedSamples.Add([pscustomobject]@{
+            observed_at = [DateTimeOffset]::UtcNow.ToString("o")
+            concurrent = $matches.Count
+            process_ids = @($matches | ForEach-Object { [int]$_.ProcessId })
+            lane_matches = @(
+                $matches | ForEach-Object {
+                    $cmd = [string]$_.CommandLine
+                    if ($cmd -like '*engos-ui-surface-inventory-v1*') {
+                        "engos-ui-surface-inventory-v1"
+                    }
+                    elseif ($cmd -like '*engos-api-capability-catalog-v1*') {
+                        "engos-api-capability-catalog-v1"
+                    }
+                    else {
+                        "unknown"
+                    }
+                }
+            )
+        })
+    }
+    if ($observedMaxConcurrent -ge 2) { break }
+
+    $terminal = @(
+        Get-WitnessEntries -Pattern $jobId |
+        Where-Object { $_.state -in @("completed", "failed") }
+    )
+    if ($terminal.Count -gt 0) { break }
+    Start-Sleep -Seconds 1
+}
+
 [pscustomobject]@{
     version = 1
     type = "engineering-os-phase2-witness-a-start"
@@ -246,7 +297,15 @@ Move-Item -LiteralPath $temp -Destination $destination
         [pscustomobject]@{ task_id = "engos-ui-surface-inventory-v1"; allowed_path = $uiPath },
         [pscustomobject]@{ task_id = "engos-api-capability-catalog-v1"; allowed_path = $apiPath }
     )
+    overlap_observation = [pscustomobject]@{
+        started_at = $observationStarted.ToString("o")
+        finished_at = [DateTimeOffset]::UtcNow.ToString("o")
+        max_concurrent_matching_codex_processes = $observedMaxConcurrent
+        overlap_proven = ($observedMaxConcurrent -ge 2)
+        samples = @($observedSamples)
+        method = "read-only Win32_Process observation filtered to witness lane IDs"
+    }
     publication_enabled = $false
     merge_enabled = $false
     next = "Run this script again with -Mode status to inspect the host archive."
-} | ConvertTo-Json -Depth 12
+} | ConvertTo-Json -Depth 16

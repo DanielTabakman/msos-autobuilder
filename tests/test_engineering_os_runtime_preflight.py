@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "engineering_os_runtime_preflight.ps1"
 

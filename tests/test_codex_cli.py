@@ -105,3 +105,52 @@ def test_unknown_sandbox_mode_fails(tmp_path: Path, mode: str) -> None:
     executable = _touch(tmp_path / "codex")
     with pytest.raises(ValueError):
         CodexCliBackend(source, executable=executable, sandbox_mode=mode)
+
+
+def test_execute_records_process_identity_and_timing(tmp_path: Path, monkeypatch) -> None:
+    source = _git_repo(tmp_path / "source")
+    executable = _touch(tmp_path / "codex")
+    backend = CodexCliBackend(source, executable=executable)
+    workspace = tmp_path / "workspace"
+    backend.prepare_workspace(_task(), workspace)
+
+    class FakeProcess:
+        pid = 4242
+        returncode = 0
+
+        def __init__(self, *args, **kwargs) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
+        def communicate(self, timeout=None):
+            assert timeout == backend.capabilities.timeout_seconds
+            return ("completed", "")
+
+        def kill(self) -> None:
+            raise AssertionError("successful process should not be killed")
+
+    monkeypatch.setattr(
+        "msos_autobuilder.backends.codex_cli.codex_authenticated",
+        lambda *args, **kwargs: (True, "logged in"),
+    )
+    monkeypatch.setattr(
+        "msos_autobuilder.backends.codex_cli._git",
+        lambda _workspace, *args: "fixture-head" if args[:2] == ("rev-parse", "HEAD") else "",
+    )
+    monkeypatch.setattr(
+        "msos_autobuilder.backends.codex_cli._changed_paths",
+        lambda _workspace: (),
+    )
+    monkeypatch.setattr(
+        "msos_autobuilder.backends.codex_cli.subprocess.Popen",
+        FakeProcess,
+    )
+
+    evidence = backend.execute(_task(), workspace)
+    metadata = dict(evidence.metadata)
+
+    assert metadata["process_id"] == "4242"
+    assert float(metadata["duration_seconds"]) >= 0
+    assert metadata["started_at"]
+    assert metadata["finished_at"]
+    assert metadata["output_tail"] == "completed"

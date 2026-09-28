@@ -22,6 +22,7 @@ _REQUIRED_PATHS = {
     "pyproject.toml",
     "src/msos_autobuilder/self_update_supervisor.py",
 }
+_RUNTIME_POLICY = "runtime/python-version.txt"
 
 
 class ReleaseRequestError(ValueError):
@@ -156,6 +157,16 @@ def build_manifest(
     self_commit: str,
 ) -> dict[str, Any]:
     commit = resolve_commit(repo_root, request.commit, self_commit)
+    policy_tree_entry = str(_run_git(repo_root, "ls-tree", commit, "--", _RUNTIME_POLICY))
+    if policy_tree_entry:
+        if _RUNTIME_POLICY not in request.expected_files:
+            raise ReleaseRequestError(
+                f"release request must hash {_RUNTIME_POLICY} when the target commit declares it"
+            )
+        policy_content = _run_git(repo_root, "show", f"{commit}:{_RUNTIME_POLICY}", binary=True)
+        assert isinstance(policy_content, bytes)
+        if not re.fullmatch(rb"[1-9][0-9]*\.[0-9]+\s*", policy_content):
+            raise ReleaseRequestError("invalid Python runtime policy in target commit")
     expected_files = [
         {"path": path, "sha256": _blob_sha256(repo_root, commit, path)}
         for path in request.expected_files

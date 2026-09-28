@@ -22,6 +22,7 @@ from msos_autobuilder.self_update_supervisor import (
     ManifestError,
     ReleaseBuilder,
     StagedRelease,
+    StagingError,
     SupervisorConfig,
     SupervisorError,
     UpdateManifest,
@@ -744,6 +745,57 @@ def test_release_builder_fetches_and_verifies_only_exact_commit(tmp_path: Path) 
     )
     reused = builder.stage(manifest)
     assert reused.reused is True
+
+
+def test_release_runtime_mismatch_blocks_before_venv_and_records_evidence(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=source, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=source, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=source, check=True)
+    policy = source / "runtime" / "python-version.txt"
+    policy.parent.mkdir()
+    policy.write_text("99.1\n", encoding="utf-8")
+    pyproject = source / "pyproject.toml"
+    pyproject.write_text("[project]\nname='fixture'\n", encoding="utf-8")
+    supervisor = source / "src" / "msos_autobuilder" / "self_update_supervisor.py"
+    supervisor.parent.mkdir(parents=True)
+    supervisor.write_text("# fixture\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=source, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=source, check=True)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
+    raw = _manifest_dict(
+        commit=commit, file_hash=hashlib.sha256(pyproject.read_bytes()).hexdigest()
+    )
+    raw["repository"] = "fixture/repo"
+    raw["repo_url"] = str(source)
+    raw["expected_files"][1]["sha256"] = hashlib.sha256(supervisor.read_bytes()).hexdigest()
+    raw["expected_files"].append(
+        {
+            "path": "runtime/python-version.txt",
+            "sha256": hashlib.sha256(policy.read_bytes()).hexdigest(),
+        }
+    )
+    raw["manifest_sha256"] = compute_manifest_sha256(raw)
+    manifest = parse_update_manifest(yaml.safe_dump(raw))
+    config = SupervisorConfig(
+        **{**_config(tmp_path).__dict__, "repo_url": str(source), "repository": "fixture/repo"}
+    )
+    commands: list[tuple[str, ...]] = []
+
+    def executor(argv: Sequence[str], cwd: Path, timeout: float) -> CheckResult:
+        commands.append(tuple(argv))
+        return _hybrid_executor(argv, cwd, timeout)
+
+    with pytest.raises(StagingError, match="runtime parity violation") as failed:
+        ReleaseBuilder(
+            config, status_verifier=RecordingStatusVerifier(), command_executor=executor
+        ).stage(manifest)
+    check = next(item for item in failed.value.checks if item.name == "runtime-parity")
+    assert check.returncode == 1
+    assert json.loads(check.stdout)["expected_python"] == "99.1"
+    assert not any(command[1:3] == ("-m", "venv") for command in commands)
+    assert not (config.versions_root / commit / "release.json").exists()
 
 
 def test_release_builder_stages_legacy_release_without_refill_controller(

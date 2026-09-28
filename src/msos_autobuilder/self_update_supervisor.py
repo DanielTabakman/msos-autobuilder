@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import signal
@@ -40,6 +41,7 @@ _REQUIRED_MANIFEST_PATHS = {
     "pyproject.toml",
     "src/msos_autobuilder/self_update_supervisor.py",
 }
+_RUNTIME_POLICY = "runtime/python-version.txt"
 STAGING_PYTEST_SOFT_CHECKPOINT_SECONDS = 2400.0
 STAGING_PYTEST_TIMEOUT_SECONDS = STAGING_PYTEST_SOFT_CHECKPOINT_SECONDS
 STAGING_PYTEST_HARD_CEILING_SECONDS = 3600.0
@@ -488,6 +490,41 @@ def verify_expected_files(root: Path, expected_files: Iterable[ExpectedFile]) ->
                 f"expected release file hash mismatch for {expected.path}: "
                 f"expected {expected.sha256}, got {actual}"
             )
+
+
+def _runtime_parity_check(root: Path, manifest: UpdateManifest) -> CheckResult | None:
+    """Validate the hashed policy before creating a venv or running the test suite."""
+    policy = root / _RUNTIME_POLICY
+    expected_paths = {item.path for item in manifest.expected_files}
+    if not policy.exists() and _RUNTIME_POLICY not in expected_paths:
+        return None  # Historical releases predate the governed runtime policy.
+    if _RUNTIME_POLICY not in expected_paths:
+        raise SupervisorError(f"runtime policy must be bound by expected_files: {_RUNTIME_POLICY}")
+    try:
+        expected = policy.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError) as exc:
+        raise SupervisorError(f"cannot read runtime policy: {exc}") from exc
+    if not re.fullmatch(r"[1-9][0-9]*\.[0-9]+", expected):
+        raise SupervisorError("invalid Python runtime policy")
+    actual = f"{sys.version_info.major}.{sys.version_info.minor}"
+    passed = actual == expected
+    return CheckResult(
+        name="runtime-parity",
+        argv=(sys.executable, "--version"),
+        cwd=str(root),
+        returncode=0 if passed else 1,
+        duration_seconds=0.0,
+        stdout=json.dumps(
+            {
+                "status": "PASS" if passed else "BLOCKED",
+                "expected_python": expected,
+                "actual_python": sys.version.split()[0],
+                "architecture": platform.machine(),
+                "policy_sha256": _file_sha256(policy),
+            },
+            sort_keys=True,
+        ),
+    )
 
 
 def _lexical_absolute(path: Path) -> Path:
@@ -1477,6 +1514,9 @@ class ReleaseBuilder:
                 manifest.repository, manifest.commit, manifest.required_status_contexts
             )
             verify_expected_files(final_path, manifest.expected_files)
+            parity = _runtime_parity_check(final_path, manifest)
+            if parity is not None and not parity.passed:
+                raise StagingError("runtime parity violation before release reuse", (parity,))
             return StagedRelease(manifest.commit, final_path, (), reused=True)
 
         if final_path.exists():
@@ -1537,6 +1577,13 @@ class ReleaseBuilder:
                 raise SupervisorError("staged Git HEAD does not equal the approved exact commit")
 
             verify_expected_files(staging_path, manifest.expected_files)
+            parity = _runtime_parity_check(staging_path, manifest)
+            if parity is not None:
+                checks.append(parity)
+                if not parity.passed:
+                    raise SupervisorError(
+                        "runtime parity violation before venv creation: " + parity.stdout
+                    )
             if not self.config.release_probe_script.is_file():
                 raise SupervisorError(
                     f"stable release health probe is missing: {self.config.release_probe_script}"

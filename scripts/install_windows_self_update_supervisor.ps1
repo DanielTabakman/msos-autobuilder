@@ -501,6 +501,9 @@ if (-not (Test-Path $SourcePython -PathType Leaf)) {
     if ($null -eq $PythonCommand) { throw "Python is required to install the stable supervisor." }
     $SourcePython = $PythonCommand.Source
 }
+Invoke-Checked -Failure "Bootstrap Python does not match the governed release runtime" -Command {
+    & $SourcePython (Join-Path $RepoRoot "scripts\check_release_runtime.py") (Join-Path $RepoRoot "runtime\python-version.txt")
+}
 if (-not (Test-Path $BootstrapPython -PathType Leaf)) {
     Invoke-Checked -Failure "Could not create the stable supervisor environment" -Command { & $SourcePython -m venv $BootstrapVenv }
 }

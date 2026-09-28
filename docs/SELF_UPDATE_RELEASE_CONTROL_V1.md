@@ -86,6 +86,10 @@ The publisher workflow has only repository contents write permission. It cannot:
 
 The manifest is still only an eligibility request. The external Windows supervisor independently verifies its canonical hash, repository identity, exact commit, required GitHub checks, expected files, package installation, Ruff, pytest, PowerShell parsing, managed-module imports, cutover health, and rollback.
 
+For commits that include `runtime/python-version.txt`, a release request must list that file in `expected_files`. The publisher hashes its exact committed contents. The stable supervisor checks its own interpreter's major/minor version against the hashed policy after checkout and before creating the staged venv. A mismatch produces a `runtime-parity` check in the immutable failure report and prevents cutover. The Windows CI job reads the same file and records its runtime result before package installation. The Linux `test` job remains an independent compatibility check on Python 3.11.
+
+The installed stable supervisor runs outside managed releases. Repository changes to its source do not update an already installed bootstrap. Activate the new staging guard only through a separately governed bootstrap handoff; until then, the Windows CI parity gate and hashed release policy protect newly reviewed commits, while the existing desktop bootstrap retains its prior staging behavior. Patch-version equality, dependency-lock equality, and host/CI environment comparison are not claimed by this major/minor gate.
+
 ## Witness sequence
 
 The first real acceptance sequence is deliberately split:

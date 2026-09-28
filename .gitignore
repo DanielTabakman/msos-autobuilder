@@ -14,5 +14,8 @@ host.local.yaml
 shadow.local.yaml
 artifacts/
 runtime/
+!runtime/
+runtime/*
+!runtime/python-version.txt
 workspaces/
 *.log

@@ -98,6 +98,24 @@ def test_explicit_reviewed_commit_may_differ_from_request_merge_commit(tmp_path:
     assert manifest["commit"] == target_commit
 
 
+def test_publisher_requires_runtime_policy_hash_for_new_commits(tmp_path: Path) -> None:
+    repo, _ = _repository(tmp_path)
+    policy = repo / "runtime" / "python-version.txt"
+    policy.parent.mkdir()
+    policy.write_text("3.12\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "declare runtime")
+    commit = _git(repo, "rev-parse", "HEAD")
+    with pytest.raises(ReleaseRequestError, match="must hash runtime/python-version.txt"):
+        build_manifest(parse_release_request(_request()), repo_root=repo, self_commit=commit)
+    raw = yaml.safe_load(_request())
+    raw["expected_files"].append("runtime/python-version.txt")
+    manifest = build_manifest(
+        parse_release_request(yaml.safe_dump(raw)), repo_root=repo, self_commit=commit
+    )
+    assert "runtime/python-version.txt" in {entry["path"] for entry in manifest["expected_files"]}
+
+
 def test_request_rejects_missing_anchor_and_unapproved_or_unsafe_commit() -> None:
     raw = yaml.safe_load(_request())
     raw["expected_files"] = ["pyproject.toml"]

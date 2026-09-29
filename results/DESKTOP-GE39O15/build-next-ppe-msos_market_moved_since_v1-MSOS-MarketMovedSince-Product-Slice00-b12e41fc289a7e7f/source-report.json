@@ -1,0 +1,40 @@
+{
+  "codex_report": {
+    "evidence": [
+      {
+        "backend_id": "codex-cli",
+        "changed_paths": [],
+        "metadata": {
+          "output_tail": " did not modify files because the allowed-path implementation and focused witness tests were already in place, and the working tree remains clean.\n\nEvidence:\n- `python -m pytest tests/test_msos_web_market_moved_since.py` passed: `5 passed`\n- `python scripts/check_repository_boundaries.py --repo-root .` passed\n- `python -m ruff check src tests scripts` passed\n- `git status --short` clean\n- `git diff --name-only` empty\n- `git log -1 --oneline`: `821512a Control-plane: dev changelog`\n\nGate notes:\n- `python scripts/run_pushable_gate.py` failed before checks because `origin/main...HEAD` has no merge base in this detached workspace.\n- Fallback `run_pushable_gate.py --base-ref HEAD --tier 2 --scoped` reached boundary and ruff, then failed because pytest was invoked with `-n auto` but `pytest-xdist` is not installed.\n- Full non-witness pytest without xdist is blocked by missing environment packages such as `pandas`, `requests`, and `google`.\ntokens used\n70,368\nThe bounded product slice is already present in the workspace at `HEAD` (`821512a`). I did not modify files because the allowed-path implementation and focused witness tests were already in place, and the working tree remains clean.\n\nEvidence:\n- `python -m pytest tests/test_msos_web_market_moved_since.py` passed: `5 passed`\n- `python scripts/check_repository_boundaries.py --repo-root .` passed\n- `python -m ruff check src tests scripts` passed\n- `git status --short` clean\n- `git diff --name-only` empty\n- `git log -1 --oneline`: `821512a Control-plane: dev changelog`\n\nGate notes:\n- `python scripts/run_pushable_gate.py` failed before checks because `origin/main...HEAD` has no merge base in this detached workspace.\n- Fallback `run_pushable_gate.py --base-ref HEAD --tier 2 --scoped` reached boundary and ruff, then failed because pytest was invoked with `-n auto` but `pytest-xdist` is not installed.\n- Full non-witness pytest without xdist is blocked by missing environment packages such as `pandas`, `requests`, and `google`.",
+          "returncode": "0",
+          "sandbox_mode": "workspace-write",
+          "workspace": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\workspaces\\MSOS-MarketMovedSince-Product-Slice002"
+        },
+        "status": "completed",
+        "summary": "Codex completed with 0 changed path(s)",
+        "task_id": "MSOS-MarketMovedSince-Product-Slice002"
+      }
+    ],
+    "owner_id": "windows-codex-shadow",
+    "publication_enabled": false,
+    "source_head": "821512acdb251c8163777e2b2b84d332572b98d7",
+    "status": "completed"
+  },
+  "completed_at": "2026-09-20T01:44:36.563122+00:00",
+  "job_id": "build-next-ppe-msos_market_moved_since_v1-MSOS-MarketMovedSince-Product-Slice00-b12e41fc289a7e7f",
+  "job_sha256": "0e1290adf463716a5c31e8969ca150de2222d56af39f801b6ca8cde80cd233d0",
+  "outcome": "completed",
+  "patches": [
+    {
+      "allow_changes": true,
+      "lane_id": "MSOS-MarketMovedSince-Product-Slice002",
+      "patch_file": null,
+      "patch_sha256": null,
+      "task_id": "MSOS-MarketMovedSince-Product-Slice002"
+    }
+  ],
+  "publication_enabled": false,
+  "requested_by": "capacity-one refill controller",
+  "source": "C:\\Users\\USER\\.msos-autobuilder-pilot-issue119-6e9434c-20260807T0226Z-c\\queue\\pending\\build-next-ppe-msos_market_moved_since_v1-MSOS-MarketMovedSince-Product-Slice00-b12e41fc289a7e7f.yaml",
+  "version": 1
+}

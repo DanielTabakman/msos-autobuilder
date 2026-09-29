@@ -1,0 +1,569 @@
+version: 1
+job_id: build-next-ppe-msos_market_moved_since_v1-MSOS-MarketMovedSince-Product-Slice00-b12e41fc289a7e7f
+approved: true
+approved_at: '2026-09-20T01:36:48Z'
+publication_enabled: false
+requested_by: capacity-one refill controller
+expected_source_head: 821512acdb251c8163777e2b2b84d332572b98d7
+founder_build_next:
+  version: 1
+  pipeline_id: ppe
+  work_item_id: msos_market_moved_since_v1
+  repository: DanielTabakman/Probability-prediction-engine
+  registered_adapter: ppe_operator
+  source:
+    remote: origin
+    remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+    repository: DanielTabakman/Probability-prediction-engine
+    ref: HEAD
+    remote_ref: 821512acdb251c8163777e2b2b84d332572b98d7
+    commit: 821512acdb251c8163777e2b2b84d332572b98d7
+  work_item_source_sha256_v1: 3eae5f8b80da81e4290bc491bf0ca39929280bcd2910bc343a90e9777ea6f1e0
+  phase_plan: docs/SOP/PHASE_PLANS/msos_market_moved_since_v1_relay.json
+  native_slice:
+    slice_id: MSOS-MarketMovedSince-Product-Slice002
+    build_branch: build/auto/MSOS-MarketMovedSince-Product-Slice002
+    layer_preset: MSOS_UI
+    worker_mode: local-agent
+    declared_plane: PRODUCT-PLANE
+    touch_set:
+    - apps/msos-web/src/lib/regionBet.ts
+    - apps/msos-web/src/lib/marketMovedSince.ts
+    - apps/msos-web/src/lib/monitorHistoryFeed.ts
+    - apps/msos-web/src/components/MarketMovedSinceCard.tsx
+    - apps/msos-web/src/components/MonitorContent.tsx
+    - apps/msos-web/src/components/HistoryContent.tsx
+    - tests/test_msos_web_market_moved_since.py
+    sequence_index: 1
+    total_slices: 3
+    previous_slices:
+    - MSOS-MarketMovedSince-Control-Slice001
+    following_slices:
+    - MSOS-MarketMovedSince-Closeout-Slice003
+  prerequisites:
+    source: ppe_native_read_only
+    evidence: &id001
+      frozen_target_commit: 821512acdb251c8163777e2b2b84d332572b98d7
+      target_remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      phase_plan: docs/SOP/PHASE_PLANS/msos_market_moved_since_v1_relay.json
+      phase_plan_blob_sha: 2dacbacec91ae40ab790c430d601101646d2348b
+      control_slice:
+        slice_id: MSOS-MarketMovedSince-Control-Slice001
+        implementationStatus: COMPLETE
+        nonBlocking: true
+      source_files:
+      - path: docs/SOP/PHASE_PLANS/msos_market_moved_since_v1_relay.json
+        exists: true
+        git_commit: 821512acdb251c8163777e2b2b84d332572b98d7
+        blob_sha: 2dacbacec91ae40ab790c430d601101646d2348b
+        sha256: 45f04b8c524dc568253bcbc793780d7d036e968f1bf37e673cf16c057d14229e
+      - path: docs/SOP/SPRINT_MSOS_MARKET_MOVED_SINCE_V1.md
+        exists: true
+        git_commit: 821512acdb251c8163777e2b2b84d332572b98d7
+        blob_sha: 3a2e79d672e845e104d9140aa5ebe003a7cdf38a
+        sha256: 4f8cd43f40f94ef4980bcf58de20eb8cb050e31e6356796cda20976fe8600cd2
+      - path: docs/SOP/POST_MSOS_MARKET_MOVED_SINCE_V1_SELECTION.md
+        exists: true
+        git_commit: 821512acdb251c8163777e2b2b84d332572b98d7
+        blob_sha: b51775c260e646561cc55286f42f3d8cd0697e4a
+        sha256: c51367d63703cea2b901b920ee7fc705978a345b44c2182be70d740d1a63dda1
+      - path: docs/SOP/MSOS_MARKET_MOVED_SINCE_V1_EVIDENCE_STATUS.md
+        exists: true
+        git_commit: 821512acdb251c8163777e2b2b84d332572b98d7
+        blob_sha: b6ff2dbb085906d5408d28314e7e4721a2bd2930
+        sha256: be249c3ed8451d0c708c7aa8e7692af3a88606d0e62bc8e24cd93000d503657e
+      - path: docs/SOP/ACTIVE_PHASE_MANIFEST.json
+        exists: true
+        git_commit: 821512acdb251c8163777e2b2b84d332572b98d7
+        blob_sha: 4898ec8c1f9b917d92a5d7d2ed290a949091e52c
+        sha256: 73319f50e14be311c9e93a4e6f3d79b613eff47932607330554cae18c3eac821
+    required_slices: &id002
+    - MSOS-MarketMovedSince-Control-Slice001
+    satisfied_slices: &id003
+    - MSOS-MarketMovedSince-Control-Slice001
+    non_blocking_slices: &id004 []
+  portfolio_selection_evidence:
+    version: 1
+    source:
+      remote: origin
+      remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      repository: DanielTabakman/Probability-prediction-engine
+      ref: HEAD
+      remote_ref: 821512acdb251c8163777e2b2b84d332572b98d7
+      commit: 821512acdb251c8163777e2b2b84d332572b98d7
+    selected:
+      pipeline_id: ppe
+      work_item_id: msos_market_moved_since_v1
+      trace: docs/SOP/PHASE_PLANS/msos_market_moved_since_v1_relay.json
+      packet_sha256: a416a803b545561c4d9b8d1384cabb8f270f4efc067f7f3abb31b5d258e08b28
+    native_slice:
+      slice_id: MSOS-MarketMovedSince-Product-Slice002
+      build_branch: build/auto/MSOS-MarketMovedSince-Product-Slice002
+      layer_preset: MSOS_UI
+      worker_mode: local-agent
+      declared_plane: PRODUCT-PLANE
+      touch_set:
+      - apps/msos-web/src/lib/regionBet.ts
+      - apps/msos-web/src/lib/marketMovedSince.ts
+      - apps/msos-web/src/lib/monitorHistoryFeed.ts
+      - apps/msos-web/src/components/MarketMovedSinceCard.tsx
+      - apps/msos-web/src/components/MonitorContent.tsx
+      - apps/msos-web/src/components/HistoryContent.tsx
+      - tests/test_msos_web_market_moved_since.py
+      sequence_index: 1
+      total_slices: 3
+      previous_slices:
+      - MSOS-MarketMovedSince-Control-Slice001
+      following_slices:
+      - MSOS-MarketMovedSince-Closeout-Slice003
+    prerequisites:
+      source: ppe_native_read_only
+      evidence: *id001
+      required_slices: *id002
+      satisfied_slices: *id003
+      non_blocking_slices: *id004
+    packet_sha256: a416a803b545561c4d9b8d1384cabb8f270f4efc067f7f3abb31b5d258e08b28
+    admitted_target:
+      target_repository: DanielTabakman/Probability-prediction-engine
+      target_source_commit: 821512acdb251c8163777e2b2b84d332572b98d7
+      target_remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      work_item_id: msos_market_moved_since_v1
+      pipeline_id: ppe
+      allowed_paths:
+      - apps/msos-web/src/lib/regionBet.ts
+      - apps/msos-web/src/lib/marketMovedSince.ts
+      - apps/msos-web/src/lib/monitorHistoryFeed.ts
+      - apps/msos-web/src/components/MarketMovedSinceCard.tsx
+      - apps/msos-web/src/components/MonitorContent.tsx
+      - apps/msos-web/src/components/HistoryContent.tsx
+      - tests/test_msos_web_market_moved_since.py
+      adapter: ppe_operator
+      dependency_source_sha256: 47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394
+      validation_identity: 7260a8d7a9e8a37745a5dead9c07824052b6f0b89294faffc5f1c0ff354f2480
+      packet_sha256: a416a803b545561c4d9b8d1384cabb8f270f4efc067f7f3abb31b5d258e08b28
+    requested_exclusions:
+    - options_expression_fit_ranking_v1
+    - options_horizon_comparison_v1
+    - ppe_commodity_proxy_tier1_v1
+    - ppe_equity_universe_tier1b_v1
+    - ppe_equity_universe_tier1c_v1
+    - region_bet_contract_v1
+    - region_bet_guided_shell_v1
+    - region_bet_market_compare_bridge_v1
+    - region_bet_monitor_value_v1
+    - region_bet_payoff_save_v1
+    refill_attempt:
+      version: 1
+      generation_id: refill-superseded-b5b9ae6b7c855baf1ddd0e06
+      attempt_ordinal: 18
+      retry_ordinal: 0
+      reason: initial
+      selected_work_item_id: msos_market_moved_since_v1
+    identity_sha256: c89e51d4c3ea00a0350d54c76f02f063f5e03bae0b85a9470f854759971b64b9
+  refill_attempt:
+    version: 1
+    generation_id: refill-superseded-b5b9ae6b7c855baf1ddd0e06
+    attempt_ordinal: 18
+    retry_ordinal: 0
+    reason: initial
+    selected_work_item_id: msos_market_moved_since_v1
+  authority:
+    publication_enabled: false
+    merge_enabled: false
+    product_main_write_enabled: false
+    merge_authority_class: AUTO_MERGE_WHEN_GREEN
+    merge_authority_declared_at: '2026-09-20T01:28:47+00:00'
+  work_admission:
+    status: NEW_WORK_ADMITTED
+    objective_sha256: ab541566c2aba5638cc67f7635da960700910936e5a9ad26cdf46577783399b2
+    claim_generation: 1
+    claim_writer_id: build-next:build-next-ppe-msos_market_moved_since_v1-MSOS-MarketMovedSince-Product-Slice00-b12e41fc289a7e7f
+    authorized_paths:
+    - apps/msos-web/src/lib/regionBet.ts
+    - apps/msos-web/src/lib/marketMovedSince.ts
+    - apps/msos-web/src/lib/monitorHistoryFeed.ts
+    - apps/msos-web/src/components/MarketMovedSinceCard.tsx
+    - apps/msos-web/src/components/MonitorContent.tsx
+    - apps/msos-web/src/components/HistoryContent.tsx
+    - tests/test_msos_web_market_moved_since.py
+    objective_identity:
+      repository: DanielTabakman/Probability-prediction-engine
+      linked_issue: null
+      work_item_id: msos_market_moved_since_v1
+      stable_key: 4f7be85acea464e1aaa9db6033c4bb00ac6ffdde7446af34aa17552cc7a078dc
+      acceptance_contract_sha256: 9212d244c59d440319bf49da2ca95b7d04d85874a7979ba852cba106a20be16c
+      error_signature: null
+      release_identity: null
+    acceptance_contract:
+      version: 1
+      pipeline_id: ppe
+      work_item_id: msos_market_moved_since_v1
+      adapter: ppe_operator
+      target_repository: DanielTabakman/Probability-prediction-engine
+      native_slice_id: MSOS-MarketMovedSince-Product-Slice002
+      authorized_paths:
+      - apps/msos-web/src/lib/regionBet.ts
+      - apps/msos-web/src/lib/marketMovedSince.ts
+      - apps/msos-web/src/lib/monitorHistoryFeed.ts
+      - apps/msos-web/src/components/MarketMovedSinceCard.tsx
+      - apps/msos-web/src/components/MonitorContent.tsx
+      - apps/msos-web/src/components/HistoryContent.tsx
+      - tests/test_msos_web_market_moved_since.py
+      forbidden_paths:
+      - .git/**
+      - .github/workflows/**
+      - artifacts/**
+      - runtime/**
+      - state/**
+      - queue/**
+      - config/founder_pipeline_registry.json
+      - docs/SOP/PHASE_QUEUE.json
+      - docs/SOP/ACTIVE_PHASE_MANIFEST.json
+      - docs/SOP/FOUNDER_PIPELINE_COMMANDS_V1.md
+      - docs/SOP/PIPELINE_CREATION_SOP_V1.md
+      - docs/SOP/SCHEDULED_AUTOBUILDER_LANE_POLICY_V1.md
+      - docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md
+      - docs/SOP/SPRINT_*.md
+      - docs/SOP/*SELECTION*.md
+      - docs/SOP/POST_*_SELECTION*.md
+      - docs/SOP/*PRIORITY*.md
+      - docs/SOP/*FRONTIER*.md
+      - docs/SOP/*MANIFEST*.json
+      - artifacts/orchestrator/**
+      - artifacts/control_plane/**
+      - artifacts/relay/**
+      - artifacts/leases/**
+      publication_enabled: false
+      merge_enabled: false
+      product_main_write_enabled: false
+      target_source_commit: 821512acdb251c8163777e2b2b84d332572b98d7
+      packet_sha256: a416a803b545561c4d9b8d1384cabb8f270f4efc067f7f3abb31b5d258e08b28
+      validation_identity: 7260a8d7a9e8a37745a5dead9c07824052b6f0b89294faffc5f1c0ff354f2480
+    execution_validation_contract_sha256: 54338cff6ef18b8e6d84f67331a93cf97281953a298ecd4361edb2e062bc1051
+    admitted_target:
+      target_repository: DanielTabakman/Probability-prediction-engine
+      target_source_commit: 821512acdb251c8163777e2b2b84d332572b98d7
+      target_remote_url: https://github.com/DanielTabakman/Probability-prediction-engine.git
+      work_item_id: msos_market_moved_since_v1
+      pipeline_id: ppe
+      allowed_paths:
+      - apps/msos-web/src/lib/regionBet.ts
+      - apps/msos-web/src/lib/marketMovedSince.ts
+      - apps/msos-web/src/lib/monitorHistoryFeed.ts
+      - apps/msos-web/src/components/MarketMovedSinceCard.tsx
+      - apps/msos-web/src/components/MonitorContent.tsx
+      - apps/msos-web/src/components/HistoryContent.tsx
+      - tests/test_msos_web_market_moved_since.py
+      adapter: ppe_operator
+      dependency_source_sha256: 47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394
+      validation_identity: 7260a8d7a9e8a37745a5dead9c07824052b6f0b89294faffc5f1c0ff354f2480
+      packet_sha256: a416a803b545561c4d9b8d1384cabb8f270f4efc067f7f3abb31b5d258e08b28
+candidate_validation:
+  version: 1
+  pipeline_id: ppe
+  adapter: ppe_operator
+  target_repository: DanielTabakman/Probability-prediction-engine
+  source_commit: 821512acdb251c8163777e2b2b84d332572b98d7
+  job_id: build-next-ppe-msos_market_moved_since_v1-MSOS-MarketMovedSince-Product-Slice00-b12e41fc289a7e7f
+  work_item_id: msos_market_moved_since_v1
+  native_slice_id: MSOS-MarketMovedSince-Product-Slice002
+  allowed_changed_paths:
+  - apps/msos-web/src/components/HistoryContent.tsx
+  - apps/msos-web/src/components/MarketMovedSinceCard.tsx
+  - apps/msos-web/src/components/MonitorContent.tsx
+  - apps/msos-web/src/lib/marketMovedSince.ts
+  - apps/msos-web/src/lib/monitorHistoryFeed.ts
+  - apps/msos-web/src/lib/regionBet.ts
+  - tests/test_msos_web_market_moved_since.py
+  dependency_policy:
+    version: 1
+    adapter: ppe_operator
+    profile_id: ppe-ci-pytest-v1
+    source: accepted_ppe_ci_bootstrap
+    source_commit: 821512acdb251c8163777e2b2b84d332572b98d7
+    dependency_source_path: requirements.txt
+    dependency_source_sha256: 47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394
+    network_allowed: true
+    candidate_environment_required: true
+    strategy: candidate_local_venv_requirements_test_tooling_editable_install
+    test_tooling:
+    - pytest
+    - pytest-xdist
+    - ruff
+  bootstrap:
+  - name: upgrade-pip
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - --upgrade
+    - pip
+    cwd: .
+    timeout_seconds: 600
+    required: true
+  - name: install-requirements
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - -r
+    - requirements.txt
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  - name: install-test-tooling
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - pytest
+    - pytest-xdist
+    - ruff
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  - name: install-candidate-package
+    argv:
+    - python
+    - -m
+    - pip
+    - install
+    - -e
+    - .
+    cwd: .
+    timeout_seconds: 1200
+    required: true
+  checks:
+  - name: repository-pytest
+    argv:
+    - python
+    - -m
+    - pytest
+    - -q
+    - tests/test_msos_web_market_moved_since.py
+    cwd: .
+    timeout_seconds: 1800
+    required: true
+  publication_enabled: false
+  merge_enabled: false
+  product_main_write_enabled: false
+  contract_sha256: 54338cff6ef18b8e6d84f67331a93cf97281953a298ecd4361edb2e062bc1051
+manifest:
+  version: 1
+  publication_enabled: false
+  lanes:
+  - task_id: MSOS-MarketMovedSince-Product-Slice002
+    lane_id: MSOS-MarketMovedSince-Product-Slice002
+    chapter_id: MSOS_MARKET_MOVED_SINCE_V1
+    branch: build/auto/MSOS-MarketMovedSince-Product-Slice002
+    layer: MSOS_UI
+    worker_mode: local-agent
+    preferred_cost_class: standard
+    allowed_paths:
+    - apps/msos-web/src/lib/regionBet.ts
+    - apps/msos-web/src/lib/marketMovedSince.ts
+    - apps/msos-web/src/lib/monitorHistoryFeed.ts
+    - apps/msos-web/src/components/MarketMovedSinceCard.tsx
+    - apps/msos-web/src/components/MonitorContent.tsx
+    - apps/msos-web/src/components/HistoryContent.tsx
+    - tests/test_msos_web_market_moved_since.py
+    forbidden_paths:
+    - .git/**
+    - .github/workflows/**
+    - artifacts/**
+    - runtime/**
+    - state/**
+    - queue/**
+    - config/founder_pipeline_registry.json
+    - docs/SOP/PHASE_QUEUE.json
+    - docs/SOP/ACTIVE_PHASE_MANIFEST.json
+    - docs/SOP/FOUNDER_PIPELINE_COMMANDS_V1.md
+    - docs/SOP/PIPELINE_CREATION_SOP_V1.md
+    - docs/SOP/SCHEDULED_AUTOBUILDER_LANE_POLICY_V1.md
+    - docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md
+    - docs/SOP/SPRINT_*.md
+    - docs/SOP/*SELECTION*.md
+    - docs/SOP/POST_*_SELECTION*.md
+    - docs/SOP/*PRIORITY*.md
+    - docs/SOP/*FRONTIER*.md
+    - docs/SOP/*MANIFEST*.json
+    - artifacts/orchestrator/**
+    - artifacts/control_plane/**
+    - artifacts/relay/**
+    - artifacts/leases/**
+    allow_changes: true
+    instruction: "Implementation thread. THREAD_ROLE: codex_build.\n\nImplement only\
+      \ the bounded work item selected from Autobuilder-owned approved job packets.\n\
+      Pipeline ID: ppe\nWork-item ID: msos_market_moved_since_v1\nSource repository:\
+      \ DanielTabakman/Probability-prediction-engine\nExact source commit: 821512acdb251c8163777e2b2b84d332572b98d7\n\
+      Canonical source ref: 821512acdb251c8163777e2b2b84d332572b98d7\nCanonical source\
+      \ remote: https://github.com/DanielTabakman/Probability-prediction-engine.git\n\
+      Registered phase plan: docs/SOP/PHASE_PLANS/msos_market_moved_since_v1_relay.json\n\
+      Native sliceId: MSOS-MarketMovedSince-Product-Slice002\nNative buildBranch:\
+      \ build/auto/MSOS-MarketMovedSince-Product-Slice002\nNative layerPreset: MSOS_UI\n\
+      Native workerMode: local-agent\nNative sequence: 2 of 3\n\nAuthority and publication\
+      \ boundary:\n- Do not write product main or merge.\n- Do not force-push, enable\
+      \ automerge, mark a PR ready, or publish directly.\n- Produce only workspace\
+      \ changes for the Autobuilder relay/gate/publisher path.\n- Preserve the controlled\
+      \ draft publisher as the only product publisher.\n- Treat sprint specs, selection\
+      \ records, queues, manifests, registries, leases, and operator state as read-only\
+      \ canon/evidence.\n- Do not perform smoke, closeout, selection, queue, or control-plane\
+      \ updates.\n\nAllowed paths:\n- apps/msos-web/src/lib/regionBet.ts\n- apps/msos-web/src/lib/marketMovedSince.ts\n\
+      - apps/msos-web/src/lib/monitorHistoryFeed.ts\n- apps/msos-web/src/components/MarketMovedSinceCard.tsx\n\
+      - apps/msos-web/src/components/MonitorContent.tsx\n- apps/msos-web/src/components/HistoryContent.tsx\n\
+      - tests/test_msos_web_market_moved_since.py\n\nForbidden paths:\n- .git/**\n\
+      - .github/workflows/**\n- artifacts/**\n- runtime/**\n- state/**\n- queue/**\n\
+      - config/founder_pipeline_registry.json\n- docs/SOP/PHASE_QUEUE.json\n- docs/SOP/ACTIVE_PHASE_MANIFEST.json\n\
+      - docs/SOP/FOUNDER_PIPELINE_COMMANDS_V1.md\n- docs/SOP/PIPELINE_CREATION_SOP_V1.md\n\
+      - docs/SOP/SCHEDULED_AUTOBUILDER_LANE_POLICY_V1.md\n- docs/SOP/CHATGPT_GITHUB_CODEX_CONTROL_PLANE_V1.md\n\
+      - docs/SOP/SPRINT_*.md\n- docs/SOP/*SELECTION*.md\n- docs/SOP/POST_*_SELECTION*.md\n\
+      - docs/SOP/*PRIORITY*.md\n- docs/SOP/*FRONTIER*.md\n- docs/SOP/*MANIFEST*.json\n\
+      - artifacts/orchestrator/**\n- artifacts/control_plane/**\n- artifacts/relay/**\n\
+      - artifacts/leases/**\n\nAcceptance criteria and validation requirements:\n\
+      - Implement only the selected native PPE implementation slice.\n- Preserve native\
+      \ PPE sequencing; do not execute later smoke or closeout slices.\n- Read sprint\
+      \ spec as canon: docs/SOP/SPRINT_MSOS_MARKET_MOVED_SINCE_V1.md\n- Read selection\
+      \ record as canon: docs/SOP/POST_MSOS_MARKET_MOVED_SINCE_V1_SELECTION.md\n-\
+      \ Add or update focused tests for changed behavior.\n- Run the focused tests\
+      \ and relevant repository gates before closeout.\n- Return evidence suitable\
+      \ for the existing relay, candidate gate, revision loop, and controlled publisher.\n\
+      \nPortfolio-selection evidence identity:\n{\n  \"admitted_target\": {\n    \"\
+      adapter\": \"ppe_operator\",\n    \"allowed_paths\": [\n      \"apps/msos-web/src/lib/regionBet.ts\"\
+      ,\n      \"apps/msos-web/src/lib/marketMovedSince.ts\",\n      \"apps/msos-web/src/lib/monitorHistoryFeed.ts\"\
+      ,\n      \"apps/msos-web/src/components/MarketMovedSinceCard.tsx\",\n      \"\
+      apps/msos-web/src/components/MonitorContent.tsx\",\n      \"apps/msos-web/src/components/HistoryContent.tsx\"\
+      ,\n      \"tests/test_msos_web_market_moved_since.py\"\n    ],\n    \"dependency_source_sha256\"\
+      : \"47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394\",\n  \
+      \  \"packet_sha256\": \"a416a803b545561c4d9b8d1384cabb8f270f4efc067f7f3abb31b5d258e08b28\"\
+      ,\n    \"pipeline_id\": \"ppe\",\n    \"target_remote_url\": \"https://github.com/DanielTabakman/Probability-prediction-engine.git\"\
+      ,\n    \"target_repository\": \"DanielTabakman/Probability-prediction-engine\"\
+      ,\n    \"target_source_commit\": \"821512acdb251c8163777e2b2b84d332572b98d7\"\
+      ,\n    \"validation_identity\": \"7260a8d7a9e8a37745a5dead9c07824052b6f0b89294faffc5f1c0ff354f2480\"\
+      ,\n    \"work_item_id\": \"msos_market_moved_since_v1\"\n  },\n  \"identity_sha256\"\
+      : \"c89e51d4c3ea00a0350d54c76f02f063f5e03bae0b85a9470f854759971b64b9\",\n  \"\
+      native_slice\": {\n    \"build_branch\": \"build/auto/MSOS-MarketMovedSince-Product-Slice002\"\
+      ,\n    \"declared_plane\": \"PRODUCT-PLANE\",\n    \"following_slices\": [\n\
+      \      \"MSOS-MarketMovedSince-Closeout-Slice003\"\n    ],\n    \"layer_preset\"\
+      : \"MSOS_UI\",\n    \"previous_slices\": [\n      \"MSOS-MarketMovedSince-Control-Slice001\"\
+      \n    ],\n    \"sequence_index\": 1,\n    \"slice_id\": \"MSOS-MarketMovedSince-Product-Slice002\"\
+      ,\n    \"total_slices\": 3,\n    \"touch_set\": [\n      \"apps/msos-web/src/lib/regionBet.ts\"\
+      ,\n      \"apps/msos-web/src/lib/marketMovedSince.ts\",\n      \"apps/msos-web/src/lib/monitorHistoryFeed.ts\"\
+      ,\n      \"apps/msos-web/src/components/MarketMovedSinceCard.tsx\",\n      \"\
+      apps/msos-web/src/components/MonitorContent.tsx\",\n      \"apps/msos-web/src/components/HistoryContent.tsx\"\
+      ,\n      \"tests/test_msos_web_market_moved_since.py\"\n    ],\n    \"worker_mode\"\
+      : \"local-agent\"\n  },\n  \"packet_sha256\": \"a416a803b545561c4d9b8d1384cabb8f270f4efc067f7f3abb31b5d258e08b28\"\
+      ,\n  \"prerequisites\": {\n    \"evidence\": {\n      \"control_slice\": {\n\
+      \        \"implementationStatus\": \"COMPLETE\",\n        \"nonBlocking\": true,\n\
+      \        \"slice_id\": \"MSOS-MarketMovedSince-Control-Slice001\"\n      },\n\
+      \      \"frozen_target_commit\": \"821512acdb251c8163777e2b2b84d332572b98d7\"\
+      ,\n      \"phase_plan\": \"docs/SOP/PHASE_PLANS/msos_market_moved_since_v1_relay.json\"\
+      ,\n      \"phase_plan_blob_sha\": \"2dacbacec91ae40ab790c430d601101646d2348b\"\
+      ,\n      \"source_files\": [\n        {\n          \"blob_sha\": \"2dacbacec91ae40ab790c430d601101646d2348b\"\
+      ,\n          \"exists\": true,\n          \"git_commit\": \"821512acdb251c8163777e2b2b84d332572b98d7\"\
+      ,\n          \"path\": \"docs/SOP/PHASE_PLANS/msos_market_moved_since_v1_relay.json\"\
+      ,\n          \"sha256\": \"45f04b8c524dc568253bcbc793780d7d036e968f1bf37e673cf16c057d14229e\"\
+      \n        },\n        {\n          \"blob_sha\": \"3a2e79d672e845e104d9140aa5ebe003a7cdf38a\"\
+      ,\n          \"exists\": true,\n          \"git_commit\": \"821512acdb251c8163777e2b2b84d332572b98d7\"\
+      ,\n          \"path\": \"docs/SOP/SPRINT_MSOS_MARKET_MOVED_SINCE_V1.md\",\n\
+      \          \"sha256\": \"4f8cd43f40f94ef4980bcf58de20eb8cb050e31e6356796cda20976fe8600cd2\"\
+      \n        },\n        {\n          \"blob_sha\": \"b51775c260e646561cc55286f42f3d8cd0697e4a\"\
+      ,\n          \"exists\": true,\n          \"git_commit\": \"821512acdb251c8163777e2b2b84d332572b98d7\"\
+      ,\n          \"path\": \"docs/SOP/POST_MSOS_MARKET_MOVED_SINCE_V1_SELECTION.md\"\
+      ,\n          \"sha256\": \"c51367d63703cea2b901b920ee7fc705978a345b44c2182be70d740d1a63dda1\"\
+      \n        },\n        {\n          \"blob_sha\": \"b6ff2dbb085906d5408d28314e7e4721a2bd2930\"\
+      ,\n          \"exists\": true,\n          \"git_commit\": \"821512acdb251c8163777e2b2b84d332572b98d7\"\
+      ,\n          \"path\": \"docs/SOP/MSOS_MARKET_MOVED_SINCE_V1_EVIDENCE_STATUS.md\"\
+      ,\n          \"sha256\": \"be249c3ed8451d0c708c7aa8e7692af3a88606d0e62bc8e24cd93000d503657e\"\
+      \n        },\n        {\n          \"blob_sha\": \"4898ec8c1f9b917d92a5d7d2ed290a949091e52c\"\
+      ,\n          \"exists\": true,\n          \"git_commit\": \"821512acdb251c8163777e2b2b84d332572b98d7\"\
+      ,\n          \"path\": \"docs/SOP/ACTIVE_PHASE_MANIFEST.json\",\n          \"\
+      sha256\": \"73319f50e14be311c9e93a4e6f3d79b613eff47932607330554cae18c3eac821\"\
+      \n        }\n      ],\n      \"target_remote_url\": \"https://github.com/DanielTabakman/Probability-prediction-engine.git\"\
+      \n    },\n    \"non_blocking_slices\": [],\n    \"required_slices\": [\n   \
+      \   \"MSOS-MarketMovedSince-Control-Slice001\"\n    ],\n    \"satisfied_slices\"\
+      : [\n      \"MSOS-MarketMovedSince-Control-Slice001\"\n    ],\n    \"source\"\
+      : \"ppe_native_read_only\"\n  },\n  \"refill_attempt\": {\n    \"attempt_ordinal\"\
+      : 18,\n    \"generation_id\": \"refill-superseded-b5b9ae6b7c855baf1ddd0e06\"\
+      ,\n    \"reason\": \"initial\",\n    \"retry_ordinal\": 0,\n    \"selected_work_item_id\"\
+      : \"msos_market_moved_since_v1\",\n    \"version\": 1\n  },\n  \"requested_exclusions\"\
+      : [\n    \"options_expression_fit_ranking_v1\",\n    \"options_horizon_comparison_v1\"\
+      ,\n    \"ppe_commodity_proxy_tier1_v1\",\n    \"ppe_equity_universe_tier1b_v1\"\
+      ,\n    \"ppe_equity_universe_tier1c_v1\",\n    \"region_bet_contract_v1\",\n\
+      \    \"region_bet_guided_shell_v1\",\n    \"region_bet_market_compare_bridge_v1\"\
+      ,\n    \"region_bet_monitor_value_v1\",\n    \"region_bet_payoff_save_v1\"\n\
+      \  ],\n  \"selected\": {\n    \"packet_sha256\": \"a416a803b545561c4d9b8d1384cabb8f270f4efc067f7f3abb31b5d258e08b28\"\
+      ,\n    \"pipeline_id\": \"ppe\",\n    \"trace\": \"docs/SOP/PHASE_PLANS/msos_market_moved_since_v1_relay.json\"\
+      ,\n    \"work_item_id\": \"msos_market_moved_since_v1\"\n  },\n  \"source\"\
+      : {\n    \"commit\": \"821512acdb251c8163777e2b2b84d332572b98d7\",\n    \"ref\"\
+      : \"HEAD\",\n    \"remote\": \"origin\",\n    \"remote_ref\": \"821512acdb251c8163777e2b2b84d332572b98d7\"\
+      ,\n    \"remote_url\": \"https://github.com/DanielTabakman/Probability-prediction-engine.git\"\
+      ,\n    \"repository\": \"DanielTabakman/Probability-prediction-engine\"\n  },\n\
+      \  \"version\": 1\n}\n\nRefill attempt context:\n{\n  \"attempt_ordinal\": 18,\n\
+      \  \"generation_id\": \"refill-superseded-b5b9ae6b7c855baf1ddd0e06\",\n  \"\
+      reason\": \"initial\",\n  \"retry_ordinal\": 0,\n  \"selected_work_item_id\"\
+      : \"msos_market_moved_since_v1\",\n  \"version\": 1\n}\n\nPipeline-native prerequisite\
+      \ evidence:\n{\n  \"evidence\": {\n    \"control_slice\": {\n      \"implementationStatus\"\
+      : \"COMPLETE\",\n      \"nonBlocking\": true,\n      \"slice_id\": \"MSOS-MarketMovedSince-Control-Slice001\"\
+      \n    },\n    \"frozen_target_commit\": \"821512acdb251c8163777e2b2b84d332572b98d7\"\
+      ,\n    \"phase_plan\": \"docs/SOP/PHASE_PLANS/msos_market_moved_since_v1_relay.json\"\
+      ,\n    \"phase_plan_blob_sha\": \"2dacbacec91ae40ab790c430d601101646d2348b\"\
+      ,\n    \"source_files\": [\n      {\n        \"blob_sha\": \"2dacbacec91ae40ab790c430d601101646d2348b\"\
+      ,\n        \"exists\": true,\n        \"git_commit\": \"821512acdb251c8163777e2b2b84d332572b98d7\"\
+      ,\n        \"path\": \"docs/SOP/PHASE_PLANS/msos_market_moved_since_v1_relay.json\"\
+      ,\n        \"sha256\": \"45f04b8c524dc568253bcbc793780d7d036e968f1bf37e673cf16c057d14229e\"\
+      \n      },\n      {\n        \"blob_sha\": \"3a2e79d672e845e104d9140aa5ebe003a7cdf38a\"\
+      ,\n        \"exists\": true,\n        \"git_commit\": \"821512acdb251c8163777e2b2b84d332572b98d7\"\
+      ,\n        \"path\": \"docs/SOP/SPRINT_MSOS_MARKET_MOVED_SINCE_V1.md\",\n  \
+      \      \"sha256\": \"4f8cd43f40f94ef4980bcf58de20eb8cb050e31e6356796cda20976fe8600cd2\"\
+      \n      },\n      {\n        \"blob_sha\": \"b51775c260e646561cc55286f42f3d8cd0697e4a\"\
+      ,\n        \"exists\": true,\n        \"git_commit\": \"821512acdb251c8163777e2b2b84d332572b98d7\"\
+      ,\n        \"path\": \"docs/SOP/POST_MSOS_MARKET_MOVED_SINCE_V1_SELECTION.md\"\
+      ,\n        \"sha256\": \"c51367d63703cea2b901b920ee7fc705978a345b44c2182be70d740d1a63dda1\"\
+      \n      },\n      {\n        \"blob_sha\": \"b6ff2dbb085906d5408d28314e7e4721a2bd2930\"\
+      ,\n        \"exists\": true,\n        \"git_commit\": \"821512acdb251c8163777e2b2b84d332572b98d7\"\
+      ,\n        \"path\": \"docs/SOP/MSOS_MARKET_MOVED_SINCE_V1_EVIDENCE_STATUS.md\"\
+      ,\n        \"sha256\": \"be249c3ed8451d0c708c7aa8e7692af3a88606d0e62bc8e24cd93000d503657e\"\
+      \n      },\n      {\n        \"blob_sha\": \"4898ec8c1f9b917d92a5d7d2ed290a949091e52c\"\
+      ,\n        \"exists\": true,\n        \"git_commit\": \"821512acdb251c8163777e2b2b84d332572b98d7\"\
+      ,\n        \"path\": \"docs/SOP/ACTIVE_PHASE_MANIFEST.json\",\n        \"sha256\"\
+      : \"73319f50e14be311c9e93a4e6f3d79b613eff47932607330554cae18c3eac821\"\n   \
+      \   }\n    ],\n    \"target_remote_url\": \"https://github.com/DanielTabakman/Probability-prediction-engine.git\"\
+      \n  },\n  \"non_blocking_slices\": [],\n  \"required_slices\": [\n    \"MSOS-MarketMovedSince-Control-Slice001\"\
+      \n  ],\n  \"satisfied_slices\": [\n    \"MSOS-MarketMovedSince-Control-Slice001\"\
+      \n  ],\n  \"source\": \"ppe_native_read_only\"\n}\n\nRelevant canon/task packet:\n\
+      {\n  \"following_slices\": [\n    \"MSOS-MarketMovedSince-Closeout-Slice003\"\
+      \n  ],\n  \"phase_plan\": \"docs/SOP/PHASE_PLANS/msos_market_moved_since_v1_relay.json\"\
+      ,\n  \"previous_slices\": [\n    \"MSOS-MarketMovedSince-Control-Slice001\"\n\
+      \  ],\n  \"selected_slice\": {\n    \"build_branch\": \"build/auto/MSOS-MarketMovedSince-Product-Slice002\"\
+      ,\n    \"declared_plane\": \"PRODUCT-PLANE\",\n    \"following_slices\": [\n\
+      \      \"MSOS-MarketMovedSince-Closeout-Slice003\"\n    ],\n    \"layer_preset\"\
+      : \"MSOS_UI\",\n    \"previous_slices\": [\n      \"MSOS-MarketMovedSince-Control-Slice001\"\
+      \n    ],\n    \"raw_slice\": {\n      \"buildBranch\": \"build/auto/MSOS-MarketMovedSince-Product-Slice002\"\
+      ,\n      \"declaredPlane\": \"PRODUCT-PLANE\",\n      \"hardMinutes\": 240,\n\
+      \      \"implementationStatus\": \"PENDING\",\n      \"layerPreset\": \"MSOS_UI\"\
+      ,\n      \"maxAttempts\": 2,\n      \"sliceId\": \"MSOS-MarketMovedSince-Product-Slice002\"\
+      ,\n      \"sprintSpecPath\": \"docs/SOP/SPRINT_MSOS_MARKET_MOVED_SINCE_V1.md\"\
+      ,\n      \"susMinutes\": 90,\n      \"touchSet\": [\n        \"apps/msos-web/src/lib/regionBet.ts\"\
+      ,\n        \"apps/msos-web/src/lib/marketMovedSince.ts\",\n        \"apps/msos-web/src/lib/monitorHistoryFeed.ts\"\
+      ,\n        \"apps/msos-web/src/components/MarketMovedSinceCard.tsx\",\n    \
+      \    \"apps/msos-web/src/components/MonitorContent.tsx\",\n        \"apps/msos-web/src/components/HistoryContent.tsx\"\
+      ,\n        \"tests/test_msos_web_market_moved_since.py\"\n      ],\n      \"\
+      workerMode\": \"local-agent\"\n    },\n    \"selection_record\": \"docs/SOP/POST_MSOS_MARKET_MOVED_SINCE_V1_SELECTION.md\"\
+      ,\n    \"sequence_index\": 1,\n    \"slice_id\": \"MSOS-MarketMovedSince-Product-Slice002\"\
+      ,\n    \"sprint_spec_path\": \"docs/SOP/SPRINT_MSOS_MARKET_MOVED_SINCE_V1.md\"\
+      ,\n    \"total_slices\": 3,\n    \"touch_set\": [\n      \"apps/msos-web/src/lib/regionBet.ts\"\
+      ,\n      \"apps/msos-web/src/lib/marketMovedSince.ts\",\n      \"apps/msos-web/src/lib/monitorHistoryFeed.ts\"\
+      ,\n      \"apps/msos-web/src/components/MarketMovedSinceCard.tsx\",\n      \"\
+      apps/msos-web/src/components/MonitorContent.tsx\",\n      \"apps/msos-web/src/components/HistoryContent.tsx\"\
+      ,\n      \"tests/test_msos_web_market_moved_since.py\"\n    ],\n    \"worker_mode\"\
+      : \"local-agent\"\n  },\n  \"selection_record\": \"docs/SOP/POST_MSOS_MARKET_MOVED_SINCE_V1_SELECTION.md\"\
+      ,\n  \"sprint_spec_path\": \"docs/SOP/SPRINT_MSOS_MARKET_MOVED_SINCE_V1.md\"\
+      \n}\n\nNon-goals:\n- Do not charter new product scope.\n- Do not alter PPE registry\
+      \ or priority policy.\n- Do not run continuous refill or dispatch additional\
+      \ work."
+merge_authority:
+  class: AUTO_MERGE_WHEN_GREEN
+  declared_at: '2026-09-20T01:28:47+00:00'

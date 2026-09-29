@@ -1065,6 +1065,67 @@ def test_selector_advances_across_backlog_once_and_skips_deferred_branch() -> No
     assert terminal_decisions["horizon_outcome_ghosts_v1"]["decision"] == "deferred"
 
 
+def test_canonical_autobuilder_terminal_marker_unblocks_ready_dependant() -> None:
+    payload = {
+        "version": 1,
+        "items": [
+            {
+                "chapterId": "msos_market_moved_since_v1",
+                "status": "done",
+                "autobuilderCatalogOrder": 13,
+                "eligibility": "buildable_via_autobuilder_catalog",
+                "dependsOn": [],
+                "packetization": "just_in_time",
+                "relatedPullRequests": [
+                    "DanielTabakman/Probability-prediction-engine#5483"
+                ],
+                "autobuilderItemTerminal": True,
+            },
+            {
+                "chapterId": "msos_implied_range_api_v1",
+                "status": "ready",
+                "autobuilderCatalogOrder": 18,
+                "eligibility": "buildable_via_autobuilder_catalog",
+                "dependsOn": ["msos_market_moved_since_v1"],
+                "packetization": "just_in_time",
+                "autobuilderPacket": _packet_spec("msos_implied_range_api_v1"),
+            },
+        ],
+    }
+
+    decision = evaluate_jit_eligibility(payload)
+
+    assert decision.status == "eligible"
+    assert decision.work_item_id == "msos_implied_range_api_v1"
+    assert decision.order == 18
+    evidence = decision.evidence or {}
+    assert evidence["items"]["msos_market_moved_since_v1"]["decision"] == "completed"
+    assert (
+        evidence["items"]["msos_market_moved_since_v1"]["autobuilder_item_terminal"]
+        is True
+    )
+
+
+def test_autobuilder_terminal_marker_requires_related_pr_evidence() -> None:
+    payload = {
+        "version": 1,
+        "items": [
+            {
+                "chapterId": "already_merged_v1",
+                "status": "done",
+                "autobuilderCatalogOrder": 13,
+                "eligibility": "buildable_via_autobuilder_catalog",
+                "dependsOn": [],
+                "packetization": "just_in_time",
+                "autobuilderItemTerminal": True,
+            }
+        ],
+    }
+
+    with pytest.raises(CatalogMaterializerError, match="requires relatedPullRequests"):
+        load_phase_chapter_backlog(payload)
+
+
 def test_completed_guided_shell_does_not_report_missing_ancient_predecessor() -> None:
     payload = _backlog_payload()
     decision = evaluate_jit_eligibility(

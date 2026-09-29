@@ -201,6 +201,15 @@ def load_phase_chapter_backlog(path: Path | str | Mapping[str, Any]) -> tuple[Ba
             raise CatalogMaterializerError(f"duplicate Autobuilder chapterId: {chapter_id}")
         depends_on = entry.get("dependsOn") or []
         related_pull_requests = entry.get("relatedPullRequests") or []
+        autobuilder_item_terminal = entry.get("autobuilderItemTerminal", False)
+        if not isinstance(autobuilder_item_terminal, bool):
+            raise CatalogMaterializerError(
+                f"autobuilderItemTerminal for {chapter_id} must be boolean"
+            )
+        if autobuilder_item_terminal and not related_pull_requests:
+            raise CatalogMaterializerError(
+                f"autobuilderItemTerminal for {chapter_id} requires relatedPullRequests"
+            )
         if not isinstance(depends_on, list) or not all(
             isinstance(value, str) and value.strip() for value in depends_on
         ):
@@ -398,7 +407,9 @@ def evaluate_jit_eligibility(
             "packet_spec_present": _has_packet_spec(item),
         }
         proof = proofs.get(item.chapter_id)
-        if _proof_is_merged_for_work_item(proof, item.chapter_id):
+        declared_terminal = item.raw.get("autobuilderItemTerminal") is True
+        decision["autobuilder_item_terminal"] = declared_terminal
+        if declared_terminal or _proof_is_merged_for_work_item(proof, item.chapter_id):
             decision["decision"] = "completed"
             decisions[item.chapter_id] = decision
             continue
@@ -418,10 +429,15 @@ def evaluate_jit_eligibility(
             decision["decision"] = "blocked_unsupported_eligibility"
             decisions[item.chapter_id] = decision
             continue
+        terminal_by_item = {
+            candidate.chapter_id: candidate.raw.get("autobuilderItemTerminal") is True
+            for candidate in items
+        }
         unmet = [
             dep
             for dep in item.depends_on
-            if not _proof_is_merged_for_work_item(proofs.get(dep), dep)
+            if not terminal_by_item.get(dep, False)
+            and not _proof_is_merged_for_work_item(proofs.get(dep), dep)
         ]
         if unmet:
             decision["decision"] = "blocked_dependencies"
@@ -459,8 +475,11 @@ def evaluate_jit_eligibility(
     order = first_pending.order if first_pending else None
     guided_complete = bool(
         guided
-        and _proof_is_merged_for_work_item(
-            proofs.get(guided.chapter_id), guided.chapter_id
+        and (
+            guided.raw.get("autobuilderItemTerminal") is True
+            or _proof_is_merged_for_work_item(
+                proofs.get(guided.chapter_id), guided.chapter_id
+            )
         )
     )
     if guided is None:

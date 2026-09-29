@@ -1596,7 +1596,22 @@ class ReleaseBuilder:
                 else venv_path / "bin" / "python"
             )
             stage_commands: list[tuple[str, list[str], float]] = [
-                ("create-version-venv", [sys.executable, "-m", "venv", str(venv_path)], 300.0),
+                (
+                    "create-version-venv",
+                    [sys.executable, "-m", "venv", "--without-pip", str(venv_path)],
+                    300.0,
+                ),
+                (
+                    "bootstrap-version-pip",
+                    [
+                        str(venv_python),
+                        "-m",
+                        "ensurepip",
+                        "--upgrade",
+                        "--default-pip",
+                    ],
+                    300.0,
+                ),
                 (
                     "install-release",
                     [

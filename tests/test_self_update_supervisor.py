@@ -743,6 +743,23 @@ def test_release_builder_fetches_and_verifies_only_exact_commit(tmp_path: Path) 
         argv[-3:] == ("-m", "pytest", "-q") and timeout == STAGING_PYTEST_HARD_CEILING_SECONDS
         for argv, timeout in executor_calls
     )
+    create_venv_index = next(
+        index
+        for index, (argv, _) in enumerate(executor_calls)
+        if argv[1:4] == ("-m", "venv", "--without-pip")
+    )
+    ensurepip_index = next(
+        index
+        for index, (argv, _) in enumerate(executor_calls)
+        if argv[1:] and argv[1:3] == ("-m", "ensurepip")
+    )
+    install_index = next(
+        index
+        for index, (argv, _) in enumerate(executor_calls)
+        if argv[1:4] == ("-m", "pip", "install")
+    )
+    assert create_venv_index < ensurepip_index < install_index
+    assert executor_calls[ensurepip_index][0][-2:] == ("--upgrade", "--default-pip")
     reused = builder.stage(manifest)
     assert reused.reused is True
 

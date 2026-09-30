@@ -8,6 +8,7 @@ required_status_contexts:
   - test
   - windows-test
 expected_files:
+  - runtime/python-version.txt
   - pyproject.toml
   - src/msos_autobuilder/__init__.py
   - src/msos_autobuilder/__main__.py

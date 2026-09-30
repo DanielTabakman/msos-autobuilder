@@ -111,6 +111,22 @@ def _pull_is_merged(pull: Mapping[str, Any]) -> bool:
     return bool(str(pull.get("merged_at") or "").strip())
 
 
+def _full_sha(value: Any) -> str | None:
+    sha = str(value or "").strip()
+    if re.fullmatch(r"[0-9a-f]{40}", sha):
+        return sha
+    return None
+
+
+def _normalize_candidate_path(value: Any) -> str:
+    if not isinstance(value, str):
+        raise PublisherError("validated candidate path must be a string")
+    path = value.replace("\\", "/").strip()
+    if not path or path.startswith("/") or ".." in Path(path).parts:
+        raise PublisherError(f"unsafe validated candidate path: {value!r}")
+    return path
+
+
 def _resolve_path(base: Path, value: Any, label: str) -> Path:
     text = str(value or "").strip()
     if not text:
@@ -1327,13 +1343,18 @@ class ControlledPublisher:
             raise PublisherError("publisher ledger commit SHA is invalid")
         self._prepare_product()
         pull = self._verify_published_pr(
+            job_id=job_id,
             branch=branch,
             expected_commit=commit_sha,
             expected_number=entry.get("pr_number"),
         )
         remote_sha = self._remote_branch_sha(branch)
         if _pull_is_merged(pull):
-            if remote_sha is not None and remote_sha != commit_sha:
+            allowed = {commit_sha}
+            proven_head = _full_sha(_mapping(pull.get("head"), "pull request head").get("sha"))
+            if proven_head is not None:
+                allowed.add(proven_head)
+            if remote_sha is not None and remote_sha not in allowed:
                 raise PublisherError("published product branch drifted after publication")
             return pull
         if remote_sha != commit_sha:
@@ -1378,6 +1399,7 @@ class ControlledPublisher:
     def _verify_published_pr(
         self,
         *,
+        job_id: str,
         branch: str,
         expected_commit: str,
         expected_number: Any,
@@ -1392,26 +1414,168 @@ class ControlledPublisher:
         pull = pulls[0]
         if pull.get("number") != expected_number:
             raise PublisherError("published product PR drifted after publication")
+        self._require_pr_ref(pull, branch=branch)
+        if pull.get("state") == "open":
+            head = _mapping(pull.get("head"), "pull request head")
+            if head.get("sha") != expected_commit:
+                raise PublisherError("existing product PR head drifted")
+            return pull
+        number = pull.get("number")
+        if isinstance(number, bool) or not isinstance(number, int):
+            raise PublisherError("published product PR number is invalid")
+        pull = self._client().get_pull_request(number)
+        if pull.get("number") != expected_number:
+            raise PublisherError("published product PR drifted after publication")
+        self._require_pr_ref(pull, branch=branch)
+        head = _mapping(pull.get("head"), "pull request head")
+        if pull.get("state") == "open" or not _pull_is_merged(pull):
+            if head.get("sha") != expected_commit:
+                raise PublisherError("existing product PR head drifted")
+            if pull.get("state") != "open":
+                raise PublisherError("existing product PR is not open")
+            return pull
+        self._prove_merged_candidate_content(
+            job_id=job_id,
+            pull=pull,
+            ledger_commit=expected_commit,
+        )
+        return pull
+
+    def _require_pr_ref(self, pull: Mapping[str, Any], *, branch: str) -> None:
         head = _mapping(pull.get("head"), "pull request head")
         base = _mapping(pull.get("base"), "pull request base")
-        if head.get("ref") != branch or head.get("sha") != expected_commit:
+        if head.get("ref") != branch:
             raise PublisherError("existing product PR head drifted")
         if base.get("ref") != self.config.product_base_branch:
             raise PublisherError("existing product PR base drifted")
-        if pull.get("state") != "open":
-            pull = self._client().get_pull_request(int(pull["number"]))
-            if pull.get("number") != expected_number:
-                raise PublisherError("published product PR drifted after publication")
-            head = _mapping(pull.get("head"), "pull request head")
-            base = _mapping(pull.get("base"), "pull request base")
-            if head.get("ref") != branch or head.get("sha") != expected_commit:
-                raise PublisherError("existing product PR head drifted")
-            if base.get("ref") != self.config.product_base_branch:
-                raise PublisherError("existing product PR base drifted")
-            if not _pull_is_merged(pull):
-                raise PublisherError("existing product PR is not open")
-            return pull
-        return pull
+
+    def _validated_candidate_paths(self, job_id: str) -> tuple[str, ...]:
+        job_dir = self.evidence.job_dir(job_id)
+        try:
+            gate = _mapping(
+                json.loads((job_dir / "gate-report.json").read_text(encoding="utf-8")),
+                "gate report",
+            )
+            report = _mapping(
+                json.loads((job_dir / "publication-report.json").read_text(encoding="utf-8")),
+                "publication report",
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            raise PublisherError(
+                "merged content proof could not read validated candidate paths"
+            ) from exc
+        raw_paths = gate.get("changed_paths")
+        published = report.get("changed_paths")
+        if not isinstance(raw_paths, list) or not raw_paths:
+            raise PublisherError("validated candidate paths are missing")
+        if not isinstance(published, list):
+            raise PublisherError("publication report changed_paths are invalid")
+        paths = tuple(sorted(_normalize_candidate_path(item) for item in raw_paths))
+        if len(paths) != len(set(paths)):
+            raise PublisherError("validated candidate paths are duplicated")
+        if tuple(sorted(_normalize_candidate_path(item) for item in published)) != paths:
+            raise PublisherError(
+                "publication report paths do not match the validated candidate"
+            )
+        return paths
+
+    def _blob_identity(self, commit: str, path: str) -> tuple[str, str]:
+        listing = _git(self.product, "ls-tree", "-z", commit, "--", path).stdout
+        found: list[tuple[str, str]] = []
+        for entry in listing.split("\0"):
+            if not entry:
+                continue
+            meta, separator, name = entry.partition("\t")
+            if not separator or name.replace("\\", "/") != path:
+                continue
+            parts = meta.split()
+            if len(parts) != 3 or parts[1] != "blob" or _full_sha(parts[2]) is None:
+                raise PublisherError(f"validated candidate path is not a file blob: {path}")
+            found.append((parts[0], parts[2]))
+        if len(found) != 1:
+            raise PublisherError(
+                "validated candidate content did not survive into the merged result: "
+                f"{path}"
+            )
+        return found[0]
+
+    def _commit_available(self, sha: str) -> bool:
+        return (
+            _git(
+                self.product,
+                "cat-file",
+                "-e",
+                f"{sha}^{{commit}}",
+                accepted=(0, 1),
+            ).returncode
+            == 0
+        )
+
+    def _fetch_merged_pr_head(self, number: int, expected_sha: str) -> None:
+        if isinstance(number, bool) or not isinstance(number, int) or number < 1:
+            raise PublisherError("merged PR number is invalid")
+        destination = f"refs/publisher-proof/pull/{number}/head"
+        try:
+            _git(
+                self.product,
+                "fetch",
+                "--no-tags",
+                "origin",
+                f"+refs/pull/{number}/head:{destination}",
+            )
+        except PublisherError as exc:
+            raise PublisherError(
+                "merged PR head ref is unavailable for candidate content proof"
+            ) from exc
+        fetched = _git(self.product, "rev-parse", destination).stdout.strip()
+        if fetched != expected_sha:
+            raise PublisherError("fetched PR head does not match the merged pull request head")
+
+    def _prove_merged_candidate_content(
+        self,
+        *,
+        job_id: str,
+        pull: Mapping[str, Any],
+        ledger_commit: str,
+    ) -> None:
+        """Prove validated path blobs survived a founder merge.
+
+        Closed merged state and commit ancestry are not sufficient. Every
+        candidate-owned path must have the same file mode and blob id at the
+        ledger commit, the fetched PR head, and the merge commit on product main.
+        """
+        number = pull.get("number")
+        if isinstance(number, bool) or not isinstance(number, int):
+            raise PublisherError("merged PR number is invalid")
+        head_sha = _full_sha(_mapping(pull.get("head"), "pull request head").get("sha"))
+        merge_sha = _full_sha(pull.get("merge_commit_sha"))
+        if head_sha is None or merge_sha is None:
+            raise PublisherError("merged PR is missing commits required to prove candidate content")
+        self._fetch_merged_pr_head(number, head_sha)
+        if not self._commit_available(ledger_commit):
+            raise PublisherError("published candidate commit is unavailable for content proof")
+        if not self._commit_available(merge_sha):
+            raise PublisherError("merged result is not on product main")
+        base_ref = f"origin/{self.config.product_base_branch}"
+        on_main = _git(
+            self.product,
+            "merge-base",
+            "--is-ancestor",
+            merge_sha,
+            base_ref,
+            accepted=(0, 1),
+        ).returncode
+        if on_main != 0:
+            raise PublisherError("merged result is not on product main")
+        for path in self._validated_candidate_paths(job_id):
+            ledger_blob = self._blob_identity(ledger_commit, path)
+            head_blob = self._blob_identity(head_sha, path)
+            merged_blob = self._blob_identity(merge_sha, path)
+            if not (ledger_blob == head_blob == merged_blob):
+                raise PublisherError(
+                    "validated candidate content did not survive into the merged result: "
+                    f"{path}"
+                )
 
     def _load_revision_evidence(self, job_dir: Path, gate_sha: str) -> dict[str, Any]:
         identity = attempt_identity_from_job_yaml(job_dir / "job.yaml")

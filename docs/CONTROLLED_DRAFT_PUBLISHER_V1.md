@@ -63,7 +63,7 @@ The product commit is deterministic for a fixed product base and gate report. Be
 - present at the expected commit: continue safely after an interrupted prior run;
 - present at another commit: fail closed.
 
-The same rule applies to the PR. There may be exactly one open draft PR for the configured branch, and its head commit and base branch must match. A local immutable ledger verifies the branch and PR on every later cycle.
+The same rule applies while a PR is open or unmerged: there may be exactly one PR for the configured branch, and its head commit and base branch must match the ledger commit. A later cycle may reconcile a closed merged PR whose head moved only by proving that every validated candidate path still has the same file mode and Git blob id at the ledger commit, the fetched PR head, and the merge commit on product main. Merged state or commit ancestry alone is not that proof. A change to a candidate-owned path fails closed. The ledger commit is not rewritten.
 
 After success, `publication-report.json` is committed to the `results` branch with the product base, branch, commit, PR URL, hashes, paths, and publication-time check results.
 

@@ -108,6 +108,67 @@ class FakeGitHubClient(GitHubDraftClient):
         return pull
 
 
+def ledger_entry(config_path: Path, job_id: str) -> dict[str, Any]:
+    config = load_publisher_config(config_path)
+    ledger = json.loads(
+        (config.host_root / "state" / "controlled-publisher-seen.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    entry = ledger[job_id]
+    assert isinstance(entry, dict)
+    return entry
+
+
+def clone_product(tmp_path: Path, product_bare: Path, name: str) -> Path:
+    work = tmp_path / name
+    git(None, "-c", "core.autocrlf=false", "clone", str(product_bare), str(work))
+    git(work, "config", "user.name", "Founder")
+    git(work, "config", "user.email", "founder@example.invalid")
+    git(work, "config", "core.autocrlf", "false")
+    return work
+
+
+def blob_id(repo: Path, commit: str, path: str) -> str:
+    return git(repo, "rev-parse", f"{commit}:{path}")
+
+
+def record_pull_head(product_bare: Path, number: int, sha: str) -> None:
+    git(product_bare, "update-ref", f"refs/pull/{number}/head", sha)
+
+
+def delete_branch(product_bare: Path, branch: str) -> None:
+    git(product_bare, "update-ref", "-d", f"refs/heads/{branch}")
+
+
+def mark_founder_merged(
+    client: FakeGitHubClient,
+    *,
+    branch: str,
+    head_sha: str,
+    merge_sha: str,
+) -> None:
+    client.pulls[0].update(
+        {
+            "state": "closed",
+            "draft": False,
+            "merged": True,
+            "merged_at": "2026-09-11T16:04:00Z",
+            "merge_commit_sha": merge_sha,
+            "head": {"ref": branch, "sha": head_sha},
+            "base": {"ref": "main"},
+        }
+    )
+
+
+def squash_commit_onto_main(work: Path, commit: str) -> str:
+    git(work, "checkout", "main")
+    git(work, "merge", "--squash", commit)
+    git(work, "commit", "-m", "Squash founder merge")
+    git(work, "push", "origin", "HEAD:main")
+    return git(work, "rev-parse", "HEAD")
+
+
 def make_fixture(tmp_path: Path, *, overlap: bool = False) -> tuple[Path, Path, Path, str]:
     product_work = tmp_path / "product-work"
     product_work.mkdir()
@@ -724,41 +785,148 @@ def test_controlled_publisher_founder_merged_pr_stays_verified(
     client = FakeGitHubClient(product_bare)
     publisher = ControlledPublisher(config, github_client=client)
     assert publisher.run_once() == (job_id,)
+    published = ledger_entry(config_path, job_id)
     (config.host_root / "state" / "publisher-service-success.json").unlink()
-    client.pulls[0].update(
-        {
-            "state": "closed",
-            "draft": False,
-            "merged": True,
-            "merged_at": "2026-09-02T18:45:01Z",
-        }
+
+    branch = f"autobuilder/{job_id}"
+    work = clone_product(tmp_path, product_bare, "exact-head-merge")
+    merge_sha = squash_commit_onto_main(work, f"origin/{branch}")
+    head_sha = published["commit_sha"]
+    assert blob_id(work, head_sha, "src/viz/value.py") == blob_id(
+        work, merge_sha, "src/viz/value.py"
     )
-    proc = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(product_bare),
-            "update-ref",
-            "-d",
-            f"refs/heads/autobuilder/{job_id}",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-    assert proc.returncode == 0, proc.stderr or proc.stdout
+    record_pull_head(product_bare, 1, head_sha)
+    delete_branch(product_bare, branch)
+    mark_founder_merged(client, branch=branch, head_sha=head_sha, merge_sha=merge_sha)
 
     assert publisher.run_once() == ()
     success = publisher_success(config_path)
     assert job_id in success["terminal_evidence"]["verified_jobs"]
     assert not (config.host_root / "state" / "controlled-publisher-error.json").exists()
+    assert ledger_entry(config_path, job_id)["commit_sha"] == head_sha
+    assert ledger_entry(config_path, job_id)["status"] == "published-draft"
     claims = list((config.host_root / "state" / "work-admission" / "claims").glob("*.json"))
     assert claims
     claim = json.loads(claims[0].read_text(encoding="utf-8"))
     assert claim["state"] == "merged"
     assert claim["evidence"]["disposition"] == "verified_product_pr_merged"
+
+
+def test_founder_merged_pr_reconciles_merge_main_then_squash(tmp_path: Path) -> None:
+    config_path, product_bare, _, job_id = make_fixture(tmp_path)
+    config = load_publisher_config(config_path)
+    client = FakeGitHubClient(product_bare)
+    publisher = ControlledPublisher(config, github_client=client)
+    assert publisher.run_once() == (job_id,)
+    published = ledger_entry(config_path, job_id)
+    (config.host_root / "state" / "publisher-service-success.json").unlink()
+
+    branch = f"autobuilder/{job_id}"
+    work = clone_product(tmp_path, product_bare, "merge-main-then-squash")
+    later = work / "docs" / "later.md"
+    later.parent.mkdir(parents=True, exist_ok=True)
+    later.write_bytes(b"later-main\n")
+    git(work, "add", ".")
+    git(work, "commit", "-m", "unrelated main movement")
+    git(work, "push", "origin", "HEAD:main")
+    git(work, "checkout", "-B", branch, f"origin/{branch}")
+    git(work, "merge", "origin/main", "-m", "Merge main into candidate")
+    git(work, "push", "origin", f"HEAD:refs/heads/{branch}")
+    moved_head = git(work, "rev-parse", "HEAD")
+    assert moved_head != published["commit_sha"]
+    merge_sha = squash_commit_onto_main(work, moved_head)
+    candidate_path = "src/viz/value.py"
+    assert (
+        blob_id(work, published["commit_sha"], candidate_path)
+        == blob_id(work, moved_head, candidate_path)
+        == blob_id(work, merge_sha, candidate_path)
+    )
+    record_pull_head(product_bare, 1, moved_head)
+    mark_founder_merged(
+        client,
+        branch=branch,
+        head_sha=moved_head,
+        merge_sha=merge_sha,
+    )
+
+    assert publisher.run_once() == ()
+    assert ledger_entry(config_path, job_id)["commit_sha"] == published["commit_sha"]
+    (config.host_root / "state" / "publisher-service-success.json").unlink()
+    delete_branch(product_bare, branch)
+    assert publisher.run_once() == ()
+    success = publisher_success(config_path)
+    assert job_id in success["terminal_evidence"]["verified_jobs"]
+    assert ledger_entry(config_path, job_id)["commit_sha"] == published["commit_sha"]
+    assert ledger_entry(config_path, job_id)["status"] == "published-draft"
+
+
+def test_founder_merged_pr_rejects_candidate_path_modification(tmp_path: Path) -> None:
+    config_path, product_bare, _, job_id = make_fixture(tmp_path)
+    config = load_publisher_config(config_path)
+    client = FakeGitHubClient(product_bare)
+    publisher = ControlledPublisher(config, github_client=client)
+    assert publisher.run_once() == (job_id,)
+    published = ledger_entry(config_path, job_id)
+    (config.host_root / "state" / "publisher-service-success.json").unlink()
+
+    branch = f"autobuilder/{job_id}"
+    work = clone_product(tmp_path, product_bare, "malicious-candidate-edit")
+    git(work, "checkout", "-B", branch, f"origin/{branch}")
+    (work / "src" / "viz" / "value.py").write_bytes(b"VALUE = 9\n")
+    git(work, "add", ".")
+    git(work, "commit", "-m", "unrelated candidate path edit")
+    git(work, "push", "origin", f"HEAD:refs/heads/{branch}")
+    moved_head = git(work, "rev-parse", "HEAD")
+    merge_sha = squash_commit_onto_main(work, moved_head)
+    assert blob_id(work, published["commit_sha"], "src/viz/value.py") != blob_id(
+        work, moved_head, "src/viz/value.py"
+    )
+    record_pull_head(product_bare, 1, moved_head)
+    delete_branch(product_bare, branch)
+    mark_founder_merged(
+        client,
+        branch=branch,
+        head_sha=moved_head,
+        merge_sha=merge_sha,
+    )
+
+    with pytest.raises(PublisherError, match="did not survive into the merged result"):
+        publisher.run_once()
+    assert not (config.host_root / "state" / "publisher-service-success.json").exists()
+    assert ledger_entry(config_path, job_id)["commit_sha"] == published["commit_sha"]
+
+
+def test_open_pr_head_drift_remains_blocked(tmp_path: Path) -> None:
+    config_path, product_bare, _, job_id = make_fixture(tmp_path)
+    config = load_publisher_config(config_path)
+    client = FakeGitHubClient(product_bare)
+    publisher = ControlledPublisher(config, github_client=client)
+    assert publisher.run_once() == (job_id,)
+    published = ledger_entry(config_path, job_id)
+    (config.host_root / "state" / "publisher-service-success.json").unlink()
+
+    branch = f"autobuilder/{job_id}"
+    work = clone_product(tmp_path, product_bare, "open-head-drift")
+    later = work / "docs" / "later.md"
+    later.parent.mkdir(parents=True, exist_ok=True)
+    later.write_bytes(b"later-main\n")
+    git(work, "add", ".")
+    git(work, "commit", "-m", "unrelated main movement")
+    git(work, "push", "origin", "HEAD:main")
+    git(work, "checkout", "-B", branch, f"origin/{branch}")
+    git(work, "merge", "origin/main", "-m", "Merge main into candidate")
+    git(work, "push", "origin", f"HEAD:refs/heads/{branch}")
+    moved_head = git(work, "rev-parse", "HEAD")
+    assert blob_id(work, published["commit_sha"], "src/viz/value.py") == blob_id(
+        work, moved_head, "src/viz/value.py"
+    )
+    record_pull_head(product_bare, 1, moved_head)
+    client.pulls[0]["head"]["sha"] = moved_head
+
+    with pytest.raises(PublisherError, match="head drifted"):
+        publisher.run_once()
+    assert not (config.host_root / "state" / "publisher-service-success.json").exists()
+    assert ledger_entry(config_path, job_id)["commit_sha"] == published["commit_sha"]
 
 
 def test_controlled_publisher_gate_hash_drift_prevents_verified_success(

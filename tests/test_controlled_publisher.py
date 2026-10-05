@@ -72,6 +72,7 @@ class FakeGitHubClient(GitHubDraftClient):
         self.repo_full_name = "owner/product"
         self.owner = "owner"
         self.pulls: list[dict[str, Any]] = []
+        self.comments: dict[int, list[dict[str, Any]]] = {}
 
     def find_pull_requests(self, branch: str) -> list[dict[str, Any]]:
         return [pull for pull in self.pulls if pull["head"]["ref"] == branch]
@@ -81,6 +82,9 @@ class FakeGitHubClient(GitHubDraftClient):
             if pull.get("number") == number:
                 return pull
         raise PublisherError(f"missing product PR {number}")
+
+    def list_issue_comments(self, number: int) -> list[dict[str, Any]]:
+        return list(self.comments.get(number, []))
 
     def find_related_work(self, **_: Any) -> list[dict[str, Any]]:
         return []
@@ -927,6 +931,210 @@ def test_open_pr_head_drift_remains_blocked(tmp_path: Path) -> None:
         publisher.run_once()
     assert not (config.host_root / "state" / "publisher-service-success.json").exists()
     assert ledger_entry(config_path, job_id)["commit_sha"] == published["commit_sha"]
+
+
+def _owner_supersession_comment(successor: int, *, comment_id: int = 10) -> dict[str, Any]:
+    return {
+        "id": comment_id,
+        "user": {"login": "owner"},
+        "author_association": "OWNER",
+        "created_at": "2026-09-18T01:21:00Z",
+        "body": (
+            f"Superseded by #{successor}, which already merged the successor. "
+            "This Autobuilder draft is stale and conflicting; do not merge it."
+        ),
+    }
+
+
+def _close_exact_head_draft(client: FakeGitHubClient, *, branch: str, head_sha: str) -> None:
+    client.pulls[0].update(
+        {
+            "state": "closed",
+            "draft": True,
+            "merged": False,
+            "merged_at": None,
+            "merge_commit_sha": None,
+            "head": {"ref": branch, "sha": head_sha},
+            "base": {"ref": "main"},
+        }
+    )
+
+
+def test_founder_superseded_closed_draft_is_terminal(tmp_path: Path) -> None:
+    config_path, product_bare, _, job_id = make_fixture(tmp_path)
+    config = load_publisher_config(config_path)
+    client = FakeGitHubClient(product_bare)
+    publisher = ControlledPublisher(config, github_client=client)
+    assert publisher.run_once() == (job_id,)
+    published = ledger_entry(config_path, job_id)
+    (config.host_root / "state" / "publisher-service-success.json").unlink()
+
+    branch = f"autobuilder/{job_id}"
+    work = clone_product(tmp_path, product_bare, "successor-main")
+    later = work / "docs" / "successor.md"
+    later.parent.mkdir(parents=True, exist_ok=True)
+    later.write_bytes(b"successor-on-main\n")
+    git(work, "add", ".")
+    git(work, "commit", "-m", "unrelated successor merge")
+    git(work, "push", "origin", "HEAD:main")
+    successor_sha = git(work, "rev-parse", "HEAD")
+    assert blob_id(work, published["commit_sha"], "src/viz/value.py") != blob_id(
+        work, successor_sha, "src/viz/value.py"
+    )
+    delete_branch(product_bare, branch)
+    _close_exact_head_draft(client, branch=branch, head_sha=published["commit_sha"])
+    client.comments[1] = [_owner_supersession_comment(5475)]
+    client.pulls.append(
+        {
+            "number": 5475,
+            "state": "closed",
+            "draft": False,
+            "merged": True,
+            "merged_at": "2026-09-18T01:09:48Z",
+            "merge_commit_sha": successor_sha,
+            "head": {"ref": "unrelated/successor", "sha": successor_sha},
+            "base": {"ref": "main"},
+        }
+    )
+
+    assert publisher.run_once() == ()
+    success = publisher_success(config_path)
+    assert job_id in success["terminal_evidence"]["verified_jobs"]
+    assert not (config.host_root / "state" / "controlled-publisher-error.json").exists()
+    entry = ledger_entry(config_path, job_id)
+    assert entry["commit_sha"] == published["commit_sha"]
+    assert entry["status"] == "blocked_superseded_closed_draft"
+    assert entry["superseded_by_pr"] == 5475
+    assert entry["superseded_merge_commit"] == successor_sha
+    claims = list((config.host_root / "state" / "work-admission" / "claims").glob("*.json"))
+    assert claims
+    claim = json.loads(claims[0].read_text(encoding="utf-8"))
+    assert claim["state"] == "superseded"
+    assert claim["evidence"]["disposition"] == "founder_superseded_closed_draft"
+    assert "verified_product_pr_merged" not in claim["evidence"].values()
+
+    (config.host_root / "state" / "publisher-service-success.json").unlink()
+    assert publisher.run_once() == ()
+    assert ledger_entry(config_path, job_id)["commit_sha"] == published["commit_sha"]
+    assert job_id in publisher_success(config_path)["terminal_evidence"]["verified_jobs"]
+
+
+def test_closed_draft_without_supersession_stays_closed(tmp_path: Path) -> None:
+    config_path, product_bare, _, job_id = make_fixture(tmp_path)
+    config = load_publisher_config(config_path)
+    client = FakeGitHubClient(product_bare)
+    publisher = ControlledPublisher(config, github_client=client)
+    assert publisher.run_once() == (job_id,)
+    published = ledger_entry(config_path, job_id)
+    (config.host_root / "state" / "publisher-service-success.json").unlink()
+    branch = f"autobuilder/{job_id}"
+    _close_exact_head_draft(client, branch=branch, head_sha=published["commit_sha"])
+    client.comments[1] = [
+        {
+            "id": 11,
+            "user": {"login": "someone"},
+            "author_association": "CONTRIBUTOR",
+            "created_at": "2026-09-18T01:21:00Z",
+            "body": "Superseded by #5475.",
+        }
+    ]
+
+    with pytest.raises(PublisherError, match="not open"):
+        publisher.run_once()
+    entry = ledger_entry(config_path, job_id)
+    assert entry["commit_sha"] == published["commit_sha"]
+    assert entry["status"] == "published-draft"
+    assert "superseded_by_pr" not in entry
+
+
+def test_closed_draft_head_drift_ignores_supersession_comment(tmp_path: Path) -> None:
+    config_path, product_bare, _, job_id = make_fixture(tmp_path)
+    config = load_publisher_config(config_path)
+    client = FakeGitHubClient(product_bare)
+    publisher = ControlledPublisher(config, github_client=client)
+    assert publisher.run_once() == (job_id,)
+    published = ledger_entry(config_path, job_id)
+    (config.host_root / "state" / "publisher-service-success.json").unlink()
+    branch = f"autobuilder/{job_id}"
+    moved = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    _close_exact_head_draft(client, branch=branch, head_sha=moved)
+    client.comments[1] = [_owner_supersession_comment(5475)]
+
+    with pytest.raises(PublisherError, match="head drifted"):
+        publisher.run_once()
+    assert ledger_entry(config_path, job_id)["commit_sha"] == published["commit_sha"]
+    assert ledger_entry(config_path, job_id)["status"] == "published-draft"
+
+
+def test_superseding_pull_request_must_be_merged(tmp_path: Path) -> None:
+    config_path, product_bare, _, job_id = make_fixture(tmp_path)
+    config = load_publisher_config(config_path)
+    client = FakeGitHubClient(product_bare)
+    publisher = ControlledPublisher(config, github_client=client)
+    assert publisher.run_once() == (job_id,)
+    published = ledger_entry(config_path, job_id)
+    (config.host_root / "state" / "publisher-service-success.json").unlink()
+    branch = f"autobuilder/{job_id}"
+    _close_exact_head_draft(client, branch=branch, head_sha=published["commit_sha"])
+    client.comments[1] = [_owner_supersession_comment(5475)]
+    client.pulls.append(
+        {
+            "number": 5475,
+            "state": "open",
+            "draft": True,
+            "merged": False,
+            "merged_at": None,
+            "merge_commit_sha": None,
+            "head": {"ref": "unrelated/successor", "sha": published["commit_sha"]},
+            "base": {"ref": "main"},
+        }
+    )
+
+    with pytest.raises(PublisherError, match="superseding pull request is not merged"):
+        publisher.run_once()
+    assert ledger_entry(config_path, job_id)["status"] == "published-draft"
+    assert ledger_entry(config_path, job_id)["commit_sha"] == published["commit_sha"]
+
+
+def test_founder_supersession_comments_must_agree(tmp_path: Path) -> None:
+    config_path, product_bare, _, job_id = make_fixture(tmp_path)
+    config = load_publisher_config(config_path)
+    client = FakeGitHubClient(product_bare)
+    publisher = ControlledPublisher(config, github_client=client)
+    assert publisher.run_once() == (job_id,)
+    published = ledger_entry(config_path, job_id)
+    (config.host_root / "state" / "publisher-service-success.json").unlink()
+    branch = f"autobuilder/{job_id}"
+    _close_exact_head_draft(client, branch=branch, head_sha=published["commit_sha"])
+    client.comments[1] = [
+        _owner_supersession_comment(5475, comment_id=10),
+        _owner_supersession_comment(5476, comment_id=11),
+    ]
+
+    with pytest.raises(PublisherError, match="founder supersession comments disagree"):
+        publisher.run_once()
+    assert ledger_entry(config_path, job_id)["commit_sha"] == published["commit_sha"]
+
+
+def test_open_pr_supersession_comment_does_not_dispose(tmp_path: Path) -> None:
+    config_path, product_bare, _, job_id = make_fixture(tmp_path)
+    config = load_publisher_config(config_path)
+    client = FakeGitHubClient(product_bare)
+    publisher = ControlledPublisher(config, github_client=client)
+    assert publisher.run_once() == (job_id,)
+    published = ledger_entry(config_path, job_id)
+    (config.host_root / "state" / "publisher-service-success.json").unlink()
+    client.comments[1] = [_owner_supersession_comment(5475)]
+
+    assert publisher.run_once() == ()
+    entry = ledger_entry(config_path, job_id)
+    assert entry["status"] == "published-draft"
+    assert entry["commit_sha"] == published["commit_sha"]
+    assert "superseded_by_pr" not in entry
+    claims = list((config.host_root / "state" / "work-admission" / "claims").glob("*.json"))
+    assert claims
+    claim = json.loads(claims[0].read_text(encoding="utf-8"))
+    assert claim["state"] == "active"
 
 
 def test_controlled_publisher_gate_hash_drift_prevents_verified_success(

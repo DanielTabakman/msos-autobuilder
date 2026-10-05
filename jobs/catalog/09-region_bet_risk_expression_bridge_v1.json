@@ -1,0 +1,152 @@
+{
+  "version": 1,
+  "pipeline_id": "ppe",
+  "work_item_id": "region_bet_risk_expression_bridge_v1",
+  "order": 9,
+  "eligible": true,
+  "target_repository": "DanielTabakman/Probability-prediction-engine",
+  "target_source_commit": "b390ae7ff60e056d4700a63b078665183d072702",
+  "target_remote_url": "https://github.com/DanielTabakman/Probability-prediction-engine.git",
+  "adapter": "ppe_operator",
+  "allowed_paths": [
+    "apps/msos-web/src/lib/regionBet.ts",
+    "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+    "apps/msos-web/src/lib/regionBetRiskExpression.ts",
+    "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+    "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+    "apps/msos-web/src/components/RegionBetRiskExpressionPanel.tsx",
+    "tests/test_msos_web_region_bet_risk_expression_bridge.py"
+  ],
+  "native_slice": {
+    "slice_id": "RegionBet-RiskExpression-Product-Slice002",
+    "build_branch": "build/auto/RegionBet-RiskExpression-Product-Slice002",
+    "layer_preset": "MSOS_UI",
+    "worker_mode": "local-agent",
+    "declared_plane": "PRODUCT-PLANE",
+    "touch_set": [
+      "apps/msos-web/src/lib/regionBet.ts",
+      "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+      "apps/msos-web/src/lib/regionBetRiskExpression.ts",
+      "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+      "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+      "apps/msos-web/src/components/RegionBetRiskExpressionPanel.tsx",
+      "tests/test_msos_web_region_bet_risk_expression_bridge.py"
+    ],
+    "sequence_index": 1,
+    "total_slices": 3,
+    "previous_slices": [
+      "RegionBet-RiskExpression-Control-Slice001"
+    ],
+    "following_slices": [
+      "RegionBet-RiskExpression-Closeout-Slice003"
+    ],
+    "raw_slice": {
+      "sliceId": "RegionBet-RiskExpression-Product-Slice002",
+      "layerPreset": "MSOS_UI",
+      "buildBranch": "build/auto/RegionBet-RiskExpression-Product-Slice002",
+      "declaredPlane": "PRODUCT-PLANE",
+      "implementationStatus": "COMPLETE",
+      "workerMode": "local-agent",
+      "susMinutes": 90,
+      "hardMinutes": 240,
+      "maxAttempts": 2,
+      "touchSet": [
+        "apps/msos-web/src/lib/regionBet.ts",
+        "apps/msos-web/src/lib/regionBetGuidedShell.ts",
+        "apps/msos-web/src/lib/regionBetRiskExpression.ts",
+        "apps/msos-web/src/components/RegionBetGuidedShell.tsx",
+        "apps/msos-web/src/components/RegionBetGuidedShellPanel.tsx",
+        "apps/msos-web/src/components/RegionBetRiskExpressionPanel.tsx",
+        "tests/test_msos_web_region_bet_risk_expression_bridge.py"
+      ],
+      "objective": "[DONE] Catalog order 09 merged as PPE PR #5463 (ca8a8285); risk-to-expression bridge on main. Closeout recorded; do not rebuild. Next chapter 10 is READY for JIT catalog.",
+      "backlogSource": "docs/SOP/PHASE_CHAPTER_BACKLOG.json#region_bet_risk_expression_bridge_v1",
+      "acceptanceCriteria": [
+        "Capture bounded max-loss, premium, and payoff preferences inside the guided Region Bet flow.",
+        "Map those preferences to the expression-fit primitives already on current main; do not recreate or cherry-pick draft PR #5428.",
+        "Explain safer or more likely, best-fit, and higher-payout or convex choices without advice, expected-return, or execution claims.",
+        "Persist only the selected expression reference and stated constraints on the Region Bet draft.",
+        "Cover deterministic mapping, selection persistence, empty candidates, and invalid constraints with focused tests."
+      ]
+    },
+    "selection_record": "docs/SOP/POST_REGION_BET_RISK_EXPRESSION_BRIDGE_V1_SELECTION.md"
+  },
+  "phase_plan": "docs/SOP/PHASE_PLANS/region_bet_risk_expression_bridge_v1_relay.json",
+  "prerequisites": {
+    "version": 1,
+    "read_only": true,
+    "source": "ppe_native_read_only",
+    "evidence": {
+      "frozen_target_commit": "b390ae7ff60e056d4700a63b078665183d072702",
+      "phase_plan": "docs/SOP/PHASE_PLANS/region_bet_risk_expression_bridge_v1_relay.json",
+      "phase_plan_blob_sha": "3ae7c1258bdcd5b59fc268698be3771bcd15bc08",
+      "backlog_chapter_id": "region_bet_risk_expression_bridge_v1",
+      "depends_on": [
+        "region_bet_market_compare_bridge_v1"
+      ],
+      "related_pull_requests": [
+        "DanielTabakman/Probability-prediction-engine#5428"
+      ],
+      "related_pull_request_resolutions": [
+        {
+          "ref": "DanielTabakman/Probability-prediction-engine#5428",
+          "disposition": "superseded",
+          "replacement": "DanielTabakman/Probability-prediction-engine#5454",
+          "mergeCommit": "0e04b102a90ee311cedc6a0d673ff53fb975ebef",
+          "decidedAt": "2026-09-15T19:28:45+00:00",
+          "decisionSource": "merged_product_pr",
+          "reason": "PR #5454 reused the useful expression-fit work on current main and fixed its build failure; the old draft remains non-mergeable and must not gate order 09."
+        }
+      ],
+      "packetization": "just_in_time",
+      "source_files": [
+        {
+          "path": "docs/SOP/PHASE_PLANS/region_bet_risk_expression_bridge_v1_relay.json",
+          "exists": true,
+          "git_commit": "b390ae7ff60e056d4700a63b078665183d072702",
+          "blob_sha": "3ae7c1258bdcd5b59fc268698be3771bcd15bc08",
+          "sha256": "108f134f01c50fb0374c0ca364a539e409c14d548094ffd549e99224c56241bf"
+        },
+        {
+          "path": "docs/SOP/POST_REGION_BET_RISK_EXPRESSION_BRIDGE_V1_SELECTION.md",
+          "exists": true,
+          "git_commit": "b390ae7ff60e056d4700a63b078665183d072702",
+          "blob_sha": "519f976a486d9632f8d234b05e2654fcba9cf355",
+          "sha256": "d10f6a4b20be198709b35b9e70742b0b14d1496803a63fc6e361c0cc9ee4fa03"
+        },
+        {
+          "path": "docs/SOP/REGION_BET_RISK_EXPRESSION_BRIDGE_V1_EVIDENCE_STATUS.md",
+          "exists": true,
+          "git_commit": "b390ae7ff60e056d4700a63b078665183d072702",
+          "blob_sha": "715f6358dd785c2ff12fb3148082dc27ae33e4e6",
+          "sha256": "b50404f701938c98e84a946186d982584e21c04b0e119662725ed560ebe5dd13"
+        }
+      ],
+      "control_slice": {
+        "slice_id": "RegionBet-RiskExpression-Control-Slice001",
+        "implementationStatus": "COMPLETE",
+        "nonBlocking": true
+      }
+    },
+    "statuses": [
+      {
+        "slice_id": "RegionBet-RiskExpression-Control-Slice001",
+        "status": "complete",
+        "non_blocking": true
+      }
+    ]
+  },
+  "dependency_source_sha256": "47bbbd25ab1aa2ee1afc914b74bda107597e14ef6669477a75282c57ba7f2394",
+  "authority": {
+    "publication_enabled": false,
+    "merge_enabled": false,
+    "product_main_write_enabled": false
+  },
+  "validation": {
+    "profile_id": "ppe-ci-pytest-v1"
+  },
+  "merge_authority": {
+    "class": "AUTO_MERGE_WHEN_GREEN",
+    "declared_at": "2026-09-16T03:19:31+00:00"
+  }
+}

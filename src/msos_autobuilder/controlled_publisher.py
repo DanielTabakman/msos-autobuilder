@@ -390,6 +390,25 @@ def _publisher_not_applicable_receipt_path(
     )
 
 
+def _publisher_superseded_receipt_path(
+    host_root: Path,
+    *,
+    machine_id: str,
+    job_id: str,
+    gate_sha: str,
+) -> Path:
+    safe_job_id = _safe_segment(job_id, fallback="job")
+    return (
+        host_root
+        / "state"
+        / "publisher-evidence"
+        / "sources"
+        / "superseded-closed-draft"
+        / machine_id
+        / f"{safe_job_id}.{gate_sha}.json"
+    )
+
+
 def _publisher_drafted_receipt_path(
     host_root: Path,
     *,
@@ -414,6 +433,18 @@ def _linked_issue_from_text(text: str) -> int | None:
     if not matches:
         return None
     return int(matches[0])
+
+
+_SUPERSEDED_BY_RE = re.compile(r"(?im)^\s*superseded by\s+#(\d+)\b")
+
+
+def _superseding_pr_numbers(body: str) -> list[int]:
+    numbers: list[int] = []
+    for match in _SUPERSEDED_BY_RE.finditer(body):
+        number = int(match.group(1))
+        if number >= 1:
+            numbers.append(number)
+    return numbers
 
 
 def _authorized_paths_cover_expected(
@@ -710,6 +741,14 @@ class GitHubDraftClient:
         if not isinstance(result, dict):
             raise PublisherError("GitHub pull-request fetch returned an invalid payload")
         return result
+
+    def list_issue_comments(self, number: int) -> list[dict[str, Any]]:
+        if isinstance(number, bool) or not isinstance(number, int) or number < 1:
+            raise PublisherError("pull request number is invalid")
+        return self._paged_list(
+            f"/repos/{self.repo_full_name}/issues/{number}/comments",
+            "issue comment",
+        )
 
     def _paged_list(self, path: str, label: str) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
@@ -1357,6 +1396,10 @@ class ControlledPublisher:
             if remote_sha is not None and remote_sha not in allowed:
                 raise PublisherError("published product branch drifted after publication")
             return pull
+        if pull.get("msos_publisher_disposition") == "superseded_closed_draft":
+            if remote_sha is not None and remote_sha != commit_sha:
+                raise PublisherError("published product branch drifted after publication")
+            return pull
         if remote_sha != commit_sha:
             raise PublisherError("published product branch drifted after publication")
         return pull
@@ -1391,6 +1434,42 @@ class ControlledPublisher:
                     "job_id": job_id,
                     "verified_pr": pull.get("number"),
                     "merged_at": pull.get("merged_at"),
+                },
+            )
+        except AdmissionError:
+            return
+
+    def _release_claim_if_founder_superseded(
+        self,
+        *,
+        job_id: str,
+        publication: Mapping[str, Any],
+        pull: Mapping[str, Any],
+    ) -> None:
+        if pull.get("msos_publisher_disposition") != "superseded_closed_draft":
+            return
+        handoff = publication.get("claim_release_handoff")
+        if not isinstance(handoff, Mapping):
+            return
+        objective = str(handoff.get("objective_sha256") or "").strip()
+        writer_id = str(handoff.get("writer_id") or "").strip()
+        generation = handoff.get("claim_generation")
+        if not objective or not writer_id or not isinstance(generation, int):
+            return
+        try:
+            release_claim(
+                self.state,
+                objective,
+                writer_id=writer_id,
+                terminal_state="superseded",
+                expected_generation=generation,
+                evidence={
+                    "release_handoff_consumer": "controlled-publisher",
+                    "disposition": "founder_superseded_closed_draft",
+                    "job_id": job_id,
+                    "verified_pr": pull.get("number"),
+                    "superseded_by_pr": pull.get("msos_successor_pr"),
+                    "successor_merge_commit": pull.get("msos_successor_merge_commit"),
                 },
             )
         except AdmissionError:
@@ -1432,7 +1511,15 @@ class ControlledPublisher:
             if head.get("sha") != expected_commit:
                 raise PublisherError("existing product PR head drifted")
             if pull.get("state") != "open":
-                raise PublisherError("existing product PR is not open")
+                superseded = self._founder_superseded_closed_draft(
+                    pull=pull,
+                    current_number=number,
+                )
+                if superseded is None:
+                    raise PublisherError("existing product PR is not open")
+                annotated = dict(pull)
+                annotated.update(superseded)
+                return annotated
             return pull
         self._prove_merged_candidate_content(
             job_id=job_id,
@@ -1440,6 +1527,156 @@ class ControlledPublisher:
             ledger_commit=expected_commit,
         )
         return pull
+
+    def _founder_superseded_closed_draft(
+        self,
+        *,
+        pull: Mapping[str, Any],
+        current_number: int,
+    ) -> dict[str, Any] | None:
+        """Prove a founder-closed exact-head draft was explicitly superseded.
+
+        Closed state alone is not proof. The repository owner must say the draft
+        was superseded by one pull request, and that pull request must be merged
+        onto the closed draft's base branch. Candidate blobs are not compared.
+        """
+        if pull.get("state") != "closed" or pull.get("draft") is not True:
+            return None
+        if _pull_is_merged(pull):
+            return None
+        comments = self._client().list_issue_comments(current_number)
+        owner = self._client().owner
+        cited: list[tuple[int, Mapping[str, Any]]] = []
+        for comment in comments:
+            if not isinstance(comment, Mapping):
+                continue
+            user = comment.get("user")
+            login = user.get("login") if isinstance(user, Mapping) else None
+            if login != owner or comment.get("author_association") != "OWNER":
+                continue
+            body = comment.get("body")
+            if not isinstance(body, str):
+                continue
+            numbers = _superseding_pr_numbers(body)
+            if not numbers:
+                continue
+            if len(set(numbers)) != 1:
+                raise PublisherError("founder supersession comments disagree")
+            successor = numbers[0]
+            if successor == current_number:
+                raise PublisherError("founder supersession comment names this pull request")
+            cited.append((successor, comment))
+        if not cited:
+            return None
+        if len({item[0] for item in cited}) != 1:
+            raise PublisherError("founder supersession comments disagree")
+        successor_number = cited[0][0]
+
+        def _comment_order(item: tuple[int, Mapping[str, Any]]) -> tuple[str, int]:
+            comment = item[1]
+            created = comment.get("created_at")
+            comment_id = comment.get("id")
+            created_text = created if isinstance(created, str) else ""
+            identity = comment_id if isinstance(comment_id, int) and not isinstance(comment_id, bool) else 0
+            return (created_text, identity)
+
+        comment = sorted(cited, key=_comment_order)[0][1]
+        comment_id = comment.get("id")
+        created_at = comment.get("created_at")
+        if isinstance(comment_id, bool) or not isinstance(comment_id, int) or comment_id < 1:
+            raise PublisherError("founder supersession comment is incomplete")
+        if not isinstance(created_at, str) or not created_at.strip():
+            raise PublisherError("founder supersession comment is incomplete")
+        successor = self._client().get_pull_request(successor_number)
+        if successor.get("number") != successor_number or not _pull_is_merged(successor):
+            raise PublisherError("superseding pull request is not merged")
+        merge_sha = _full_sha(successor.get("merge_commit_sha"))
+        if merge_sha is None:
+            raise PublisherError("superseding pull request is missing its merge commit")
+        base = _mapping(pull.get("base"), "pull request base")
+        base_branch = str(base.get("ref") or "")
+        if (
+            not base_branch
+            or base_branch.startswith("/")
+            or ".." in Path(base_branch).parts
+        ):
+            raise PublisherError("superseding pull request base is invalid")
+        if not self._commit_available(merge_sha):
+            raise PublisherError("superseding pull request is not on product main")
+        base_ref = f"refs/remotes/origin/{base_branch}"
+        on_base = _git(
+            self.product,
+            "merge-base",
+            "--is-ancestor",
+            merge_sha,
+            base_ref,
+            accepted=(0, 1),
+        ).returncode
+        if on_base != 0:
+            raise PublisherError("superseding pull request is not on product main")
+        return {
+            "msos_publisher_disposition": "superseded_closed_draft",
+            "msos_successor_pr": successor_number,
+            "msos_successor_merge_commit": merge_sha,
+            "msos_supersession_comment_id": comment_id,
+            "msos_supersession_comment_created_at": created_at.strip(),
+        }
+
+    def _record_superseded_closed_draft(
+        self,
+        *,
+        job_id: str,
+        gate_sha: str,
+        entry: Mapping[str, Any],
+        pull: Mapping[str, Any],
+        ledger: dict[str, Any],
+    ) -> None:
+        successor = pull.get("msos_successor_pr")
+        merge_sha = pull.get("msos_successor_merge_commit")
+        comment_id = pull.get("msos_supersession_comment_id")
+        created_at = pull.get("msos_supersession_comment_created_at")
+        commit_sha = str(entry.get("commit_sha") or "")
+        if (
+            isinstance(successor, bool)
+            or not isinstance(successor, int)
+            or not isinstance(merge_sha, str)
+            or not re.fullmatch(r"[0-9a-f]{40}", merge_sha)
+            or isinstance(comment_id, bool)
+            or not isinstance(comment_id, int)
+            or not isinstance(created_at, str)
+            or not created_at
+        ):
+            raise PublisherError("founder supersession proof is incomplete")
+        _immutable_write_json(
+            _publisher_superseded_receipt_path(
+                self.host_root,
+                machine_id=self.config.machine_id,
+                job_id=job_id,
+                gate_sha=gate_sha,
+            ),
+            {
+                "version": 1,
+                "receipt_type": "founder_superseded_closed_draft",
+                "machine_id": self.config.machine_id,
+                "source_job_id": job_id,
+                "gate_report_sha256": gate_sha,
+                "pr_number": entry.get("pr_number"),
+                "product_branch": str(entry.get("branch") or ""),
+                "product_commit": commit_sha,
+                "successor_pr": successor,
+                "successor_merge_commit": merge_sha,
+                "comment_id": comment_id,
+                "recorded_at": created_at,
+            },
+        )
+        updated = dict(entry)
+        if updated.get("commit_sha") != commit_sha:
+            raise PublisherError("publisher ledger commit SHA is invalid")
+        updated["status"] = "blocked_superseded_closed_draft"
+        updated["superseded_by_pr"] = successor
+        updated["superseded_merge_commit"] = merge_sha
+        ledger[job_id] = updated
+        self._save_ledger(ledger)
 
     def _require_pr_ref(self, pull: Mapping[str, Any], *, branch: str) -> None:
         head = _mapping(pull.get("head"), "pull request head")
@@ -2125,9 +2362,13 @@ class ControlledPublisher:
                 existing = ledger.get(job_id)
                 if existing:
                     existing_status = str(existing.get("status") or "")
-                    if existing_status.startswith("blocked_"):
+                    if (
+                        existing_status.startswith("blocked_")
+                        and existing_status != "blocked_superseded_closed_draft"
+                    ):
                         # Terminal non-publication dispositions stay disposed without
                         # requiring a draft PR (e.g. main path drift after a founder merge).
+                        # A founder-superseded draft is re-proved each cycle.
                         verified.add(job_id)
                         continue
                     try:
@@ -2144,6 +2385,24 @@ class ControlledPublisher:
                         report = json.loads(report_path.read_text(encoding="utf-8"))
                         if not isinstance(report, dict):
                             raise PublisherError("publication-report.json must be a mapping")
+                        if (
+                            pull is not None
+                            and pull.get("msos_publisher_disposition") == "superseded_closed_draft"
+                        ):
+                            self._record_superseded_closed_draft(
+                                job_id=job_id,
+                                gate_sha=gate_sha,
+                                entry=existing,
+                                pull=pull,
+                                ledger=ledger,
+                            )
+                            self._release_claim_if_founder_superseded(
+                                job_id=job_id,
+                                publication=report,
+                                pull=pull,
+                            )
+                            verified.add(job_id)
+                            continue
                         self._release_claim_if_product_merged(
                             job_id=job_id,
                             publication=report,

@@ -77,6 +77,7 @@ MERGED_LIFECYCLE_DISPOSITIONS = frozenset({"item_terminal_success_merged"})
 RESOLVED_RELATED_PR_DISPOSITIONS = frozenset(
     {"accepted", "merged", "superseded", "superseded_by_backlog_item"}
 )
+COMPLETED_ITEM_STATUSES = frozenset({"done", "complete", "completed"})
 DEFERRED_ITEM_STATUSES = frozenset({"deferred", "skipped"})
 SUPPORTED_JIT_ELIGIBILITY = frozenset(
     {
@@ -408,9 +409,15 @@ def evaluate_jit_eligibility(
         }
         proof = proofs.get(item.chapter_id)
         declared_terminal = item.raw.get("autobuilderItemTerminal") is True
+        status = item.status.strip().lower()
         decision["autobuilder_item_terminal"] = declared_terminal
         if declared_terminal or _proof_is_merged_for_work_item(proof, item.chapter_id):
             decision["decision"] = "completed"
+            decisions[item.chapter_id] = decision
+            continue
+        if status in COMPLETED_ITEM_STATUSES:
+            decision["decision"] = "completed"
+            decision["completion_source"] = "backlog_status"
             decisions[item.chapter_id] = decision
             continue
         if item.chapter_id in excluded:
@@ -419,7 +426,7 @@ def evaluate_jit_eligibility(
             decision["decision"] = "excluded_without_merged_proof"
             decisions[item.chapter_id] = decision
             continue
-        if item.status.strip().lower() in DEFERRED_ITEM_STATUSES or item.eligibility.startswith(
+        if status in DEFERRED_ITEM_STATUSES or item.eligibility.startswith(
             "deferred_"
         ):
             decision["decision"] = "deferred"

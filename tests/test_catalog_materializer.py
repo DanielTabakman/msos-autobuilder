@@ -926,6 +926,79 @@ def test_deferred_items_do_not_block_later_independent_eligible_item() -> None:
     assert decisions["horizon_outcome_ghosts_v1"]["decision"] == "deferred"
 
 
+def test_done_item_is_skipped_and_next_ready_item_selected() -> None:
+    payload = {
+        "version": 1,
+        "items": [
+            {
+                "chapterId": "already_done",
+                "status": "done",
+                "autobuilderCatalogOrder": 9,
+                "eligibility": "buildable_via_autobuilder_catalog",
+                "dependsOn": [],
+                "packetization": "just_in_time",
+                "reason": "Already merged elsewhere.",
+                "autobuilderPacket": _packet_spec("already_done"),
+            },
+            {
+                "chapterId": "next_ready",
+                "status": "ready",
+                "autobuilderCatalogOrder": 19,
+                "eligibility": "buildable_via_autobuilder_catalog",
+                "dependsOn": [],
+                "packetization": "just_in_time",
+                "reason": "Build the next ready item.",
+                "autobuilderPacket": _packet_spec("next_ready"),
+            },
+        ],
+    }
+
+    result = evaluate_jit_eligibility(payload)
+
+    assert result.status == "eligible"
+    assert result.work_item_id == "next_ready"
+    assert result.order == 19
+    decision = (result.evidence or {})["items"]["already_done"]
+    assert decision["decision"] == "completed"
+    assert decision["completion_source"] == "backlog_status"
+
+
+def test_done_status_does_not_satisfy_dependency_without_terminal_proof() -> None:
+    payload = {
+        "version": 1,
+        "items": [
+            {
+                "chapterId": "already_done",
+                "status": "done",
+                "autobuilderCatalogOrder": 9,
+                "eligibility": "buildable_via_autobuilder_catalog",
+                "dependsOn": [],
+                "packetization": "just_in_time",
+                "reason": "Canonical backlog says done.",
+                "autobuilderPacket": _packet_spec("already_done"),
+            },
+            {
+                "chapterId": "dependent_ready",
+                "status": "ready",
+                "autobuilderCatalogOrder": 19,
+                "eligibility": "buildable_via_autobuilder_catalog",
+                "dependsOn": ["already_done"],
+                "packetization": "just_in_time",
+                "reason": "Requires explicit terminal proof for its dependency.",
+                "autobuilderPacket": _packet_spec("dependent_ready"),
+            },
+        ],
+    }
+
+    result = evaluate_jit_eligibility(payload)
+
+    assert result.status == "skipped"
+    decisions = (result.evidence or {})["items"]
+    assert decisions["already_done"]["decision"] == "completed"
+    assert decisions["dependent_ready"]["decision"] == "blocked_dependencies"
+    assert decisions["dependent_ready"]["unmet_dependencies"] == ["already_done"]
+
+
 def test_dependency_cycle_is_classified_once_without_recursive_retry() -> None:
     payload = {
         "version": 1,
